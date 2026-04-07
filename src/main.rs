@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
 
     // Setup initial window states
     main_window.set_api_endpoint("http://localhost:1234/v1".into());
-    main_window.set_model_name("gemma-4-e4b-it".into());
+    main_window.set_model_name("qwen3.5-4b".into());
     main_window.set_interval(3.0);
 
     let state = Arc::new(Mutex::new(AppState {
@@ -109,11 +109,12 @@ async fn main() -> Result<()> {
             main.set_model_name("Gemini 3.1 Flash Lite Preview".into());
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
-            main.set_model_name("gemma-4-e4b-it".into());
+            main.set_model_name("qwen3.5-4b".into());
         }
     });
 
     // Start/Stop Callback
+    let overlay_weak_for_stop = overlay_window.as_weak();
     main_window.on_start_stop_clicked(move || {
         let main = main_weak.unwrap();
         let mut s = state_clone.lock().unwrap();
@@ -128,16 +129,29 @@ async fn main() -> Result<()> {
             s.model_name = main.get_model_name().to_string();
             s.interval_sec = main.get_interval() as u64;
             main.set_is_running(true);
+            if let Some(overlay) = overlay_weak_for_stop.upgrade() {
+                overlay.set_translated_text("Searching...".into());
+                overlay.show().unwrap();
+            }
         } else {
             s.is_running = false;
             main.set_is_running(false);
+            if let Some(overlay) = overlay_weak_for_stop.upgrade() {
+                overlay.hide().unwrap();
+            }
         }
     });
 
     let s_weak = selection_window.as_weak();
     let state_for_selection = state.clone();
+    let overlay_weak_for_select = overlay_window.as_weak();
     main_window.on_select_area_clicked(move || {
         let selection = s_weak.unwrap();
+        // Hide existing overlay if any
+        if let Some(overlay) = overlay_weak_for_select.upgrade() {
+            let _ = overlay.hide();
+            overlay.set_translated_text("".into());
+        }
         // Capture screenshot for background
         if let Ok(img) = capture::capture_full_screen() {
             let slint_img = rgba_to_slint_image(img);
@@ -152,9 +166,11 @@ async fn main() -> Result<()> {
         std::process::exit(0);
     });
 
+    let main_weak_for_selection = main_window.as_weak();
     selection_window.on_area_selected(move |x, y, w, h| {
         let selection = selection_weak.unwrap();
         let mut s = state_for_selection.lock().unwrap();
+        let main = main_weak_for_selection.unwrap();
         
         // Convert logical to physical coordinates using scale factor
         let sf = selection.window().scale_factor();
@@ -165,6 +181,15 @@ async fn main() -> Result<()> {
             width: (w * sf) as i32,
             height: (h * sf) as i32,
         });
+
+        // Auto-start
+        s.is_running = true;
+        s.api_endpoint = main.get_api_endpoint().to_string();
+        s.api_key = main.get_api_key().to_string();
+        s.model_name = main.get_model_name().to_string();
+        s.interval_sec = main.get_interval() as u64;
+        main.set_is_running(true);
+        
         selection.hide().unwrap();
         
         if let Some(overlay) = overlay_weak.upgrade() {
@@ -210,6 +235,7 @@ async fn main() -> Result<()> {
     // Background Worker
     tokio::spawn(async move {
         let mut prev_img = None;
+        let mut prev_rect = None;
         
         loop {
             let (is_running, rect, api_config, step_interval) = {
@@ -218,10 +244,17 @@ async fn main() -> Result<()> {
             };
 
             if is_running && rect.is_some() {
-                let rect = rect.unwrap();
-                if let Ok(curr_img) = capture::capture_area(&rect) {
-                    if capture::is_changed(&prev_img, &curr_img, 0.01) { // Lowered to 1%
+                let current_rect = rect.unwrap();
+                if Some(current_rect) != prev_rect {
+                    prev_img = None;
+                    prev_rect = Some(current_rect);
+                }
+                
+                if let Ok(curr_img) = capture::capture_area(&current_rect) {
+                    if capture::is_changed(&prev_img, &curr_img, 0.05) { // Increased to 5%
                         prev_img = Some(curr_img.clone());
+                        let _ = tx.send("Searching...".into()).await;
+                        
                         let client = api::ApiClient::new(api_config.0, api_config.1, api_config.2);
                         match client.translate_image(&curr_img).await {
                             Ok(text) => {
@@ -234,6 +267,9 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+            } else {
+                prev_img = None;
+                prev_rect = None;
             }
             tokio::time::sleep(Duration::from_secs(step_interval.max(1))).await;
         }

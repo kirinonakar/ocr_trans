@@ -9,7 +9,7 @@ export component MainWindow inherits Window {
     in-out property <bool> is_running: false;
     in-out property <string> api_endpoint: "http://localhost:1234/v1";
     in-out property <string> api_key: "";
-    in-out property <string> model_name: "gemma-4-e4b-it";
+    in-out property <string> model_name: "qwen3.5-4b";
     in-out property <float> interval: 3;
     
     callback start_stop_clicked();
@@ -73,7 +73,7 @@ export component MainWindow inherits Window {
                     Text { text: "Model:"; color: #94a3b8; font-size: 12px; }
                     LineEdit {
                         text <=> model_name;
-                        placeholder-text: "e.g. gemma-4-e4b-it";
+                        placeholder-text: "e.g. qwen3.5-4b";
                     }
                 }
             }
@@ -154,7 +154,7 @@ export component OverlayWindow inherits Window {
             Text {
                 text: translated_text;
                 color: white;
-                font-size: 20px;
+                font-size: 16px;
                 wrap: word-wrap;
                 horizontal-alignment: center;
                 vertical-alignment: center;

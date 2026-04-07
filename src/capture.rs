@@ -2,7 +2,7 @@ use xcap::Monitor;
 use image::{RgbaImage, GenericImageView};
 use anyhow::{Result, Context};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CaptureRect {
     pub x: i32,
     pub y: i32,
@@ -66,7 +66,7 @@ pub fn is_changed(prev: &Option<RgbaImage>, curr: &RgbaImage, threshold: f32) ->
         let diff = (p[0] as i32 - c[0] as i32).abs() +
                    (p[1] as i32 - c[1] as i32).abs() +
                    (p[2] as i32 - c[2] as i32).abs();
-        if diff > 40 {
+        if diff > 80 {
             diff_sum += 1;
         }
         total_pixels += 1;
