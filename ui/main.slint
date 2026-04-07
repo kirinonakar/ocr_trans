@@ -77,10 +77,15 @@ export component MainWindow inherits Window {
                 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "Model:"; color: #64748b; font-size: 12px; }
+                    Text { text: "Model Name (Edit / Preset):"; color: #64748b; font-size: 12px; }
+                    LineEdit {
+                        text <=> model_name;
+                    }
                     ComboBox {
                         model: model_options;
-                        current-value <=> model_name;
+                        selected(val) => {
+                            model_name = val;
+                        }
                     }
                 }
             }
@@ -209,6 +214,14 @@ export component SelectionWindow inherits Window {
 
     callback area_selected(length, length, length, length);
     callback closed();
+
+    public function reset() {
+        start_x = 0px;
+        start_y = 0px;
+        current_x = 0px;
+        current_y = 0px;
+        selecting = false;
+    }
 
     // The base screenshot
     Image {

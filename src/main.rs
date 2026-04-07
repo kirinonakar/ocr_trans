@@ -84,9 +84,9 @@ async fn main() -> Result<()> {
 
     // Setup initial window states
     main_window.set_api_endpoint("http://localhost:1234/v1".into());
-    let lm_models: Vec<slint::SharedString> = vec!["qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
+    let lm_models: Vec<slint::SharedString> = vec!["gemma-4-e4b-it".into(), "qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
     main_window.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
-    main_window.set_model_name("qwen3.5-4b".into());
+    main_window.set_model_name("gemma-4-e4b-it".into());
     main_window.set_api_key("lm-studio".into());
     main_window.set_interval(0.0);
 
@@ -127,6 +127,22 @@ async fn main() -> Result<()> {
     let selection_weak = selection_window.as_weak();
     let state_clone = state.clone();
 
+    // Initial Selection Window Styles Setup
+    #[cfg(target_os = "windows")]
+    selection_window.window().with_winit_window(|winit_window| {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(handle) = winit_window.window_handle() {
+            if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
+                win_utils::set_layered(hwnd);
+                win_utils::set_tool_window(hwnd);
+                if let Some(owner) = main_hwnd {
+                    win_utils::set_window_owner(hwnd, owner);
+                }
+            }
+        }
+    });
+
     // API Type Changed Callback
     main_window.on_api_type_changed(move |api_type| {
         let main = main_weak_api.unwrap();
@@ -138,7 +154,7 @@ async fn main() -> Result<()> {
             main.set_api_key(get_gemini_key().unwrap_or_default().into());
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
-            let lm_models: Vec<slint::SharedString> = vec!["qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
+            let lm_models: Vec<slint::SharedString> = vec!["qwen3.5-4b".into(), "qwen/qwen3.5-9b".into(), "gemma-4-e4b-it".into()];
             main.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
             main.set_model_name("qwen3.5-4b".into());
             main.set_api_key("lm-studio".into());
@@ -224,8 +240,6 @@ async fn main() -> Result<()> {
     let state_for_selection_trigger = state.clone();
     let main_weak_for_selection_trigger = main_window.as_weak();
     let overlay_weak_for_select = overlay_window.as_weak();
-    #[cfg(target_os = "windows")]
-    let main_hwnd_selection = main_hwnd;
     main_window.on_select_area_clicked(move || {
         // Stop active capture
         {
@@ -237,33 +251,26 @@ async fn main() -> Result<()> {
         }
 
         let selection = s_weak.unwrap();
+        selection.invoke_reset();
+        
         // Hide existing overlay if any
         if let Some(overlay) = overlay_weak_for_select.upgrade() {
             let _ = overlay.hide();
             overlay.set_translated_text("".into());
+            overlay.set_show_text(false);
         }
         // Capture screenshot for background
         if let Ok(img) = capture::capture_full_screen() {
+            let (w, h) = img.dimensions();
             let slint_img = rgba_to_slint_image(img);
             selection.set_screenshot(slint_img);
+            
+            // Set window size to match physical screenshot dimensions
+            let sf = selection.window().scale_factor();
+            selection.window().set_size(slint::LogicalSize::new(w as f32 / sf, h as f32 / sf));
         }
+        selection.window().set_position(slint::WindowPosition::Logical(slint::LogicalPosition::new(0.0, 0.0)));
         selection.show().unwrap();
-        selection.window().set_fullscreen(true);
-
-        #[cfg(target_os = "windows")]
-        selection.window().with_winit_window(|winit_window| {
-            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(handle) = winit_window.window_handle() {
-                if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                    let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
-                    win_utils::set_layered(hwnd);
-                    win_utils::set_tool_window(hwnd);
-                    if let Some(owner) = main_hwnd_selection {
-                        win_utils::set_window_owner(hwnd, owner);
-                    }
-                }
-            }
-        });
     });
 
     // Close Requested - Hard Exit
@@ -281,6 +288,10 @@ async fn main() -> Result<()> {
     let state_for_selection = state.clone();
     selection_window.on_area_selected(move |x, y, w, h| {
         let selection = selection_weak.unwrap();
+        if w < 5.0 || h < 5.0 {
+            let _ = selection.hide();
+            return;
+        }
         let mut s = state_for_selection.lock().unwrap();
         let main = main_weak_for_selection.unwrap();
         
