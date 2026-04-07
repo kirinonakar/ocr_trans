@@ -11,6 +11,7 @@ export component MainWindow inherits Window {
     in-out property <string> api_endpoint: "http://localhost:1234/v1";
     in-out property <string> api_key: "";
     in-out property <string> model_name: "qwen3.5-4b";
+    in property <[string]> model_options: ["qwen3.5-4b", "qwen/qwen3.5-9b"];
     in-out property <float> interval: 0;
     in-out property <bool> overlay_visible: true;
     
@@ -77,9 +78,9 @@ export component MainWindow inherits Window {
                 VerticalLayout {
                     spacing: 4px;
                     Text { text: "Model:"; color: #64748b; font-size: 12px; }
-                    LineEdit {
-                        text <=> model_name;
-                        placeholder-text: "e.g. qwen3.5-4b";
+                    ComboBox {
+                        model: model_options;
+                        current-value <=> model_name;
                     }
                 }
             }

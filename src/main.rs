@@ -83,6 +83,8 @@ async fn main() -> Result<()> {
 
     // Setup initial window states
     main_window.set_api_endpoint("http://localhost:1234/v1".into());
+    let lm_models: Vec<slint::SharedString> = vec!["qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
+    main_window.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
     main_window.set_model_name("qwen3.5-4b".into());
     main_window.set_api_key("lm-studio".into());
     main_window.set_interval(0.0);
@@ -129,10 +131,14 @@ async fn main() -> Result<()> {
         let main = main_weak_api.unwrap();
         if api_type == "Google Gemini" {
             main.set_api_endpoint("https://generativelanguage.googleapis.com".into());
+            let gemini_models: Vec<slint::SharedString> = vec!["gemini-3.1-flash-lite-preview".into()];
+            main.set_model_options(slint::ModelRc::from(gemini_models.as_slice()));
             main.set_model_name("gemini-3.1-flash-lite-preview".into());
             main.set_api_key(get_gemini_key().unwrap_or_default().into());
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
+            let lm_models: Vec<slint::SharedString> = vec!["qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
+            main.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
             main.set_model_name("qwen3.5-4b".into());
             main.set_api_key("lm-studio".into());
         }
@@ -214,11 +220,21 @@ async fn main() -> Result<()> {
     });
 
     let s_weak = selection_window.as_weak();
-    let state_for_selection = state.clone();
+    let state_for_selection_trigger = state.clone();
+    let main_weak_for_selection_trigger = main_window.as_weak();
     let overlay_weak_for_select = overlay_window.as_weak();
     #[cfg(target_os = "windows")]
     let main_hwnd_selection = main_hwnd;
     main_window.on_select_area_clicked(move || {
+        // Stop active capture
+        {
+            let mut s = state_for_selection_trigger.lock().unwrap();
+            s.is_running = false;
+        }
+        if let Some(main) = main_weak_for_selection_trigger.upgrade() {
+            main.set_is_running(false);
+        }
+
         let selection = s_weak.unwrap();
         // Hide existing overlay if any
         if let Some(overlay) = overlay_weak_for_select.upgrade() {
@@ -261,6 +277,7 @@ async fn main() -> Result<()> {
         let _ = selection.hide();
     });
 
+    let state_for_selection = state.clone();
     selection_window.on_area_selected(move |x, y, w, h| {
         let selection = selection_weak.unwrap();
         let mut s = state_for_selection.lock().unwrap();
@@ -443,14 +460,18 @@ async fn main() -> Result<()> {
         }
     }).unwrap();
 
-    // Hotkey Event Loop
+    // Hotkey Event Loop - Dedicated Thread for Responsiveness
     let main_weak_hk = main_window.as_weak();
-    let timer = slint::Timer::default();
-    timer.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || {
-        while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-            if event.id == hotkey.id() && event.state == global_hotkey::HotKeyState::Pressed {
-                if let Some(main) = main_weak_hk.upgrade() {
-                    main.invoke_start_stop_clicked();
+    std::thread::spawn(move || {
+        loop {
+            if let Ok(event) = GlobalHotKeyEvent::receiver().recv() {
+                if event.id == hotkey.id() && event.state == global_hotkey::HotKeyState::Pressed {
+                    let main_weak = main_weak_hk.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(main) = main_weak.upgrade() {
+                            main.invoke_select_area_clicked();
+                        }
+                    });
                 }
             }
         }
