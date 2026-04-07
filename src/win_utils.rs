@@ -62,3 +62,11 @@ pub fn set_mica_backdrop(hwnd: HWND) {
         );
     }
 }
+
+/// Excludes the window from any desktop capture.
+pub fn set_exclude_from_capture(hwnd: windows::Win32::Foundation::HWND) {
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
+        let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+    }
+}

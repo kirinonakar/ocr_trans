@@ -77,7 +77,7 @@ impl ApiClient {
             contents: vec![GeminiContent {
                 parts: vec![
                     GeminiPart::Text {
-                        text: "Extract any text from this image and translate it to Korean. If it's already Korean, return it as is. Output ONLY the translated text, no extra commentary.".to_string(),
+                        text: "You are a verbatim translator. Extract all text from this image and translate it exactly and literally (직역) into Korean without summarizing, omitting, or changing any meaning. If the text is already in Korean, return it exactly as it is. Output ONLY the translated text, with no extra commentary or formatting.".to_string(),
                     },
                     GeminiPart::InlineData {
                         inline_data: InlineData {
@@ -128,7 +128,7 @@ impl ApiClient {
                 {
                     "role": "user",
                     "content": [
-                        { "type": "text", "text": "Extract all text from this image and translate it cleanly to Korean. Output ONLY the Korean text." },
+                        { "type": "text", "text": "Extract all text from this image and translate it literally (직역) to Korean. Do not summarize or omit anything. Output ONLY the Korean text." },
                         { "type": "image_url", "image_url": { "url": format!("data:image/png;base64,{}", base64_image) } }
                     ]
                 }
