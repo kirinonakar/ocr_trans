@@ -140,6 +140,14 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Overlay Toggle Callback
+    let overlay_weak_toggle = overlay_window.as_weak();
+    main_window.on_overlay_toggle_clicked(move |visible| {
+        if let Some(overlay) = overlay_weak_toggle.upgrade() {
+            overlay.set_show_text(visible && !overlay.get_translated_text().is_empty() && !overlay.get_translated_text().starts_with("COMMAND:"));
+        }
+    });
+
     // Start/Stop Callback
     let overlay_weak_for_stop = overlay_window.as_weak();
     main_window.on_start_stop_clicked(move || {
@@ -158,6 +166,7 @@ async fn main() -> Result<()> {
             main.set_is_running(true);
             if let Some(overlay) = overlay_weak_for_stop.upgrade() {
                 overlay.set_translated_text("Searching...".into());
+                overlay.set_show_text(main.get_overlay_visible());
                 overlay.show().unwrap();
             }
         } else {
@@ -238,7 +247,7 @@ async fn main() -> Result<()> {
             window.set_size(slint::LogicalSize::new(w, h));
             
             overlay.set_translated_text("Searching...".into());
-            overlay.set_show_text(true);
+            overlay.set_show_text(main.get_overlay_visible());
             overlay.show().unwrap();
             
             // Set overlay to click-through
@@ -357,7 +366,9 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 overlay.set_translated_text(text.clone().into());
-                overlay.set_show_text(true);
+                
+                let is_overlay_visible = main_weak_ui.upgrade().map(|m| m.get_overlay_visible()).unwrap_or(true);
+                overlay.set_show_text(is_overlay_visible);
                 
                 // Copy to clipboard
                 if !text.starts_with("Searching...") && !text.starts_with("Error:") {

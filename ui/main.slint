@@ -12,10 +12,12 @@ export component MainWindow inherits Window {
     in-out property <string> api_key: "";
     in-out property <string> model_name: "qwen3.5-4b";
     in-out property <float> interval: 0;
+    in-out property <bool> overlay_visible: true;
     
     callback start_stop_clicked();
     callback select_area_clicked();
     callback api_type_changed(string);
+    callback overlay_toggle_clicked(bool);
 
     VerticalLayout {
         padding: 24px;
@@ -103,9 +105,29 @@ export component MainWindow inherits Window {
                     maximum: 10;
                     value <=> interval;
                 }
-                Button {
-                    text: "SELECT CAPTURE AREA";
-                    clicked => { select_area_clicked(); }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button {
+                        text: "SELECT AREA";
+                        clicked => { select_area_clicked(); }
+                    }
+                    Rectangle {
+                        background: #f8fafc;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #e2e8f0;
+                        height: 32px;
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 4px;
+                            Text { text: "Overlay"; vertical-alignment: center; font-size: 12px; color: #64748b; }
+                            CheckBox {
+                                checked <=> overlay_visible;
+                                toggled => { overlay_toggle_clicked(self.checked); }
+                            }
+                        }
+                    }
                 }
             }
         }
