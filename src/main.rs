@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
 
     // Setup initial window states
     main_window.set_api_endpoint("http://localhost:1234/v1".into());
-    let lm_models: Vec<slint::SharedString> = vec!["gemma-4-e4b-it".into(), "qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
+    let lm_models: Vec<slint::SharedString> = vec!["gemma-4-e4b-it".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
     main_window.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
     main_window.set_model_name("gemma-4-e4b-it".into());
     main_window.set_api_key("lm-studio".into());
@@ -141,9 +141,9 @@ async fn main() -> Result<()> {
             main.set_api_key(get_gemini_key().unwrap_or_default().into());
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
-            let lm_models: Vec<slint::SharedString> = vec!["qwen3.5-4b".into(), "qwen/qwen3.5-9b".into(), "gemma-4-e4b-it".into()];
+            let lm_models: Vec<slint::SharedString> = vec!["gemma-4-e4b-it".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
             main.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
-            main.set_model_name("qwen3.5-4b".into());
+            main.set_model_name("gemma-4-e4b-it".into());
             main.set_api_key("lm-studio".into());
         }
     });
@@ -173,6 +173,20 @@ async fn main() -> Result<()> {
                 });
             }
         }
+    });
+
+    // Close Clicked Callback
+    let main_weak_close = main_window.as_weak();
+    let overlay_weak_close = overlay_window.as_weak();
+    let state_close = state.clone();
+    overlay_window.on_close_clicked(move || {
+        let main = main_weak_close.unwrap();
+        let overlay = overlay_weak_close.unwrap();
+        let mut s = state_close.lock().unwrap();
+        
+        s.is_running = false;
+        main.set_is_running(false);
+        overlay.hide().unwrap();
     });
 
     // Start/Stop Callback
@@ -353,7 +367,7 @@ async fn main() -> Result<()> {
                     if let Ok(handle) = winit_window.window_handle() {
                         if let RawWindowHandle::Win32(h) = handle.as_raw() {
                             let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
-                            win_utils::set_click_through(hwnd, true);
+                            win_utils::set_layered(hwnd);
                             win_utils::set_tool_window(hwnd);
                             if let Some(owner) = owner {
                                 win_utils::set_window_owner(hwnd, owner);

@@ -4,7 +4,7 @@ export component MainWindow inherits Window {
     title: "OCR Translator";
     icon: @image-url("../app.ico");
     width: 400px;
-    height: 650px;
+    height: 700px;
     background: @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
 
     in-out property <bool> is_running: false;
@@ -22,7 +22,7 @@ export component MainWindow inherits Window {
 
     VerticalLayout {
         padding: 24px;
-        padding-bottom: 48px;
+        padding-bottom: 24px;
         spacing: 18px;
 
         Text {
@@ -176,6 +176,7 @@ export component OverlayWindow inherits Window {
     in-out property <string> translated_text: "";
     in-out property <bool> show_text: false;
     in-out property <length> font_size: 16px;
+    callback close_clicked();
 
     Rectangle {
         visible: show_text && translated_text != "";
@@ -184,8 +185,31 @@ export component OverlayWindow inherits Window {
         border-width: 1px;
         border-color: #e2e8f0;
         
+        // Close Button (X)
+        Rectangle {
+            x: parent.width - 28px;
+            y: 4px;
+            width: 24px;
+            height: 24px;
+            border-radius: 12px;
+            background: close_touch.has-hover ? #0000001a : #00000000;
+            
+            Text {
+                text: "×";
+                font-size: 20px;
+                color: close_touch.has-hover ? #ef4444 : #64748b;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            
+            close_touch := TouchArea {
+                clicked => { close_clicked(); }
+            }
+        }
+        
         VerticalLayout {
             padding: 16px;
+            padding-top: 24px; // Spacing for the close button
             Text {
                 text: translated_text;
                 color: #1e293b;

@@ -7,6 +7,7 @@ use windows::Win32::Graphics::Dwm::{
 };
 
 /// Sets the window to be click-through by applying WS_EX_TRANSPARENT and WS_EX_LAYERED styles.
+#[allow(dead_code)]
 pub fn set_click_through(hwnd: HWND, enable: bool) {
     unsafe {
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
