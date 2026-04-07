@@ -40,6 +40,31 @@ struct AppState {
     last_text: String,
 }
 
+fn calculate_font_size(text: &str, width: f32, height: f32) -> f32 {
+    let len = text.chars().count();
+    if len == 0 { return 16.0; }
+    
+    // Further increased padding for HiDPI safety
+    let padding = 48.0;
+    let available_w = (width - padding).max(40.0);
+    let available_h = (height - padding).max(30.0);
+    let area = available_w * available_h;
+    
+    // Even more conservative heuristic for font size
+    let char_area_unit = 1.6; 
+    
+    let mut size = (area / (len as f32 * char_area_unit)).sqrt();
+    
+    // Clamp between 8 and 20 (further reduced max font size)
+    size = size.clamp(8.0, 20.0);
+    
+    // One more check: if width is very small, we might need even smaller font
+    // but word-wrap will handle it by growing vertically.
+    // If it grows beyond available_h, it will be cut.
+    
+    size
+}
+
 fn rgba_to_slint_image(rgba: image::RgbaImage) -> slint::Image {
     let (width, height) = rgba.dimensions();
     let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
@@ -160,6 +185,7 @@ async fn main() -> Result<()> {
             main.set_is_running(true);
             if let Some(overlay) = overlay_weak_for_stop.upgrade() {
                 overlay.set_translated_text("Searching...".into());
+                overlay.set_font_size(calculate_font_size("Searching...", overlay.get_window_w(), overlay.get_window_h()));
                 overlay.set_show_text(main.get_overlay_visible());
                 overlay.show().unwrap();
 
@@ -273,6 +299,7 @@ async fn main() -> Result<()> {
             window.set_size(slint::LogicalSize::new(w, h));
             
             overlay.set_translated_text("Searching...".into());
+            overlay.set_font_size(calculate_font_size("Searching...", w, h));
             main.set_overlay_visible(true);
             overlay.set_show_text(true);
             overlay.show().unwrap();
@@ -398,6 +425,10 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 overlay.set_translated_text(text.clone().into());
+                
+                // Calculate and set font size
+                let font_size = calculate_font_size(&text, overlay.get_window_w(), overlay.get_window_h());
+                overlay.set_font_size(font_size);
                 
                 let is_overlay_visible = main_weak_ui.upgrade().map(|m| m.get_overlay_visible()).unwrap_or(true);
                 overlay.set_show_text(is_overlay_visible);
