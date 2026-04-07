@@ -1,10 +1,9 @@
 # Rust OCR Translator Overlay
 
-A real-time game screen OCR and translation tool built with Rust and Slint.
+A real-time screen OCR and translation tool built with Rust and Slint.
 
 ## Features
 - **Modern UI**: Dark mode, glassmorphism, and Windows 11 Mica backdrop for the main control window.
-- **Transparent Overlay**: Translation text displayed directly over the game screen with a click-through background.
 - **Toggleable Overlay**: Dedicated toggle and logic to hide/show the translation box without stopping the OCR process.
 - **Interactive Region Selection**: Drag your mouse to select exactly what you want to translate. Supports **Escape** to cancel.
 - **Auto-Automation**: Selecting a region automatically starts the capture process for immediate results.
