@@ -128,20 +128,7 @@ async fn main() -> Result<()> {
     let state_clone = state.clone();
 
     // Initial Selection Window Styles Setup
-    #[cfg(target_os = "windows")]
-    selection_window.window().with_winit_window(|winit_window| {
-        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        if let Ok(handle) = winit_window.window_handle() {
-            if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
-                win_utils::set_layered(hwnd);
-                win_utils::set_tool_window(hwnd);
-                if let Some(owner) = main_hwnd {
-                    win_utils::set_window_owner(hwnd, owner);
-                }
-            }
-        }
-    });
+    let selection_initialized = Arc::new(Mutex::new(false));
 
     // API Type Changed Callback
     main_window.on_api_type_changed(move |api_type| {
@@ -240,6 +227,9 @@ async fn main() -> Result<()> {
     let state_for_selection_trigger = state.clone();
     let main_weak_for_selection_trigger = main_window.as_weak();
     let overlay_weak_for_select = overlay_window.as_weak();
+    let selection_initialized_clone = selection_initialized.clone();
+    #[cfg(target_os = "windows")]
+    let main_hwnd_selection = main_hwnd;
     main_window.on_select_area_clicked(move || {
         // Stop active capture
         {
@@ -270,6 +260,29 @@ async fn main() -> Result<()> {
             selection.window().set_size(slint::LogicalSize::new(w as f32 / sf, h as f32 / sf));
         }
         selection.window().set_position(slint::WindowPosition::Logical(slint::LogicalPosition::new(0.0, 0.0)));
+        
+        #[cfg(target_os = "windows")]
+        {
+            let mut init = selection_initialized_clone.lock().unwrap();
+            if !*init {
+                let main_hwnd_cap = main_hwnd_selection;
+                selection.window().with_winit_window(move |winit_window| {
+                    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                    if let Ok(handle) = winit_window.window_handle() {
+                        if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                            let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
+                            win_utils::set_layered(hwnd);
+                            win_utils::set_tool_window(hwnd);
+                            if let Some(owner) = main_hwnd_cap {
+                                win_utils::set_window_owner(hwnd, owner);
+                            }
+                        }
+                    }
+                });
+                *init = true;
+            }
+        }
+
         selection.show().unwrap();
     });
 
@@ -313,8 +326,6 @@ async fn main() -> Result<()> {
         s.interval_sec = main.get_interval() as u64;
         main.set_is_running(true);
         
-        selection.hide().unwrap();
-        
         if let Some(overlay) = overlay_weak.upgrade() {
             // Set properties
             overlay.set_window_w(w);
@@ -352,6 +363,8 @@ async fn main() -> Result<()> {
                 });
             }
         }
+
+        selection.hide().unwrap();
     });
 
     // Global Hotkey Setup

@@ -201,16 +201,22 @@ export component OverlayWindow inherits Window {
 
 export component SelectionWindow inherits Window {
     always-on-top: true;
-    background: black;
+    background: #00000001; // Avoid pure transparent to prevent some Windows backend flashes
     no-frame: true;
     icon: @image-url("../app.ico");
     
     in-out property <image> screenshot;
+    property <bool> selecting: false;
     property <length> start_x;
     property <length> start_y;
     property <length> current_x;
     property <length> current_y;
-    property <bool> selecting: false;
+    
+    // Optimized selection properties for stable calculation
+    property <length> sel_x: start_x < current_x ? start_x : current_x;
+    property <length> sel_y: start_y < current_y ? start_y : current_y;
+    property <length> sel_w: abs(current_x - start_x);
+    property <length> sel_h: abs(current_y - start_y);
 
     callback area_selected(length, length, length, length);
     callback closed();
@@ -234,13 +240,13 @@ export component SelectionWindow inherits Window {
     // Top
     Rectangle {
         x: 0; y: 0; width: parent.width;
-        height: selecting ? (start_y < current_y ? start_y : current_y) : parent.height;
+        height: sel_y;
         background: #00000080;
     }
     // Bottom
     Rectangle {
         x: 0; 
-        y: selecting ? (start_y < current_y ? current_y : start_y) : parent.height;
+        y: sel_y + sel_h;
         width: parent.width;
         height: parent.height - self.y;
         background: #00000080;
@@ -248,17 +254,25 @@ export component SelectionWindow inherits Window {
     // Left
     Rectangle {
         x: 0;
-        y: selecting ? (start_y < current_y ? start_y : current_y) : 0;
-        width: selecting ? (start_x < current_x ? start_x : current_x) : 0;
-        height: selecting ? abs(current_y - start_y) : 0;
+        y: sel_y;
+        width: sel_x;
+        height: sel_h;
         background: #00000080;
     }
     // Right
     Rectangle {
-        x: selecting ? (start_x < current_x ? current_x : start_x) : parent.width;
-        y: selecting ? (start_y < current_y ? start_y : current_y) : 0;
+        x: sel_x + sel_w;
+        y: sel_y;
         width: parent.width - self.x;
-        height: selecting ? abs(current_y - start_y) : 0;
+        height: sel_h;
+        background: #00000080;
+    }
+    
+    // Always show a base dim when NOT selecting to avoid jump
+    Rectangle {
+        visible: !selecting;
+        width: 100%;
+        height: 100%;
         background: #00000080;
     }
 
@@ -305,10 +319,10 @@ export component SelectionWindow inherits Window {
 
     // Selection border
     Rectangle {
-        x: start_x < current_x ? start_x : current_x;
-        y: start_y < current_y ? start_y : current_y;
-        width: abs(current_x - start_x);
-        height: abs(current_y - start_y);
+        x: sel_x;
+        y: sel_y;
+        width: sel_w;
+        height: sel_h;
         border-color: #2563eb;
         border-width: 2px;
         background: transparent;
