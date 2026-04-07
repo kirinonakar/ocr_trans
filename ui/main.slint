@@ -1,16 +1,17 @@
 import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox } from "std-widgets.slint";
 
 export component MainWindow inherits Window {
-    title: "OCR Translator Controls";
+    title: "OCR Translator";
+    icon: @image-url("../app.ico");
     width: 400px;
-    height: 600px;
-    background: @linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+    height: 650px;
+    background: @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
 
     in-out property <bool> is_running: false;
     in-out property <string> api_endpoint: "http://localhost:1234/v1";
     in-out property <string> api_key: "";
     in-out property <string> model_name: "qwen3.5-4b";
-    in-out property <float> interval: 3;
+    in-out property <float> interval: 0;
     
     callback start_stop_clicked();
     callback select_area_clicked();
@@ -18,28 +19,31 @@ export component MainWindow inherits Window {
 
     VerticalLayout {
         padding: 24px;
+        padding-bottom: 48px;
         spacing: 18px;
 
         Text {
             text: "OCR Translator";
             font-size: 28px;
-            color: #e94560;
+            color: #2563eb;
             horizontal-alignment: center;
             font-weight: 800;
         }
 
         Rectangle {
-            background: #ffffff10;
+            background: #ffffff;
             border-radius: 12px;
+            border-width: 1px;
+            border-color: #e2e8f0;
             
             VerticalLayout {
                 spacing: 12px;
                 padding: 12px;
-                Text { text: "API SETTINGS"; font-weight: 700; color: #e94560; font-size: 14px; }
+                Text { text: "API SETTINGS"; font-weight: 700; color: #2563eb; font-size: 14px; }
                 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "Provider:"; color: #94a3b8; font-size: 12px; }
+                    Text { text: "Provider:"; color: #64748b; font-size: 12px; }
                     ComboBox {
                         model: ["LMStudio", "Google Gemini"];
                         current-value: "LMStudio";
@@ -51,7 +55,7 @@ export component MainWindow inherits Window {
 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "Endpoint:"; color: #94a3b8; font-size: 12px; }
+                    Text { text: "Endpoint:"; color: #64748b; font-size: 12px; }
                     LineEdit {
                         text <=> api_endpoint;
                         placeholder-text: "http://localhost:1234/v1";
@@ -60,7 +64,7 @@ export component MainWindow inherits Window {
                 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "API Key:"; color: #94a3b8; font-size: 12px; }
+                    Text { text: "API Key:"; color: #64748b; font-size: 12px; }
                     LineEdit {
                         text <=> api_key;
                         input-type: password;
@@ -70,7 +74,7 @@ export component MainWindow inherits Window {
                 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "Model:"; color: #94a3b8; font-size: 12px; }
+                    Text { text: "Model:"; color: #64748b; font-size: 12px; }
                     LineEdit {
                         text <=> model_name;
                         placeholder-text: "e.g. qwen3.5-4b";
@@ -80,21 +84,22 @@ export component MainWindow inherits Window {
         }
 
         Rectangle {
-            background: #ffffff10;
+            background: #ffffff;
             border-radius: 12px;
-            // padding: 12px; // Removed invalid padding
+            border-width: 1px;
+            border-color: #e2e8f0;
             
             VerticalLayout {
                 spacing: 12px;
                 padding: 12px;
-                Text { text: "CAPTURE SETTINGS"; font-weight: 700; color: #e94560; font-size: 14px; }
+                Text { text: "CAPTURE SETTINGS"; font-weight: 700; color: #2563eb; font-size: 14px; }
                 
                 HorizontalLayout {
-                    Text { text: "Interval (s): "; vertical-alignment: center; color: #94a3b8; }
-                    Text { text: round(interval); vertical-alignment: center; font-weight: 700; color: #fff; }
+                    Text { text: "Interval (s): "; vertical-alignment: center; color: #64748b; }
+                    Text { text: interval == 0 ? "Once" : round(interval); vertical-alignment: center; font-weight: 700; color: #1e293b; }
                 }
                 Slider {
-                    minimum: 1;
+                    minimum: 0;
                     maximum: 10;
                     value <=> interval;
                 }
@@ -128,6 +133,7 @@ export component OverlayWindow inherits Window {
     always-on-top: true;
     background: transparent;
     no-frame: true;
+    icon: @image-url("../app.ico");
     
     in-out property <length> window_x;
     in-out property <length> window_y;
@@ -144,16 +150,16 @@ export component OverlayWindow inherits Window {
 
     Rectangle {
         visible: show_text && translated_text != "";
-        background: #000000c0;
+        background: #ffffffe6;
         border-radius: 12px;
         border-width: 1px;
-        border-color: #333333;
+        border-color: #e2e8f0;
         
         VerticalLayout {
             padding: 16px;
             Text {
                 text: translated_text;
-                color: white;
+                color: #1e293b;
                 font-size: 16px;
                 wrap: word-wrap;
                 horizontal-alignment: center;
@@ -168,6 +174,7 @@ export component SelectionWindow inherits Window {
     always-on-top: true;
     background: black;
     no-frame: true;
+    icon: @image-url("../app.ico");
     
     in-out property <image> screenshot;
     property <length> start_x;
@@ -247,13 +254,25 @@ export component SelectionWindow inherits Window {
         }
     }
 
+    forward-focus: key-handler;
+    key-handler := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                selecting = false;
+                closed();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
     // Selection border
     Rectangle {
         x: start_x < current_x ? start_x : current_x;
         y: start_y < current_y ? start_y : current_y;
         width: abs(current_x - start_x);
         height: abs(current_y - start_y);
-        border-color: #e94560;
+        border-color: #2563eb;
         border-width: 2px;
         background: transparent;
         visible: selecting;

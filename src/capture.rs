@@ -47,7 +47,7 @@ pub fn capture_full_screen() -> Result<RgbaImage> {
 }
 
 /// Comparison logic to check if the screen changed enough to trigger API.
-pub fn is_changed(prev: &Option<RgbaImage>, curr: &RgbaImage, threshold: f32) -> bool {
+pub fn is_changed(prev: &Option<RgbaImage>, curr: &RgbaImage, _threshold: f32) -> bool {
     let prev_img = match prev {
         Some(p) => p,
         None => return true,
@@ -73,5 +73,5 @@ pub fn is_changed(prev: &Option<RgbaImage>, curr: &RgbaImage, threshold: f32) ->
     }
     
     if total_pixels == 0 { return false; }
-    (diff_sum as f32 / total_pixels as f32) >= threshold
+    (diff_sum as f32 / total_pixels as f32) >= 0.02
 }

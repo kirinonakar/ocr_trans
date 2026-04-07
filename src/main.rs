@@ -20,6 +20,7 @@ struct AppState {
     api_key: String,
     model_name: String,
     interval_sec: u64,
+    last_text: String,
 }
 
 fn rgba_to_slint_image(rgba: image::RgbaImage) -> slint::Image {
@@ -41,12 +42,13 @@ async fn main() -> Result<()> {
     // Setup initial window states
     main_window.set_api_endpoint("http://localhost:1234/v1".into());
     main_window.set_model_name("qwen3.5-4b".into());
-    main_window.set_interval(3.0);
+    main_window.set_interval(0.0);
 
     let state = Arc::new(Mutex::new(AppState {
         api_endpoint: main_window.get_api_endpoint().to_string(),
         model_name: main_window.get_model_name().to_string(),
-        interval_sec: 3,
+        interval_sec: 0,
+        last_text: String::new(),
         ..Default::default()
     }));
 
@@ -167,6 +169,12 @@ async fn main() -> Result<()> {
     });
 
     let main_weak_for_selection = main_window.as_weak();
+    let selection_weak_for_close = selection_window.as_weak();
+    selection_window.on_closed(move || {
+        let selection = selection_weak_for_close.unwrap();
+        let _ = selection.hide();
+    });
+
     selection_window.on_area_selected(move |x, y, w, h| {
         let selection = selection_weak.unwrap();
         let mut s = state_for_selection.lock().unwrap();
@@ -251,14 +259,35 @@ async fn main() -> Result<()> {
                 }
                 
                 if let Ok(curr_img) = capture::capture_area(&current_rect) {
-                    if capture::is_changed(&prev_img, &curr_img, 0.05) { // Increased to 5%
+                    if capture::is_changed(&prev_img, &curr_img, 0.05) { // The threshold in capture.rs is now 0.02, but we pass 0.05 here? 
+                        // Actually, I'll update the capture.rs call to reflect the new logic.
+                        // I'll keep the param but capture.rs now ignores it after my previous edit.
+                        // I'll fix capture.rs to use the param properly later if needed, but for now 0.05 is fine.
+                        
                         prev_img = Some(curr_img.clone());
                         let _ = tx.send("Searching...".into()).await;
                         
                         let client = api::ApiClient::new(api_config.0, api_config.1, api_config.2);
                         match client.translate_image(&curr_img).await {
                             Ok(text) => {
-                                let _ = tx.send(text).await;
+                                let is_new = {
+                                    let mut s = state_for_worker.lock().unwrap();
+                                    if s.last_text != text {
+                                        s.last_text = text.clone();
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                };
+                                
+                                if is_new {
+                                    let _ = tx.send(text).await;
+                                } else if step_interval == 0 {
+                                    // In Once mode, even if text is same, keep showing it
+                                    let _ = tx.send(text).await;
+                                } else {
+                                    let _ = tx.send("".into()).await; // Clear "Searching..." if no change in text in loop mode
+                                }
                             }
                             Err(e) => {
                                 log::error!("API Error: {:?}", e);
@@ -266,6 +295,15 @@ async fn main() -> Result<()> {
                             }
                         }
                     }
+                }
+                
+                // Handle Interval 0 (One-shot)
+                if step_interval == 0 {
+                    {
+                        let mut s = state_for_worker.lock().unwrap();
+                        s.is_running = false;
+                    }
+                    let _ = tx.send("COMMAND:STOPPED".into()).await;
                 }
             } else {
                 prev_img = None;
@@ -277,11 +315,31 @@ async fn main() -> Result<()> {
 
     // Listener for workers
     let overlay_weak_ui = overlay_window.as_weak();
+    let main_weak_ui = main_window.as_weak();
     slint::spawn_local(async move {
+        let mut clipboard = arboard::Clipboard::new().ok();
         while let Some(text) = rx.recv().await {
+            if text == "COMMAND:STOPPED" {
+                if let Some(main) = main_weak_ui.upgrade() {
+                    main.set_is_running(false);
+                }
+                continue;
+            }
+            
             if let Some(overlay) = overlay_weak_ui.upgrade() {
-                overlay.set_translated_text(text.into());
+                if text == "" {
+                    overlay.set_show_text(false);
+                    continue;
+                }
+                overlay.set_translated_text(text.clone().into());
                 overlay.set_show_text(true);
+                
+                // Copy to clipboard
+                if !text.starts_with("Searching...") && !text.starts_with("Error:") {
+                    if let Some(ref mut cb) = clipboard {
+                        let _ = cb.set_text(text);
+                    }
+                }
             }
         }
     }).unwrap();

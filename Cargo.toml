@@ -13,6 +13,7 @@ image = "0.25"
 xcap = "0.0.14"
 global-hotkey = "0.6"
 base64 = "0.22"
+arboard = "3.4.1"
 anyhow = "1.0"
 log = "0.4"
 env_logger = "0.11"
@@ -27,3 +28,4 @@ winit = "0.29"
 
 [build-dependencies]
 slint-build = "1.9"
+winres = "0.1"
