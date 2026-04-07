@@ -226,7 +226,7 @@ export component OverlayWindow inherits Window {
 
 export component SelectionWindow inherits Window {
     always-on-top: true;
-    background: #00000001; // Avoid pure transparent to prevent some Windows backend flashes
+    background: transparent;
     no-frame: true;
     icon: @image-url("../app.ico");
     
@@ -240,8 +240,12 @@ export component SelectionWindow inherits Window {
     // Optimized selection properties for stable calculation
     property <length> sel_x: start_x < current_x ? start_x : current_x;
     property <length> sel_y: start_y < current_y ? start_y : current_y;
-    property <length> sel_w: abs(current_x - start_x);
-    property <length> sel_h: abs(current_y - start_y);
+    property <length> sel_w: abs_len(current_x - start_x);
+    property <length> sel_h: abs_len(current_y - start_y);
+
+    function abs_len(v: length) -> length {
+        return v < 0px ? -v : v;
+    }
 
     callback area_selected(length, length, length, length);
     callback closed();
@@ -311,8 +315,8 @@ export component SelectionWindow inherits Window {
                     area_selected(
                         start_x < current_x ? start_x : current_x,
                         start_y < current_y ? start_y : current_y,
-                        abs(current_x - start_x),
-                        abs(current_y - start_y)
+                        abs_len(current_x - start_x),
+                        abs_len(current_y - start_y)
                     );
                 }
             }
@@ -358,11 +362,7 @@ export component SelectionWindow inherits Window {
             font-size: 24px;
             font-weight: 700;
             horizontal-alignment: center;
-            visible: !selecting; // Hide when selecting to focus on crop
+            opacity: selecting ? 0 : 1; // Use opacity for smoother transition
         }
-    }
-    
-    function abs(v: length) -> length {
-        return v < 0px ? -v : v;
     }
 }

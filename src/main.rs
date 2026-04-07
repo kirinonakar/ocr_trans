@@ -171,6 +171,7 @@ async fn main() -> Result<()> {
                             win_utils::set_layered(hwnd);
                             win_utils::set_tool_window(hwnd);
                             win_utils::set_exclude_from_capture(hwnd);
+                            win_utils::disable_window_transitions(hwnd);
                             if let Some(owner) = main_hwnd_overlay {
                                 win_utils::set_window_owner(hwnd, owner);
                             }
@@ -229,6 +230,7 @@ async fn main() -> Result<()> {
                             win_utils::set_layered(hwnd);
                             win_utils::set_tool_window(hwnd);
                             win_utils::set_exclude_from_capture(hwnd);
+                            win_utils::disable_window_transitions(hwnd);
                             if let Some(owner) = main_hwnd_stop {
                                 win_utils::set_window_owner(hwnd, owner);
                             }
@@ -296,6 +298,7 @@ async fn main() -> Result<()> {
                             win_utils::set_layered(hwnd);
                             win_utils::set_tool_window(hwnd);
                             win_utils::set_exclude_from_capture(hwnd);
+                            win_utils::disable_window_transitions(hwnd);
                             if let Some(owner) = main_hwnd_cap {
                                 win_utils::set_window_owner(hwnd, owner);
                             }
@@ -380,6 +383,7 @@ async fn main() -> Result<()> {
                             win_utils::set_layered(hwnd);
                             win_utils::set_tool_window(hwnd);
                             win_utils::set_exclude_from_capture(hwnd);
+                            win_utils::disable_window_transitions(hwnd);
                             if let Some(owner) = owner {
                                 win_utils::set_window_owner(hwnd, owner);
                             }

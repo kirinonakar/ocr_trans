@@ -3,7 +3,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongW, SetWindowLongW, SetLayeredWindowAttributes, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TRANSPARENT, LWA_ALPHA,
 };
 use windows::Win32::Graphics::Dwm::{
-    DwmSetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW,
+    DwmSetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW, DWMWA_TRANSITIONS_FORCEDISABLED,
 };
 
 /// Sets the window to be click-through by applying WS_EX_TRANSPARENT and WS_EX_LAYERED styles.
@@ -68,5 +68,18 @@ pub fn set_exclude_from_capture(hwnd: windows::Win32::Foundation::HWND) {
     unsafe {
         use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
         let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+    }
+}
+
+/// Disables window transitions (animations like fade/slide) for the given window.
+pub fn disable_window_transitions(hwnd: HWND) {
+    unsafe {
+        let value = 1i32;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED,
+            &value as *const _ as *const _,
+            std::mem::size_of::<i32>() as u32,
+        );
     }
 }
