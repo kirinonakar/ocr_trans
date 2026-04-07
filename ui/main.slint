@@ -1,0 +1,277 @@
+import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox } from "std-widgets.slint";
+
+export component MainWindow inherits Window {
+    title: "OCR Translator Controls";
+    width: 400px;
+    height: 600px;
+    background: @linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+
+    in-out property <bool> is_running: false;
+    in-out property <string> api_endpoint: "http://localhost:1234/v1";
+    in-out property <string> api_key: "";
+    in-out property <string> model_name: "gemma-4-e4b-it";
+    in-out property <float> interval: 3;
+    
+    callback start_stop_clicked();
+    callback select_area_clicked();
+    callback api_type_changed(string);
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 18px;
+
+        Text {
+            text: "OCR Translator";
+            font-size: 28px;
+            color: #e94560;
+            horizontal-alignment: center;
+            font-weight: 800;
+        }
+
+        Rectangle {
+            background: #ffffff10;
+            border-radius: 12px;
+            
+            VerticalLayout {
+                spacing: 12px;
+                padding: 12px;
+                Text { text: "API SETTINGS"; font-weight: 700; color: #e94560; font-size: 14px; }
+                
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "Provider:"; color: #94a3b8; font-size: 12px; }
+                    ComboBox {
+                        model: ["LMStudio", "Google Gemini"];
+                        current-value: "LMStudio";
+                        selected(value) => {
+                            api_type_changed(value);
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "Endpoint:"; color: #94a3b8; font-size: 12px; }
+                    LineEdit {
+                        text <=> api_endpoint;
+                        placeholder-text: "http://localhost:1234/v1";
+                    }
+                }
+                
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "API Key:"; color: #94a3b8; font-size: 12px; }
+                    LineEdit {
+                        text <=> api_key;
+                        input-type: password;
+                        placeholder-text: "Leave empty for LMStudio";
+                    }
+                }
+                
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "Model:"; color: #94a3b8; font-size: 12px; }
+                    LineEdit {
+                        text <=> model_name;
+                        placeholder-text: "e.g. gemma-4-e4b-it";
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            background: #ffffff10;
+            border-radius: 12px;
+            // padding: 12px; // Removed invalid padding
+            
+            VerticalLayout {
+                spacing: 12px;
+                padding: 12px;
+                Text { text: "CAPTURE SETTINGS"; font-weight: 700; color: #e94560; font-size: 14px; }
+                
+                HorizontalLayout {
+                    Text { text: "Interval (s): "; vertical-alignment: center; color: #94a3b8; }
+                    Text { text: round(interval); vertical-alignment: center; font-weight: 700; color: #fff; }
+                }
+                Slider {
+                    minimum: 1;
+                    maximum: 10;
+                    value <=> interval;
+                }
+                Button {
+                    text: "SELECT CAPTURE AREA";
+                    clicked => { select_area_clicked(); }
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: end;
+            Button {
+                text: is_running ? "STOP" : "START";
+                height: 50px;
+                primary: true;
+                clicked => { start_stop_clicked(); }
+            }
+        }
+        
+        Text {
+            text: is_running ? "● Active" : "○ Idle";
+            color: is_running ? #4caf50 : #94a3b8;
+            horizontal-alignment: center;
+            font-size: 12px;
+        }
+    }
+}
+
+export component OverlayWindow inherits Window {
+    always-on-top: true;
+    background: transparent;
+    no-frame: true;
+    
+    in-out property <length> window_x;
+    in-out property <length> window_y;
+    in-out property <length> window_w;
+    in-out property <length> window_h;
+
+    x: window_x;
+    y: window_y;
+    width: window_w;
+    height: window_h;
+
+    in-out property <string> translated_text: "";
+    in-out property <bool> show_text: false;
+
+    Rectangle {
+        visible: show_text && translated_text != "";
+        background: #000000c0;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: #333333;
+        
+        VerticalLayout {
+            padding: 16px;
+            Text {
+                text: translated_text;
+                color: white;
+                font-size: 20px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                font-weight: 500;
+            }
+        }
+    }
+}
+
+export component SelectionWindow inherits Window {
+    always-on-top: true;
+    background: black;
+    no-frame: true;
+    
+    in-out property <image> screenshot;
+    property <length> start_x;
+    property <length> start_y;
+    property <length> current_x;
+    property <length> current_y;
+    property <bool> selecting: false;
+
+    callback area_selected(length, length, length, length);
+    callback closed();
+
+    // The base screenshot
+    Image {
+        source: screenshot;
+        width: 100%;
+        height: 100%;
+    }
+
+    // Dimmed background parts
+    // Top
+    Rectangle {
+        x: 0; y: 0; width: parent.width;
+        height: selecting ? (start_y < current_y ? start_y : current_y) : parent.height;
+        background: #00000080;
+    }
+    // Bottom
+    Rectangle {
+        x: 0; 
+        y: selecting ? (start_y < current_y ? current_y : start_y) : parent.height;
+        width: parent.width;
+        height: parent.height - self.y;
+        background: #00000080;
+    }
+    // Left
+    Rectangle {
+        x: 0;
+        y: selecting ? (start_y < current_y ? start_y : current_y) : 0;
+        width: selecting ? (start_x < current_x ? start_x : current_x) : 0;
+        height: selecting ? abs(current_y - start_y) : 0;
+        background: #00000080;
+    }
+    // Right
+    Rectangle {
+        x: selecting ? (start_x < current_x ? current_x : start_x) : parent.width;
+        y: selecting ? (start_y < current_y ? start_y : current_y) : 0;
+        width: parent.width - self.x;
+        height: selecting ? abs(current_y - start_y) : 0;
+        background: #00000080;
+    }
+
+    i_touch := TouchArea {
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left) {
+                if (event.kind == PointerEventKind.down) {
+                    selecting = true;
+                    start_x = i_touch.mouse-x;
+                    start_y = i_touch.mouse-y;
+                    current_x = start_x;
+                    current_y = start_y;
+                } else if (event.kind == PointerEventKind.up) {
+                    selecting = false;
+                    // Provide the calculated rect
+                    area_selected(
+                        start_x < current_x ? start_x : current_x,
+                        start_y < current_y ? start_y : current_y,
+                        abs(current_x - start_x),
+                        abs(current_y - start_y)
+                    );
+                }
+            }
+        }
+        moved => {
+            if (selecting) {
+                current_x = i_touch.mouse-x;
+                current_y = i_touch.mouse-y;
+            }
+        }
+    }
+
+    // Selection border
+    Rectangle {
+        x: start_x < current_x ? start_x : current_x;
+        y: start_y < current_y ? start_y : current_y;
+        width: abs(current_x - start_x);
+        height: abs(current_y - start_y);
+        border-color: #e94560;
+        border-width: 2px;
+        background: transparent;
+        visible: selecting;
+    }
+    
+    VerticalLayout {
+        alignment: start;
+        padding: 40px;
+        Text {
+            text: "Drag your mouse to select capture area";
+            color: white;
+            font-size: 24px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+    }
+    
+    function abs(v: length) -> length {
+        return v < 0px ? -v : v;
+    }
+}
