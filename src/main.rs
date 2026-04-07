@@ -45,6 +45,11 @@ fn calculate_font_size(text: &str, width: f32, height: f32) -> f32 {
     let len = text.chars().count();
     if len == 0 { return 16.0; }
     
+    // Fixed font size for Searching... to avoid zooming feel
+    if text.starts_with("Searching...") {
+        return 18.0;
+    }
+    
     // Further increased padding for HiDPI safety
     let padding = 48.0;
     let available_w = (width - padding).max(40.0);
@@ -210,6 +215,7 @@ async fn main() -> Result<()> {
             main.set_is_running(true);
             if let Some(overlay) = overlay_weak_for_stop.upgrade() {
                 overlay.set_translated_text("Searching...".into());
+                overlay.set_is_searching(true);
                 overlay.set_font_size(calculate_font_size("Searching...", overlay.get_window_w(), overlay.get_window_h()));
                 overlay.set_show_text(main.get_overlay_visible());
                 overlay.show().unwrap();
@@ -356,6 +362,7 @@ async fn main() -> Result<()> {
             window.set_size(slint::LogicalSize::new(w, h));
             
             overlay.set_translated_text("Searching...".into());
+            overlay.set_is_searching(true);
             overlay.set_font_size(calculate_font_size("Searching...", w, h));
             main.set_overlay_visible(true);
             overlay.set_show_text(true);
@@ -485,6 +492,7 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 overlay.set_translated_text(text.clone().into());
+                overlay.set_is_searching(text.starts_with("Searching..."));
                 
                 // Calculate and set font size
                 let font_size = calculate_font_size(&text, overlay.get_window_w(), overlay.get_window_h());
