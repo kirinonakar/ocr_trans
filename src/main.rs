@@ -53,6 +53,7 @@ async fn main() -> Result<()> {
     // Setup Transparency and Windows Specifics
     #[cfg(target_os = "windows")]
     {
+        let mut main_hwnd = None;
         // Main window Mica
         main_window.window().with_winit_window(|winit_window| {
             use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -60,33 +61,38 @@ async fn main() -> Result<()> {
                 if let RawWindowHandle::Win32(h) = handle.as_raw() {
                     let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
                     win_utils::set_mica_backdrop(hwnd);
+                    main_hwnd = Some(hwnd);
                 }
             }
         });
 
-        // Ensure SelectionWindow supports alpha transparency and hide from taskbar
-        selection_window.window().with_winit_window(|winit_window| {
-            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(handle) = winit_window.window_handle() {
-                if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                    let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
-                    win_utils::set_layered(hwnd);
-                    win_utils::set_tool_window(hwnd);
+        if let Some(owner) = main_hwnd {
+            // Ensure SelectionWindow supports alpha transparency and hide from taskbar
+            selection_window.window().with_winit_window(move |winit_window| {
+                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(handle) = winit_window.window_handle() {
+                    if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                        let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
+                        win_utils::set_layered(hwnd);
+                        win_utils::set_tool_window(hwnd);
+                        win_utils::set_window_owner(hwnd, owner);
+                    }
                 }
-            }
-        });
+            });
 
-        // Ensure OverlayWindow supports alpha transparency and hide from taskbar
-        overlay_window.window().with_winit_window(|winit_window| {
-            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(handle) = winit_window.window_handle() {
-                if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                    let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
-                    win_utils::set_layered(hwnd);
-                    win_utils::set_tool_window(hwnd);
+            // Ensure OverlayWindow supports alpha transparency and hide from taskbar
+            overlay_window.window().with_winit_window(move |winit_window| {
+                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(handle) = winit_window.window_handle() {
+                    if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                        let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
+                        win_utils::set_layered(hwnd);
+                        win_utils::set_tool_window(hwnd);
+                        win_utils::set_window_owner(hwnd, owner);
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 
     let main_weak = main_window.as_weak();
@@ -149,19 +155,30 @@ async fn main() -> Result<()> {
     selection_window.on_area_selected(move |x, y, w, h| {
         let selection = selection_weak.unwrap();
         let mut s = state_for_selection.lock().unwrap();
+        
+        // Convert logical to physical coordinates using scale factor
+        let sf = selection.window().scale_factor();
+        
         s.capture_rect = Some(capture::CaptureRect {
-            x: x as i32,
-            y: y as i32,
-            width: w as i32,
-            height: h as i32,
+            x: (x * sf) as i32,
+            y: (y * sf) as i32,
+            width: (w * sf) as i32,
+            height: (h * sf) as i32,
         });
         selection.hide().unwrap();
         
         if let Some(overlay) = overlay_weak.upgrade() {
+            // Set properties
             overlay.set_window_w(w);
             overlay.set_window_h(h);
-            overlay.set_window_x(x);
-            overlay.set_window_y(y);
+            overlay.set_window_x(0.0); // Internal offset should be 0 since window itself is moved
+            overlay.set_window_y(0.0);
+            
+            // Move and resize native window
+            let window = overlay.window();
+            window.set_position(slint::WindowPosition::Logical(slint::LogicalPosition::new(x, y)));
+            window.set_size(slint::LogicalSize::new(w, h));
+            
             overlay.set_translated_text("Searching...".into());
             overlay.set_show_text(true);
             overlay.show().unwrap();

@@ -30,6 +30,14 @@ pub fn set_tool_window(hwnd: HWND) {
     }
 }
 
+/// Set the owner window to hide the child window from taskbar.
+pub fn set_window_owner(child: HWND, owner: HWND) {
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_HWNDPARENT};
+        let _ = SetWindowLongPtrW(child, GWLP_HWNDPARENT, owner.0 as isize);
+    }
+}
+
 /// Sets the window to be layered (essential for alpha transparency on Windows).
 pub fn set_layered(hwnd: HWND) {
     unsafe {
