@@ -76,49 +76,22 @@ async fn main() -> Result<()> {
     }));
 
     // Setup Transparency and Windows Specifics
+    // Setup Transparency and Windows Specifics
     #[cfg(target_os = "windows")]
-    {
-        let mut main_hwnd = None;
-        // Main window Mica
+    let main_hwnd = {
+        let mut hwnd_out = None;
         main_window.window().with_winit_window(|winit_window| {
             use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
             if let Ok(handle) = winit_window.window_handle() {
                 if let RawWindowHandle::Win32(h) = handle.as_raw() {
                     let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
                     win_utils::set_mica_backdrop(hwnd);
-                    main_hwnd = Some(hwnd);
+                    hwnd_out = Some(hwnd);
                 }
             }
         });
-
-        if let Some(owner) = main_hwnd {
-            // Ensure SelectionWindow supports alpha transparency and hide from taskbar
-            selection_window.window().with_winit_window(move |winit_window| {
-                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                if let Ok(handle) = winit_window.window_handle() {
-                    if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                        let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
-                        win_utils::set_layered(hwnd);
-                        win_utils::set_tool_window(hwnd);
-                        win_utils::set_window_owner(hwnd, owner);
-                    }
-                }
-            });
-
-            // Ensure OverlayWindow supports alpha transparency and hide from taskbar
-            overlay_window.window().with_winit_window(move |winit_window| {
-                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                if let Ok(handle) = winit_window.window_handle() {
-                    if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                        let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
-                        win_utils::set_layered(hwnd);
-                        win_utils::set_tool_window(hwnd);
-                        win_utils::set_window_owner(hwnd, owner);
-                    }
-                }
-            });
-        }
-    }
+        hwnd_out
+    };
 
     let main_weak = main_window.as_weak();
     let main_weak_api = main_window.as_weak();
@@ -142,14 +115,35 @@ async fn main() -> Result<()> {
 
     // Overlay Toggle Callback
     let overlay_weak_toggle = overlay_window.as_weak();
+    #[cfg(target_os = "windows")]
+    let main_hwnd_overlay = main_hwnd;
     main_window.on_overlay_toggle_clicked(move |visible| {
         if let Some(overlay) = overlay_weak_toggle.upgrade() {
             overlay.set_show_text(visible && !overlay.get_translated_text().is_empty() && !overlay.get_translated_text().starts_with("COMMAND:"));
+            
+            #[cfg(target_os = "windows")]
+            if visible {
+                overlay.window().with_winit_window(|winit_window| {
+                    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                    if let Ok(handle) = winit_window.window_handle() {
+                        if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                            let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
+                            win_utils::set_layered(hwnd);
+                            win_utils::set_tool_window(hwnd);
+                            if let Some(owner) = main_hwnd_overlay {
+                                win_utils::set_window_owner(hwnd, owner);
+                            }
+                        }
+                    }
+                });
+            }
         }
     });
 
     // Start/Stop Callback
     let overlay_weak_for_stop = overlay_window.as_weak();
+    #[cfg(target_os = "windows")]
+    let main_hwnd_stop = main_hwnd;
     main_window.on_start_stop_clicked(move || {
         let main = main_weak.unwrap();
         let mut s = state_clone.lock().unwrap();
@@ -168,6 +162,21 @@ async fn main() -> Result<()> {
                 overlay.set_translated_text("Searching...".into());
                 overlay.set_show_text(main.get_overlay_visible());
                 overlay.show().unwrap();
+
+                #[cfg(target_os = "windows")]
+                overlay.window().with_winit_window(|winit_window| {
+                    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                    if let Ok(handle) = winit_window.window_handle() {
+                        if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                            let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
+                            win_utils::set_layered(hwnd);
+                            win_utils::set_tool_window(hwnd);
+                            if let Some(owner) = main_hwnd_stop {
+                                win_utils::set_window_owner(hwnd, owner);
+                            }
+                        }
+                    }
+                });
             }
         } else {
             s.is_running = false;
@@ -181,6 +190,8 @@ async fn main() -> Result<()> {
     let s_weak = selection_window.as_weak();
     let state_for_selection = state.clone();
     let overlay_weak_for_select = overlay_window.as_weak();
+    #[cfg(target_os = "windows")]
+    let main_hwnd_selection = main_hwnd;
     main_window.on_select_area_clicked(move || {
         let selection = s_weak.unwrap();
         // Hide existing overlay if any
@@ -195,6 +206,21 @@ async fn main() -> Result<()> {
         }
         selection.show().unwrap();
         selection.window().set_fullscreen(true);
+
+        #[cfg(target_os = "windows")]
+        selection.window().with_winit_window(|winit_window| {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = winit_window.window_handle() {
+                if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                    let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
+                    win_utils::set_layered(hwnd);
+                    win_utils::set_tool_window(hwnd);
+                    if let Some(owner) = main_hwnd_selection {
+                        win_utils::set_window_owner(hwnd, owner);
+                    }
+                }
+            }
+        });
     });
 
     // Close Requested - Hard Exit
@@ -247,18 +273,24 @@ async fn main() -> Result<()> {
             window.set_size(slint::LogicalSize::new(w, h));
             
             overlay.set_translated_text("Searching...".into());
-            overlay.set_show_text(main.get_overlay_visible());
+            main.set_overlay_visible(true);
+            overlay.set_show_text(true);
             overlay.show().unwrap();
             
-            // Set overlay to click-through
+            // Set overlay to click-through and hide from taskbar
             #[cfg(target_os = "windows")]
             {
-                overlay.window().with_winit_window(|winit_window| {
+                let owner = main_hwnd;
+                overlay.window().with_winit_window(move |winit_window| {
                     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
                     if let Ok(handle) = winit_window.window_handle() {
                         if let RawWindowHandle::Win32(h) = handle.as_raw() {
                             let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
                             win_utils::set_click_through(hwnd, true);
+                            win_utils::set_tool_window(hwnd);
+                            if let Some(owner) = owner {
+                                win_utils::set_window_owner(hwnd, owner);
+                            }
                         }
                     }
                 });
