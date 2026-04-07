@@ -12,6 +12,23 @@ use global_hotkey::{GlobalHotKeyManager, hotkey::{HotKey, Modifiers, Code}, Glob
 use tokio::sync::mpsc;
 use i_slint_backend_winit::WinitWindowAccessor; // To access HWND on Windows
 
+fn get_gemini_key() -> Option<String> {
+    // 1. Check current directory
+    if let Ok(key) = std::fs::read_to_string("gemini.txt") {
+        return Some(key.trim().to_string());
+    }
+    // 2. Check executable directory
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let path = exe_dir.join("gemini.txt");
+            if let Ok(key) = std::fs::read_to_string(path) {
+                return Some(key.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
 #[derive(Default)]
 struct AppState {
     is_running: bool,
@@ -42,7 +59,13 @@ async fn main() -> Result<()> {
     // Setup initial window states
     main_window.set_api_endpoint("http://localhost:1234/v1".into());
     main_window.set_model_name("qwen3.5-4b".into());
+    main_window.set_api_key("lm-studio".into());
     main_window.set_interval(0.0);
+
+    // Load API key from gemini.txt if exists
+    if let Some(key) = get_gemini_key() {
+        main_window.set_api_key(key.into());
+    }
 
     let state = Arc::new(Mutex::new(AppState {
         api_endpoint: main_window.get_api_endpoint().to_string(),
@@ -108,10 +131,12 @@ async fn main() -> Result<()> {
         let main = main_weak_api.unwrap();
         if api_type == "Google Gemini" {
             main.set_api_endpoint("https://generativelanguage.googleapis.com".into());
-            main.set_model_name("Gemini 3.1 Flash Lite Preview".into());
+            main.set_model_name("gemini-3.1-flash-lite-preview".into());
+            main.set_api_key(get_gemini_key().unwrap_or_default().into());
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
             main.set_model_name("qwen3.5-4b".into());
+            main.set_api_key("lm-studio".into());
         }
     });
 

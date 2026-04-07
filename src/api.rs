@@ -62,9 +62,15 @@ impl ApiClient {
             .context("Failed to encode image to PNG")?;
         let base64_image = STANDARD.encode(&buffer);
 
+        // Normalize model name: it shouldn't contain spaces and ideally starts with models/ if not provided, 
+        // though the URL below adds it.
+        let model = self.model.trim().to_lowercase().replace(" ", "-");
+        // Remove 'models/' if it was already included in the string so we don't double it
+        let model = model.strip_prefix("models/").unwrap_or(&model);
+
         let url = format!(
             "{}/v1beta/models/{}:generateContent?key={}",
-            self.endpoint, self.model, self.api_key
+            self.endpoint, model, self.api_key
         );
 
         let request = GeminiRequest {
