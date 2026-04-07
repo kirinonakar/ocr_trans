@@ -226,7 +226,7 @@ export component OverlayWindow inherits Window {
 
 export component SelectionWindow inherits Window {
     always-on-top: true;
-    background: transparent;
+    background: black;
     no-frame: true;
     icon: @image-url("../app.ico");
     
@@ -348,9 +348,8 @@ export component SelectionWindow inherits Window {
         width: sel_w;
         height: sel_h;
         border-color: #2563eb;
-        border-width: 2px;
+        border-width: selecting ? 2px : 0px; // Use border-width for smoother appearance
         background: transparent;
-        visible: selecting;
     }
     
     VerticalLayout {

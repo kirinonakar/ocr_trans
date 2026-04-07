@@ -295,9 +295,9 @@ async fn main() -> Result<()> {
                     if let Ok(handle) = winit_window.window_handle() {
                         if let RawWindowHandle::Win32(h) = handle.as_raw() {
                             let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
-                            win_utils::set_layered(hwnd);
+                            // Removed set_layered for SelectionWindow to avoid DWM flickering
                             win_utils::set_tool_window(hwnd);
-                            win_utils::set_exclude_from_capture(hwnd);
+                            // Removed set_exclude_from_capture for SelectionWindow as it's not needed after screenshot
                             win_utils::disable_window_transitions(hwnd);
                             if let Some(owner) = main_hwnd_cap {
                                 win_utils::set_window_owner(hwnd, owner);
