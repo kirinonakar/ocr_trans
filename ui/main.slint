@@ -241,7 +241,7 @@ export component OverlayWindow inherits Window {
                 font-size: font_size;
                 wrap: word-wrap;
                 horizontal-alignment: left;
-                vertical-alignment: is_searching ? top : center;
+                vertical-alignment: center; // Auto font-size handles fitting, center looks better
                 font-weight: 500;
             }
         }

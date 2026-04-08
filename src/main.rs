@@ -42,34 +42,72 @@ struct AppState {
     last_text: String,
 }
 
-fn calculate_font_size(text: &str, width: f32, height: f32) -> f32 {
-    let len = text.chars().count();
-    if len == 0 { return 16.0; }
+fn clean_text(text: &str) -> String {
+    let mut cleaned = String::new();
+    let mut prev_empty = false;
     
-    // Fixed font size for Searching... to avoid zooming feel
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            prev_empty = true;
+        } else {
+            if !cleaned.is_empty() {
+                if prev_empty {
+                    cleaned.push_str("\n\n");
+                } else {
+                    cleaned.push('\n');
+                }
+            }
+            cleaned.push_str(trimmed);
+            prev_empty = false;
+        }
+    }
+    cleaned
+}
+
+fn calculate_font_size(text: &str, width: f32, height: f32) -> f32 {
+    if text.is_empty() { return 16.0; }
+    
+    // Increased vertical padding to account for the close button area
+    let padding_h = 44.0; // 16 + 16 + some margin
+    let padding_v = 60.0; // 24 (top) + 16 (bottom) + some margin
+    
+    let available_w = (width - padding_h).max(40.0);
+    let available_h = (height - padding_v).max(30.0);
+
+    // Responsive font size for Searching... to avoid clipping in small boxes
     if text.starts_with("Searching...") {
-        return 18.0;
+        return 18.0f32.min(available_h).max(10.0);
     }
     
-    // Further increased padding for HiDPI safety
-    let padding = 48.0;
-    let available_w = (width - padding).max(40.0);
-    let available_h = (height - padding).max(30.0);
-    let area = available_w * available_h;
+    // Iterative approach to find a fitting font size
+    let mut best_size = 8.0;
     
-    // Even more conservative heuristic for font size
-    let char_area_unit = 1.6; 
+    // Try from 24 down to 8
+    for size in (8..=24).rev() {
+        let f_size = size as f32;
+        let char_width_est = f_size * 0.6; // Heuristic for CJK/Mixed character width
+        let line_height_est = f_size * 1.35; // Standard line height ratio
+        
+        let mut total_height = 0.0;
+        for line in text.lines() {
+            if line.trim().is_empty() {
+                total_height += line_height_est;
+            } else {
+                let line_len = line.chars().count() as f32;
+                let num_wrapped_lines = (line_len * char_width_est / available_w).ceil().max(1.0);
+                total_height += num_wrapped_lines * line_height_est;
+            }
+        }
+        
+        if total_height <= available_h {
+            best_size = f_size;
+            break;
+        }
+        best_size = f_size; // Last try will be 8.0
+    }
     
-    let mut size = (area / (len as f32 * char_area_unit)).sqrt();
-    
-    // Clamp between 8 and 20 (further reduced max font size)
-    size = size.clamp(8.0, 20.0);
-    
-    // One more check: if width is very small, we might need even smaller font
-    // but word-wrap will handle it by growing vertically.
-    // If it grows beyond available_h, it will be cut.
-    
-    size
+    best_size
 }
 
 fn rgba_to_slint_image(rgba: image::RgbaImage) -> slint::Image {
@@ -405,7 +443,7 @@ async fn main() -> Result<()> {
 
     // Global Hotkey Setup
     let hotkey_manager = GlobalHotKeyManager::new().unwrap();
-    let hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyA);
+    let hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyA);
     hotkey_manager.register(hotkey).unwrap();
 
     let (tx, mut rx) = mpsc::channel(10);
@@ -502,11 +540,21 @@ async fn main() -> Result<()> {
                     overlay.set_show_text(false);
                     continue;
                 }
-                overlay.set_translated_text(text.clone().into());
-                overlay.set_is_searching(text.starts_with("Searching..."));
                 
-                // Calculate and set font size
-                let font_size = calculate_font_size(&text, overlay.get_window_w(), overlay.get_window_h());
+                let is_searching = text.starts_with("Searching...");
+                let is_error = text.starts_with("Error:");
+                
+                let display_text = if is_searching || is_error {
+                    text.clone()
+                } else {
+                    clean_text(&text)
+                };
+
+                overlay.set_translated_text(display_text.clone().into());
+                overlay.set_is_searching(is_searching);
+                
+                // Calculate and set font size using display_text
+                let font_size = calculate_font_size(&display_text, overlay.get_window_w(), overlay.get_window_h());
                 overlay.set_font_size(font_size);
                 
                 let is_overlay_visible = main_weak_ui.upgrade().map(|m| m.get_overlay_visible()).unwrap_or(true);
