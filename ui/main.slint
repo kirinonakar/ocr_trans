@@ -4,7 +4,7 @@ export component MainWindow inherits Window {
     title: "OCR Translator";
     icon: @image-url("../app.ico");
     width: 400px;
-    height: 750px;
+    height: 730px;
     background: @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
 
     in-out property <bool> is_running: false;
@@ -24,7 +24,7 @@ export component MainWindow inherits Window {
 
     VerticalLayout {
         padding: 14px;
-        padding-bottom: 8px;
+        padding-bottom: 30px; // Increased bottom padding to lift content
         spacing: 10px;
 
         Text {
@@ -99,7 +99,7 @@ export component MainWindow inherits Window {
                         border-radius: 4px;
                         border-width: 1px;
                         border-color: #e2e8f0;
-                        height: 120px;
+                        height: 110px;
                         TextEdit {
                             text <=> system_prompt;
                             width: 100%;
@@ -158,26 +158,27 @@ export component MainWindow inherits Window {
             }
         }
 
-        Rectangle { /* Spacer */ }
+        Rectangle { /* Spacer to push button group down */ }
 
         VerticalLayout {
-            alignment: end;
+            spacing: 12px; // Space between Button and Idle text
+            
             Button {
                 text: is_running ? "STOP" : "START";
                 height: 50px;
                 primary: true;
                 clicked => { start_stop_clicked(); }
             }
+
+            Text {
+                text: is_running ? "● Active" : "○ Idle";
+                color: is_running ? #4caf50 : #94a3b8;
+                horizontal-alignment: center;
+                font-size: 12px;
+            }
         }
 
-        Rectangle { /* Spacer */ }
-
-        Text {
-            text: is_running ? "● Active" : "○ Idle";
-            color: is_running ? #4caf50 : #94a3b8;
-            horizontal-alignment: center;
-            font-size: 12px;
-        }
+        Rectangle { height: 10px; } // Extra spacer at the very bottom to lift it slightly more
     }
 }
 
