@@ -65,19 +65,30 @@ pub fn is_changed(prev: &Option<RgbaImage>, curr: &RgbaImage, _threshold: f32) -
     
     let mut diff_sum = 0u64;
     let mut total_pixels = 0u64;
-    
-    // To speed up, we sample or just compare 1/4 of pixels if throughput is an issue, 
-    // but for game subtitles, full compare is usually fine.
-    for (p, c) in prev_img.pixels().zip(curr.pixels()) {
-        let diff = (p[0] as i32 - c[0] as i32).abs() +
-                   (p[1] as i32 - c[1] as i32).abs() +
-                   (p[2] as i32 - c[2] as i32).abs();
-        if diff > 80 {
-            diff_sum += 1;
+
+    // Sample every 4th pixel (stride=2 in both x and y) to avoid burning CPU
+    // on large captures every second. 25% sampling is more than enough for
+    // detecting subtitle / dialog changes.
+    let (width, height) = prev_img.dimensions();
+    let stride = 2u32; // step every 2 pixels in each axis → ~25% sampled
+    let mut y = 0u32;
+    while y < height {
+        let mut x = 0u32;
+        while x < width {
+            let p = prev_img.get_pixel(x, y);
+            let c = curr.get_pixel(x, y);
+            let diff = (p[0] as i32 - c[0] as i32).abs()
+                + (p[1] as i32 - c[1] as i32).abs()
+                + (p[2] as i32 - c[2] as i32).abs();
+            if diff > 80 {
+                diff_sum += 1;
+            }
+            total_pixels += 1;
+            x += stride;
         }
-        total_pixels += 1;
+        y += stride;
     }
-    
+
     if total_pixels == 0 { return false; }
     (diff_sum as f32 / total_pixels as f32) >= 0.02
 }
