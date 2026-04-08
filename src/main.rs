@@ -321,11 +321,28 @@ async fn main() -> Result<()> {
     // Style Changed Callback
     let main_weak_style = main_window.as_weak();
     let overlay_weak_style = overlay_window.as_weak();
+    let state_style = state.clone();
     main_window.on_style_changed(move || {
         if let (Some(main), Some(overlay)) = (main_weak_style.upgrade(), overlay_weak_style.upgrade()) {
             overlay.set_bg_color(main.get_overlay_bg_color());
             overlay.set_text_color(main.get_overlay_text_color());
             overlay.set_bg_opacity(main.get_overlay_bg_opacity());
+            
+            // Recalculate and sync font size immediately
+            let last_text = {
+                let s = state_style.lock().unwrap();
+                s.last_text.clone()
+            };
+            
+            let base_fs = main.get_base_font_size();
+            if !last_text.is_empty() {
+                let font_size = calculate_font_size(&last_text, overlay.get_window_w(), overlay.get_window_h(), base_fs);
+                // println!("Style change: text len={}, base_fs={}, calculated_fs={}", last_text.len(), base_fs, font_size);
+                overlay.set_font_size(font_size);
+            } else {
+                // If text is empty (searching or startup), still update for "Searching..." or future text
+                overlay.set_font_size(base_fs);
+            }
         }
     });
 

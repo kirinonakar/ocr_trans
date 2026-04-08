@@ -163,7 +163,8 @@ export component MainWindow inherits Window {
                 Slider {
                     minimum: 12;
                     maximum: 100; // Increased max font size
-                    value <=> base_font_size;
+                    value: base_font_size;
+                    changed(val) => { base_font_size = val; style_changed(); }
                 }
 
                 if (show_style_settings) : VerticalLayout {
@@ -248,8 +249,8 @@ export component MainWindow inherits Window {
                     Slider {
                         minimum: 0.1;
                         maximum: 1.0;
-                        value <=> overlay_bg_opacity;
-                        changed => { style_changed(); }
+                        value: overlay_bg_opacity;
+                        changed(val) => { overlay_bg_opacity = val; style_changed(); }
                     }
                 }
 
