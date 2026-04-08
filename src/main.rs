@@ -196,6 +196,12 @@ async fn main() -> Result<()> {
         ..Default::default()
     }));
 
+    // Global Hotkey Setup
+    let hotkey_manager = Arc::new(GlobalHotKeyManager::new().unwrap());
+    let hotkey_capture = HotKey::new(Some(Modifiers::META), Code::Backquote);
+    hotkey_manager.register(hotkey_capture).unwrap();
+    let esc_hotkey = HotKey::new(None, Code::Escape);
+
 
     // Setup Transparency and Windows Specifics
     // Setup Transparency and Windows Specifics
@@ -288,7 +294,7 @@ async fn main() -> Result<()> {
                         if let RawWindowHandle::Win32(h) = handle.as_raw() {
                             let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
                             win_utils::set_layered(hwnd);
-                            win_utils::set_tool_window(hwnd);
+                            win_utils::set_tool_window(hwnd, false);
                             win_utils::set_exclude_from_capture(hwnd);
                             win_utils::disable_window_transitions(hwnd);
                             if let Some(owner) = main_hwnd_overlay {
@@ -364,7 +370,7 @@ async fn main() -> Result<()> {
                             if let RawWindowHandle::Win32(h) = handle.as_raw() {
                                 let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
                                 win_utils::set_layered(hwnd);
-                                win_utils::set_tool_window(hwnd);
+                                win_utils::set_tool_window(hwnd, false);
                                 win_utils::set_exclude_from_capture(hwnd);
                                 win_utils::disable_window_transitions(hwnd);
                                 if let Some(owner) = main_hwnd_stop {
@@ -392,6 +398,8 @@ async fn main() -> Result<()> {
     let selection_initialized_clone = selection_initialized.clone();
     #[cfg(target_os = "windows")]
     let main_hwnd_selection = main_hwnd;
+    let hotkey_manager_trigger = hotkey_manager.clone();
+    let esc_hotkey_trigger = esc_hotkey.clone();
     main_window.on_select_area_clicked(move || {
         // Stop active capture
         {
@@ -434,7 +442,7 @@ async fn main() -> Result<()> {
                         if let RawWindowHandle::Win32(h) = handle.as_raw() {
                             let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
                             // Removed set_layered for SelectionWindow to avoid DWM flickering
-                            win_utils::set_tool_window(hwnd);
+                            win_utils::set_tool_window(hwnd, true);
                             // Removed set_exclude_from_capture for SelectionWindow as it's not needed after screenshot
                             win_utils::disable_window_transitions(hwnd);
                             if let Some(owner) = main_hwnd_cap {
@@ -448,6 +456,7 @@ async fn main() -> Result<()> {
         }
 
         selection.show().unwrap();
+        let _ = hotkey_manager_trigger.register(esc_hotkey_trigger);
     });
 
     // Close Requested - Hard Exit
@@ -457,12 +466,17 @@ async fn main() -> Result<()> {
 
     let main_weak_for_selection = main_window.as_weak();
     let selection_weak_for_close = selection_window.as_weak();
+    let hotkey_manager_for_close = hotkey_manager.clone();
+    let esc_hotkey_for_close = esc_hotkey.clone();
     selection_window.on_closed(move || {
         let selection = selection_weak_for_close.unwrap();
         let _ = selection.hide();
+        let _ = hotkey_manager_for_close.unregister(esc_hotkey_for_close);
     });
 
     let state_for_selection = state.clone();
+    let hotkey_manager_area = hotkey_manager.clone();
+    let esc_hotkey_area = esc_hotkey.clone();
     selection_window.on_area_selected(move |x, y, w, h| {
         let selection = selection_weak.unwrap();
         if w < 5.0 || h < 5.0 {
@@ -473,6 +487,8 @@ async fn main() -> Result<()> {
         let state_for_selection = state_for_selection.clone();
         let overlay_weak = overlay_weak.clone();
 
+        let hotkey_manager_async = hotkey_manager_area.clone();
+        let esc_hotkey_async = esc_hotkey_area.clone();
         slint::spawn_local(async move {
             let main = main_weak_for_sync.unwrap();
             
@@ -531,7 +547,7 @@ async fn main() -> Result<()> {
                             if let RawWindowHandle::Win32(h) = handle.as_raw() {
                                 let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
                                 win_utils::set_layered(hwnd);
-                                win_utils::set_tool_window(hwnd);
+                                win_utils::set_tool_window(hwnd, false);
                                 win_utils::set_exclude_from_capture(hwnd);
                                 win_utils::disable_window_transitions(hwnd);
                                 if let Some(owner) = owner {
@@ -544,13 +560,9 @@ async fn main() -> Result<()> {
             }
 
             selection.hide().unwrap();
+            let _ = hotkey_manager_async.unregister(esc_hotkey_async);
         }).unwrap();
     });
-
-    // Global Hotkey Setup
-    let hotkey_manager = GlobalHotKeyManager::new().unwrap();
-    let hotkey = HotKey::new(Some(Modifiers::META), Code::Backquote);
-    hotkey_manager.register(hotkey).unwrap();
 
     let (tx, mut rx) = mpsc::channel(10);
     let state_for_worker = state.clone();
@@ -681,16 +693,28 @@ async fn main() -> Result<()> {
 
     // Hotkey Event Loop - Dedicated Thread for Responsiveness
     let main_weak_hk = main_window.as_weak();
+    let selection_weak_hk = selection_window.as_weak();
+    let hk_id = hotkey_capture.id();
+    let esc_id = esc_hotkey.id();
     std::thread::spawn(move || {
         loop {
             if let Ok(event) = GlobalHotKeyEvent::receiver().recv() {
-                if event.id == hotkey.id() && event.state == global_hotkey::HotKeyState::Pressed {
-                    let main_weak = main_weak_hk.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(main) = main_weak.upgrade() {
-                            main.invoke_select_area_clicked();
-                        }
-                    });
+                if event.state == global_hotkey::HotKeyState::Pressed {
+                    if event.id == hk_id {
+                        let main_weak = main_weak_hk.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(main) = main_weak.upgrade() {
+                                main.invoke_select_area_clicked();
+                            }
+                        });
+                    } else if event.id == esc_id {
+                        let selection_weak = selection_weak_hk.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(selection) = selection_weak.upgrade() {
+                                selection.invoke_closed();
+                            }
+                        });
+                    }
                 }
             }
         }

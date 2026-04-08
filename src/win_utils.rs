@@ -20,15 +20,21 @@ pub fn set_click_through(hwnd: HWND, enable: bool) {
     }
 }
 
-/// Sets the window to be a tool window (hides from taskbar) and non-activatable.
-pub fn set_tool_window(hwnd: HWND) {
+/// Sets the window to be a tool window (hides from taskbar).
+/// If can_focus is false, it also adds WS_EX_NOACTIVATE to prevent focus stealing.
+pub fn set_tool_window(hwnd: HWND, can_focus: bool) {
     unsafe {
         use windows::Win32::UI::WindowsAndMessaging::{WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, WS_EX_APPWINDOW};
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
         // WS_EX_TOOLWINDOW hides from taskbar
-        // WS_EX_NOACTIVATE prevents it from taking focus when shown
-        // We explicitly remove WS_EX_APPWINDOW to ensure it's hidden from taskbar
-        let new_style = (ex_style | (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) as i32) & !(WS_EX_APPWINDOW.0 as i32);
+        let mut new_style = (ex_style | WS_EX_TOOLWINDOW.0 as i32) & !(WS_EX_APPWINDOW.0 as i32);
+        
+        if can_focus {
+            new_style &= !(WS_EX_NOACTIVATE.0 as i32);
+        } else {
+            new_style |= WS_EX_NOACTIVATE.0 as i32;
+        }
+        
         let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, new_style);
     }
 }
