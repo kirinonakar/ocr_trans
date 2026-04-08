@@ -157,6 +157,35 @@ async fn main() -> Result<()> {
         main_window.set_api_key(key.into());
     }
 
+    // Initial Model Sync (Localhost/LM Studio)
+    let main_weak_startup = main_window.as_weak();
+    slint::spawn_local(async move {
+        if let Some(main) = main_weak_startup.upgrade() {
+            let endpoint = main.get_api_endpoint().to_string();
+            let api_key = main.get_api_key().to_string();
+            
+            if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") {
+                let client = api::ApiClient::new(endpoint, api_key, String::new(), String::new());
+                if let Ok(models) = client.get_models().await {
+                    let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
+                    let current_model = main.get_model_name();
+                    main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
+                    
+                    if !current_model.is_empty() {
+                         // Keep the hardcoded default if it's there, but if it exists in sync, better.
+                         // For startup, if we found actual models, and current is the hardcoded default, 
+                         // we might want to switch to the first available loaded model.
+                         if !slint_models.iter().any(|m| m == &current_model) {
+                             if let Some(first) = slint_models.first() {
+                                 main.set_model_name(first.clone());
+                             }
+                         }
+                    }
+                }
+            }
+        }
+    }).unwrap();
+
     let state = Arc::new(Mutex::new(AppState {
         api_endpoint: main_window.get_api_endpoint().to_string(),
         model_name: main_window.get_model_name().to_string(),
@@ -227,8 +256,12 @@ async fn main() -> Result<()> {
             match client.get_models().await {
                 Ok(models) => {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
+                    let current_model = main.get_model_name();
                     main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
-                    if let Some(first) = slint_models.first() {
+                    
+                    if !current_model.is_empty() {
+                        main.set_model_name(current_model);
+                    } else if let Some(first) = slint_models.first() {
                         main.set_model_name(first.clone());
                     }
                 }
@@ -299,24 +332,8 @@ async fn main() -> Result<()> {
                 let main = main_weak_async.unwrap();
                 
                 // Sync with LM Studio if applicable
-                let endpoint = main.get_api_endpoint().to_string();
-                let api_key = main.get_api_key().to_string();
+                // (Removed automatic sync on start to prevent model reverting bug)
                 
-                if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") {
-                    let client = api::ApiClient::new(endpoint.clone(), api_key.clone(), String::new(), String::new());
-                    if let Ok(models) = client.get_models().await {
-                        let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
-                        main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
-                        
-                        let current_model = main.get_model_name().to_string();
-                        if !slint_models.iter().any(|m| m.as_str() == current_model) {
-                            if let Some(first) = slint_models.first() {
-                                main.set_model_name(first.clone());
-                            }
-                        }
-                    }
-                }
-
                 let mut s = state_clone.lock().unwrap();
                 if s.capture_rect.is_none() {
                     return;
@@ -460,23 +477,7 @@ async fn main() -> Result<()> {
             let main = main_weak_for_sync.unwrap();
             
             // Sync with LM Studio if applicable
-            let endpoint = main.get_api_endpoint().to_string();
-            let api_key = main.get_api_key().to_string();
-            
-            if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") {
-                let client = api::ApiClient::new(endpoint.clone(), api_key.clone(), String::new(), String::new());
-                if let Ok(models) = client.get_models().await {
-                    let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
-                    main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
-                    
-                    let current_model = main.get_model_name().to_string();
-                    if !slint_models.iter().any(|m| m.as_str() == current_model) {
-                        if let Some(first) = slint_models.first() {
-                            main.set_model_name(first.clone());
-                        }
-                    }
-                }
-            }
+            // (Removed automatic sync on area selected to prevent model reverting bug)
 
             let mut s = state_for_selection.lock().unwrap();
             // Convert logical to physical coordinates using scale factor
