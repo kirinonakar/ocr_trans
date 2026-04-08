@@ -10,6 +10,8 @@ A real-time screen OCR and translation tool built with Rust and Slint.
 - **Interactive Region Selection**: Drag your mouse to select exactly what you want to translate. Supports **Escape** to cancel.
 - **Auto-Automation**: Selecting a region automatically starts the capture process for immediate results.
 - **Change Detection**: Intelligent logic avoids redundant API calls by detecting screen changes.
+- **Customizable Overlay**: Instantly change background color, text color, and transparency to match your preference.
+- **Dynamic scaling**: Font size automatically adjusts to fit the text within your selected area.
 - **Clipboard Sync**: Translated text is automatically copied to the system clipboard for easy use elsewhere.
 - **Multi-API Support**: 
   - **Google Gemini**: Supports gemini-3.1-flash-lite-preview (Auto-loads API key from `gemini.txt` in the app directory).
@@ -33,6 +35,13 @@ You can download the latest version from the [Releases Page](https://github.com/
    - Click **SELECT AREA** and drag to select the region you want to translate (e.g. subtitles).
    - Capture starts automatically. Use the **STOP** button to pause, or **Win + `** to re-select the area.
    - Use the **Overlay** checkbox to hide/show the translation text while running.
+
+### 🎨 Customization
+- Click the **▼ Style** button next to Font Size to reveal customization options.
+- **Background Color**: Choose from various presets including Dark, Light, and Paper-like themes. The selected color is highlighted.
+- **Text Color**: Select a readable contrast for your chosen background.
+- **Opacity**: Use the slider to adjust how much of the original screen shows through the overlay. Changes are reflected in real-time.
+- **Dynamic Scaling**: The application automatically adjusts font size to fit the content within your chosen area.
 
 ## Project Structure
 - `src/main.rs`: Orchestration, event loop, and UI logic.

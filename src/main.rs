@@ -318,6 +318,17 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Style Changed Callback
+    let main_weak_style = main_window.as_weak();
+    let overlay_weak_style = overlay_window.as_weak();
+    main_window.on_style_changed(move || {
+        if let (Some(main), Some(overlay)) = (main_weak_style.upgrade(), overlay_weak_style.upgrade()) {
+            overlay.set_bg_color(main.get_overlay_bg_color());
+            overlay.set_text_color(main.get_overlay_text_color());
+            overlay.set_bg_opacity(main.get_overlay_bg_opacity());
+        }
+    });
+
     // Close Clicked Callback
     let main_weak_close = main_window.as_weak();
     let overlay_weak_close = overlay_window.as_weak();

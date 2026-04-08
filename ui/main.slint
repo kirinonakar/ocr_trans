@@ -29,6 +29,7 @@ export component MainWindow inherits Window {
     callback api_type_changed(string);
     callback overlay_toggle_clicked(bool);
     callback refresh_models_clicked();
+    callback style_changed();
 
     VerticalLayout {
         padding: 14px;
@@ -173,20 +174,74 @@ export component MainWindow inherits Window {
                     Text { text: "Background Color:"; font-size: 11px; color: #64748b; }
                     HorizontalLayout {
                         spacing: 8px;
-                        Rectangle { background: #ffffff; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_bg_color = #ffffff; } } }
-                        Rectangle { background: #000000; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_bg_color = #000000; } } }
-                        Rectangle { background: #1e293b; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_bg_color = #1e293b; } } }
-                        Rectangle { background: #fef08a; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_bg_color = #fef08a; } } }
-                        Rectangle { background: #dcfce7; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_bg_color = #dcfce7; } } }
+                        Rectangle { 
+                            background: #ffffff; 
+                            border-width: overlay_bg_color == #ffffff ? 2px : 1px; 
+                            border-color: overlay_bg_color == #ffffff ? #2563eb : #e2e8f0; 
+                            width: 24px; height: 24px; border-radius: 4px; 
+                            TouchArea { clicked => { overlay_bg_color = #ffffff; style_changed(); } } 
+                        }
+                        Rectangle { 
+                            background: #000000; 
+                            border-width: overlay_bg_color == #000000 ? 2px : 1px; 
+                            border-color: overlay_bg_color == #000000 ? #2563eb : #e2e8f0; 
+                            width: 24px; height: 24px; border-radius: 4px; 
+                            TouchArea { clicked => { overlay_bg_color = #000000; style_changed(); } } 
+                        }
+                        Rectangle { 
+                            background: #1e293b; 
+                            border-width: overlay_bg_color == #1e293b ? 2px : 1px; 
+                            border-color: overlay_bg_color == #1e293b ? #2563eb : #e2e8f0; 
+                            width: 24px; height: 24px; border-radius: 4px; 
+                            TouchArea { clicked => { overlay_bg_color = #1e293b; style_changed(); } } 
+                        }
+                        Rectangle { 
+                            background: #fef08a; 
+                            border-width: overlay_bg_color == #fef08a ? 2px : 1px; 
+                            border-color: overlay_bg_color == #fef08a ? #2563eb : #e2e8f0; 
+                            width: 24px; height: 24px; border-radius: 4px; 
+                            TouchArea { clicked => { overlay_bg_color = #fef08a; style_changed(); } } 
+                        }
+                        Rectangle { 
+                            background: #dcfce7; 
+                            border-width: overlay_bg_color == #dcfce7 ? 2px : 1px; 
+                            border-color: overlay_bg_color == #dcfce7 ? #2563eb : #e2e8f0; 
+                            width: 24px; height: 24px; border-radius: 4px; 
+                            TouchArea { clicked => { overlay_bg_color = #dcfce7; style_changed(); } } 
+                        }
                     }
 
                     Text { text: "Text Color:"; font-size: 11px; color: #64748b; }
                     HorizontalLayout {
                         spacing: 8px;
-                        Rectangle { background: #1e293b; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_text_color = #1e293b; } } }
-                        Rectangle { background: #ffffff; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_text_color = #ffffff; } } }
-                        Rectangle { background: #ef4444; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_text_color = #ef4444; } } }
-                        Rectangle { background: #2563eb; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_text_color = #2563eb; } } }
+                        Rectangle { 
+                            background: #1e293b; 
+                            border-width: overlay_text_color == #1e293b ? 2px : 1px; 
+                            border-color: overlay_text_color == #1e293b ? #2563eb : #e2e8f0; 
+                            width: 24px; height: 24px; border-radius: 4px; 
+                            TouchArea { clicked => { overlay_text_color = #1e293b; style_changed(); } } 
+                        }
+                        Rectangle { 
+                            background: #ffffff; 
+                            border-width: overlay_text_color == #ffffff ? 2px : 1px; 
+                            border-color: overlay_text_color == #ffffff ? #2563eb : #e2e8f0; 
+                            width: 24px; height: 24px; border-radius: 4px; 
+                            TouchArea { clicked => { overlay_text_color = #ffffff; style_changed(); } } 
+                        }
+                        Rectangle { 
+                            background: #ef4444; 
+                            border-width: overlay_text_color == #ef4444 ? 2px : 1px; 
+                            border-color: overlay_text_color == #ef4444 ? #2563eb : #e2e8f0; 
+                            width: 24px; height: 24px; border-radius: 4px; 
+                            TouchArea { clicked => { overlay_text_color = #ef4444; style_changed(); } } 
+                        }
+                        Rectangle { 
+                            background: #2563eb; 
+                            border-width: overlay_text_color == #2563eb ? 2px : 1px; 
+                            border-color: overlay_text_color == #2563eb ? #2563eb : #e2e8f0; 
+                            width: 24px; height: 24px; border-radius: 4px; 
+                            TouchArea { clicked => { overlay_text_color = #2563eb; style_changed(); } } 
+                        }
                     }
 
                     Text { text: "Background Opacity:"; font-size: 11px; color: #64748b; }
@@ -194,6 +249,7 @@ export component MainWindow inherits Window {
                         minimum: 0.1;
                         maximum: 1.0;
                         value <=> overlay_bg_opacity;
+                        changed => { style_changed(); }
                     }
                 }
 
