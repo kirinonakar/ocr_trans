@@ -40,7 +40,9 @@ struct AppState {
     interval_sec: u64,
     system_prompt: String,
     last_text: String,
+    base_font_size: f32,
 }
+
 
 fn clean_text(text: &str) -> String {
     let mut cleaned = String::new();
@@ -65,36 +67,48 @@ fn clean_text(text: &str) -> String {
     cleaned
 }
 
-fn calculate_font_size(text: &str, width: f32, height: f32) -> f32 {
-    if text.is_empty() { return 16.0; }
+fn calculate_font_size(text: &str, width: f32, height: f32, max_size: f32) -> f32 {
+    if text.is_empty() { return max_size; }
     
-    // Increased vertical padding to account for the close button area
-    let padding_h = 44.0; // 16 + 16 + some margin
-    let padding_v = 60.0; // 24 (top) + 16 (bottom) + some margin
+    // Safety padding for UI elements like the close button
+    // top (24) + bottom (16) + extra bottom buffer (8) = 48
+    let padding_v = 48.0; 
+    let padding_h = 32.0; // 16 + 16
     
     let available_w = (width - padding_h).max(40.0);
     let available_h = (height - padding_v).max(30.0);
 
-    // Responsive font size for Searching... to avoid clipping in small boxes
+    // Responsive font size for Searching...
     if text.starts_with("Searching...") {
-        return 18.0f32.min(available_h).max(10.0);
+        return (max_size * 1.2).min(available_h).max(10.0);
     }
+    
+    // Calculate how many CJK characters are in the text to adjust width heuristic
+    let cjk_count = text.chars().filter(|&c| {
+        // Simple CJK range check
+        (c >= '\u{3000}' && c <= '\u{9FFF}') || (c >= '\u{AC00}' && c <= '\u{D7AF}')
+    }).count();
+    let total_chars = text.chars().count();
+    let cjk_ratio = if total_chars > 0 { cjk_count as f32 / total_chars as f32 } else { 0.0 };
     
     // Iterative approach to find a fitting font size
     let mut best_size = 8.0;
+    let start_size = (max_size as i32).max(8);
     
-    // Try from 24 down to 8
-    for size in (8..=24).rev() {
+    for size in (8..=start_size).rev() {
         let f_size = size as f32;
-        let char_width_est = f_size * 0.6; // Heuristic for CJK/Mixed character width
-        let line_height_est = f_size * 1.35; // Standard line height ratio
+        // CJK characters are roughly square (1.0 width ratio), 
+        // while Latin/Numerical are roughly 0.5-0.6.
+        let char_width_est = f_size * (0.55 + (0.45 * cjk_ratio)); 
+        let line_height_est = f_size * 1.4; // Slightly more generous line height
         
         let mut total_height = 0.0;
         for line in text.lines() {
-            if line.trim().is_empty() {
+            let line_trimmed = line.trim();
+            if line_trimmed.is_empty() {
                 total_height += line_height_est;
             } else {
-                let line_len = line.chars().count() as f32;
+                let line_len = line_trimmed.chars().count() as f32;
                 let num_wrapped_lines = (line_len * char_width_est / available_w).ceil().max(1.0);
                 total_height += num_wrapped_lines * line_height_est;
             }
@@ -104,11 +118,12 @@ fn calculate_font_size(text: &str, width: f32, height: f32) -> f32 {
             best_size = f_size;
             break;
         }
-        best_size = f_size; // Last try will be 8.0
+        best_size = f_size; 
     }
     
     best_size
 }
+
 
 fn rgba_to_slint_image(rgba: image::RgbaImage) -> slint::Image {
     let (width, height) = rgba.dimensions();
@@ -134,6 +149,8 @@ async fn main() -> Result<()> {
     main_window.set_api_key("lm-studio".into());
     main_window.set_system_prompt("naturally translate into korean. only show translated texts.".into());
     main_window.set_interval(0.0);
+    main_window.set_base_font_size(18.0);
+
 
     // Load API key from gemini.txt if exists
     if let Some(key) = get_gemini_key() {
@@ -146,8 +163,10 @@ async fn main() -> Result<()> {
         interval_sec: 0,
         system_prompt: main_window.get_system_prompt().to_string(),
         last_text: String::new(),
+        base_font_size: main_window.get_base_font_size(),
         ..Default::default()
     }));
+
 
     // Setup Transparency and Windows Specifics
     // Setup Transparency and Windows Specifics
@@ -309,13 +328,16 @@ async fn main() -> Result<()> {
                 s.model_name = main.get_model_name().to_string();
                 s.interval_sec = main.get_interval() as u64;
                 s.system_prompt = main.get_system_prompt().to_string();
+                s.base_font_size = main.get_base_font_size();
                 main.set_is_running(true);
+
                 
                 if let Some(overlay) = overlay_weak.upgrade() {
                     overlay.set_translated_text("Searching...".into());
                     overlay.set_is_searching(true);
-                    overlay.set_font_size(calculate_font_size("Searching...", overlay.get_window_w(), overlay.get_window_h()));
+                    overlay.set_font_size(calculate_font_size("Searching...", overlay.get_window_w(), overlay.get_window_h(), main.get_base_font_size()));
                     overlay.set_show_text(main.get_overlay_visible());
+
                     overlay.show().unwrap();
 
                     #[cfg(target_os = "windows")]
@@ -474,7 +496,9 @@ async fn main() -> Result<()> {
             s.model_name = main.get_model_name().to_string();
             s.interval_sec = main.get_interval() as u64;
             s.system_prompt = main.get_system_prompt().to_string();
+            s.base_font_size = main.get_base_font_size();
             main.set_is_running(true);
+
             
             if let Some(overlay) = overlay_weak.upgrade() {
                 // Set properties
@@ -490,8 +514,9 @@ async fn main() -> Result<()> {
                 
                 overlay.set_translated_text("Searching...".into());
                 overlay.set_is_searching(true);
-                overlay.set_font_size(calculate_font_size("Searching...", w, h));
+                overlay.set_font_size(calculate_font_size("Searching...", w, h, main.get_base_font_size()));
                 main.set_overlay_visible(true);
+
                 overlay.set_show_text(true);
                 overlay.show().unwrap();
                 
@@ -535,12 +560,13 @@ async fn main() -> Result<()> {
         let mut prev_rect = None;
         
         loop {
-                let (is_running, rect, api_config, step_interval) = {
+                let (is_running, rect, api_config, step_interval, _base_fs) = {
                     let s = state_for_worker.lock().unwrap();
-                    (s.is_running, s.capture_rect, (s.api_endpoint.clone(), s.api_key.clone(), s.model_name.clone(), s.system_prompt.clone()), s.interval_sec)
+                    (s.is_running, s.capture_rect, (s.api_endpoint.clone(), s.api_key.clone(), s.model_name.clone(), s.system_prompt.clone()), s.interval_sec, s.base_font_size)
                 };
 
             if is_running && rect.is_some() {
+
                 let current_rect = rect.unwrap();
                 if Some(current_rect) != prev_rect {
                     prev_img = None;
@@ -634,11 +660,13 @@ async fn main() -> Result<()> {
                 overlay.set_is_searching(is_searching);
                 
                 // Calculate and set font size using display_text
-                let font_size = calculate_font_size(&display_text, overlay.get_window_w(), overlay.get_window_h());
+                let base_fs = main_weak_ui.upgrade().map(|m| m.get_base_font_size()).unwrap_or(18.0);
+                let font_size = calculate_font_size(&display_text, overlay.get_window_w(), overlay.get_window_h(), base_fs);
                 overlay.set_font_size(font_size);
                 
                 let is_overlay_visible = main_weak_ui.upgrade().map(|m| m.get_overlay_visible()).unwrap_or(true);
                 overlay.set_show_text(is_overlay_visible);
+
                 
                 // Copy to clipboard
                 if !text.starts_with("Searching...") && !text.starts_with("Error:") {

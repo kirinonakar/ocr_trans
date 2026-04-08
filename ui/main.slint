@@ -4,7 +4,7 @@ export component MainWindow inherits Window {
     title: "OCR Translator";
     icon: @image-url("../app.ico");
     width: 400px;
-    height: 750px;
+    height: 780px;
     background: @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
     default-font-family: "Yu Gothic UI";
 
@@ -16,6 +16,8 @@ export component MainWindow inherits Window {
     in-out property <float> interval: 0;
     in-out property <bool> overlay_visible: true;
     in-out property <string> system_prompt: "naturally translate into korean. only show translated texts.";
+    in-out property <float> base_font_size: 18;
+
     
     
     callback start_stop_clicked();
@@ -107,7 +109,7 @@ export component MainWindow inherits Window {
                         border-radius: 4px;
                         border-width: 1px;
                         border-color: #e2e8f0;
-                        height: 110px;
+                        height: 90px;
                         TextEdit {
                             text <=> system_prompt;
                             width: 100%;
@@ -139,6 +141,16 @@ export component MainWindow inherits Window {
                     maximum: 10;
                     value <=> interval;
                 }
+                HorizontalLayout {
+                    Text { text: "Font Size: "; vertical-alignment: center; color: #64748b; }
+                    Text { text: round(base_font_size); vertical-alignment: center; font-weight: 700; color: #1e293b; }
+                }
+                Slider {
+                    minimum: 12;
+                    maximum: 40;
+                    value <=> base_font_size;
+                }
+
                 HorizontalLayout {
                     spacing: 8px;
                     Button {
