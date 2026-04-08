@@ -2,6 +2,8 @@
 
 A real-time screen OCR and translation tool built with Rust and Slint.
 
+<img src="screenshot.png" alt="screenshot1" width="70%">
+
 ## Features
 - **Modern UI**: Dark mode, glassmorphism, and Windows 11 Mica backdrop for the main control window.
 - **Toggleable Overlay**: Dedicated toggle and logic to hide/show the translation box without stopping the OCR process.
