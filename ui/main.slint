@@ -22,6 +22,7 @@ export component MainWindow inherits Window {
     callback select_area_clicked();
     callback api_type_changed(string);
     callback overlay_toggle_clicked(bool);
+    callback refresh_models_clicked();
 
     VerticalLayout {
         padding: 14px;
@@ -84,10 +85,16 @@ export component MainWindow inherits Window {
                     LineEdit {
                         text <=> model_name;
                     }
-                    ComboBox {
-                        model: model_options;
-                        selected(val) => {
-                            model_name = val;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        ComboBox {
+                            model: model_options;
+                            current-value <=> model_name;
+                        }
+                        Button {
+                            text: "Sync";
+                            primary: false;
+                            clicked => { refresh_models_clicked(); }
                         }
                     }
                 }

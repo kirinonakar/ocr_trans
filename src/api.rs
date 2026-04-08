@@ -177,4 +177,37 @@ impl ApiClient {
             
         Ok(text.trim().to_string())
     }
+
+    pub async fn get_models(&self) -> Result<Vec<String>> {
+        let url = if self.endpoint.ends_with("/models") {
+            self.endpoint.clone()
+        } else if self.endpoint.ends_with("/v1") {
+            format!("{}/models", self.endpoint)
+        } else {
+            format!("{}/v1/models", self.endpoint)
+        };
+
+        let mut req = self.client.get(&url);
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+
+        let response = req.send().await.context("Failed to fetch models")?;
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to fetch models: {}", response.status());
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let mut models = Vec::new();
+
+        if let Some(data) = json["data"].as_array() {
+            for m in data {
+                if let Some(id) = m["id"].as_str() {
+                    models.push(id.to_string());
+                }
+            }
+        }
+
+        Ok(models)
+    }
 }

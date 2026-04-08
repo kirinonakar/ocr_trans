@@ -195,6 +195,30 @@ async fn main() -> Result<()> {
             main.set_system_prompt("naturally translate into korean. only show translated texts.".into());
         }
     });
+    
+    // Refresh Models Callback
+    let main_weak_refresh = main_window.as_weak();
+    main_window.on_refresh_models_clicked(move || {
+        let main = main_weak_refresh.unwrap();
+        let endpoint = main.get_api_endpoint().to_string();
+        let api_key = main.get_api_key().to_string();
+        
+        slint::spawn_local(async move {
+            let client = api::ApiClient::new(endpoint, api_key, String::new(), String::new());
+            match client.get_models().await {
+                Ok(models) => {
+                    let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
+                    main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
+                    if let Some(first) = slint_models.first() {
+                        main.set_model_name(first.clone());
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to fetch models: {:?}", e);
+                }
+            }
+        }).unwrap();
+    });
 
     // Overlay Toggle Callback
     let overlay_weak_toggle = overlay_window.as_weak();
@@ -245,44 +269,75 @@ async fn main() -> Result<()> {
     let main_hwnd_stop = main_hwnd;
     main_window.on_start_stop_clicked(move || {
         let main = main_weak.unwrap();
-        let mut s = state_clone.lock().unwrap();
+        let state_clone = state_clone.clone();
+        let overlay_weak = overlay_weak_for_stop.clone();
         
-        if !s.is_running {
-            if s.capture_rect.is_none() {
-                return;
-            }
-            s.is_running = true;
-            s.api_endpoint = main.get_api_endpoint().to_string();
-            s.api_key = main.get_api_key().to_string();
-            s.model_name = main.get_model_name().to_string();
-            s.interval_sec = main.get_interval() as u64;
-            s.system_prompt = main.get_system_prompt().to_string();
-            main.set_is_running(true);
-            if let Some(overlay) = overlay_weak_for_stop.upgrade() {
-                overlay.set_translated_text("Searching...".into());
-                overlay.set_is_searching(true);
-                overlay.set_font_size(calculate_font_size("Searching...", overlay.get_window_w(), overlay.get_window_h()));
-                overlay.set_show_text(main.get_overlay_visible());
-                overlay.show().unwrap();
-
-                #[cfg(target_os = "windows")]
-                overlay.window().with_winit_window(|winit_window| {
-                    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                    if let Ok(handle) = winit_window.window_handle() {
-                        if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                            let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
-                            win_utils::set_layered(hwnd);
-                            win_utils::set_tool_window(hwnd);
-                            win_utils::set_exclude_from_capture(hwnd);
-                            win_utils::disable_window_transitions(hwnd);
-                            if let Some(owner) = main_hwnd_stop {
-                                win_utils::set_window_owner(hwnd, owner);
+        if !main.get_is_running() {
+            if main.get_is_running() { return; } // Should not happen
+            
+            let main_weak_async = main_weak.clone();
+            slint::spawn_local(async move {
+                let main = main_weak_async.unwrap();
+                
+                // Sync with LM Studio if applicable
+                let endpoint = main.get_api_endpoint().to_string();
+                let api_key = main.get_api_key().to_string();
+                
+                if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") {
+                    let client = api::ApiClient::new(endpoint.clone(), api_key.clone(), String::new(), String::new());
+                    if let Ok(models) = client.get_models().await {
+                        let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
+                        main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
+                        
+                        let current_model = main.get_model_name().to_string();
+                        if !slint_models.iter().any(|m| m.as_str() == current_model) {
+                            if let Some(first) = slint_models.first() {
+                                main.set_model_name(first.clone());
                             }
                         }
                     }
-                });
-            }
+                }
+
+                let mut s = state_clone.lock().unwrap();
+                if s.capture_rect.is_none() {
+                    return;
+                }
+                
+                s.is_running = true;
+                s.api_endpoint = main.get_api_endpoint().to_string();
+                s.api_key = main.get_api_key().to_string();
+                s.model_name = main.get_model_name().to_string();
+                s.interval_sec = main.get_interval() as u64;
+                s.system_prompt = main.get_system_prompt().to_string();
+                main.set_is_running(true);
+                
+                if let Some(overlay) = overlay_weak.upgrade() {
+                    overlay.set_translated_text("Searching...".into());
+                    overlay.set_is_searching(true);
+                    overlay.set_font_size(calculate_font_size("Searching...", overlay.get_window_w(), overlay.get_window_h()));
+                    overlay.set_show_text(main.get_overlay_visible());
+                    overlay.show().unwrap();
+
+                    #[cfg(target_os = "windows")]
+                    overlay.window().with_winit_window(|winit_window| {
+                        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                        if let Ok(handle) = winit_window.window_handle() {
+                            if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                                let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
+                                win_utils::set_layered(hwnd);
+                                win_utils::set_tool_window(hwnd);
+                                win_utils::set_exclude_from_capture(hwnd);
+                                win_utils::disable_window_transitions(hwnd);
+                                if let Some(owner) = main_hwnd_stop {
+                                    win_utils::set_window_owner(hwnd, owner);
+                                }
+                            }
+                        }
+                    });
+                }
+            }).unwrap();
         } else {
+            let mut s = state_clone.lock().unwrap();
             s.is_running = false;
             main.set_is_running(false);
             if let Some(overlay) = overlay_weak_for_stop.upgrade() {
@@ -375,70 +430,95 @@ async fn main() -> Result<()> {
             let _ = selection.hide();
             return;
         }
-        let mut s = state_for_selection.lock().unwrap();
-        let main = main_weak_for_selection.unwrap();
-        
-        // Convert logical to physical coordinates using scale factor
-        let sf = selection.window().scale_factor();
-        
-        s.capture_rect = Some(capture::CaptureRect {
-            x: (x * sf) as i32,
-            y: (y * sf) as i32,
-            width: (w * sf) as i32,
-            height: (h * sf) as i32,
-        });
+        let main_weak_for_sync = main_weak_for_selection.clone();
+        let state_for_selection = state_for_selection.clone();
+        let overlay_weak = overlay_weak.clone();
 
-        // Auto-start
-        s.is_running = true;
-        s.api_endpoint = main.get_api_endpoint().to_string();
-        s.api_key = main.get_api_key().to_string();
-        s.model_name = main.get_model_name().to_string();
-        s.interval_sec = main.get_interval() as u64;
-        s.system_prompt = main.get_system_prompt().to_string();
-        main.set_is_running(true);
-        
-        if let Some(overlay) = overlay_weak.upgrade() {
-            // Set properties
-            overlay.set_window_w(w);
-            overlay.set_window_h(h);
-            overlay.set_window_x(0.0); // Internal offset should be 0 since window itself is moved
-            overlay.set_window_y(0.0);
+        slint::spawn_local(async move {
+            let main = main_weak_for_sync.unwrap();
             
-            // Move and resize native window
-            let window = overlay.window();
-            window.set_position(slint::WindowPosition::Logical(slint::LogicalPosition::new(x, y)));
-            window.set_size(slint::LogicalSize::new(w, h));
+            // Sync with LM Studio if applicable
+            let endpoint = main.get_api_endpoint().to_string();
+            let api_key = main.get_api_key().to_string();
             
-            overlay.set_translated_text("Searching...".into());
-            overlay.set_is_searching(true);
-            overlay.set_font_size(calculate_font_size("Searching...", w, h));
-            main.set_overlay_visible(true);
-            overlay.set_show_text(true);
-            overlay.show().unwrap();
-            
-            // Set overlay to click-through and hide from taskbar
-            #[cfg(target_os = "windows")]
-            {
-                let owner = main_hwnd;
-                overlay.window().with_winit_window(move |winit_window| {
-                    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                    if let Ok(handle) = winit_window.window_handle() {
-                        if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                            let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
-                            win_utils::set_layered(hwnd);
-                            win_utils::set_tool_window(hwnd);
-                            win_utils::set_exclude_from_capture(hwnd);
-                            win_utils::disable_window_transitions(hwnd);
-                            if let Some(owner) = owner {
-                                win_utils::set_window_owner(hwnd, owner);
-                            }
+            if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") {
+                let client = api::ApiClient::new(endpoint.clone(), api_key.clone(), String::new(), String::new());
+                if let Ok(models) = client.get_models().await {
+                    let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
+                    main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
+                    
+                    let current_model = main.get_model_name().to_string();
+                    if !slint_models.iter().any(|m| m.as_str() == current_model) {
+                        if let Some(first) = slint_models.first() {
+                            main.set_model_name(first.clone());
                         }
                     }
-                });
+                }
             }
-        }
 
-        selection.hide().unwrap();
+            let mut s = state_for_selection.lock().unwrap();
+            // Convert logical to physical coordinates using scale factor
+            let sf = selection.window().scale_factor();
+            
+            s.capture_rect = Some(capture::CaptureRect {
+                x: (x * sf) as i32,
+                y: (y * sf) as i32,
+                width: (w * sf) as i32,
+                height: (h * sf) as i32,
+            });
+
+            // Auto-start
+            s.is_running = true;
+            s.api_endpoint = main.get_api_endpoint().to_string();
+            s.api_key = main.get_api_key().to_string();
+            s.model_name = main.get_model_name().to_string();
+            s.interval_sec = main.get_interval() as u64;
+            s.system_prompt = main.get_system_prompt().to_string();
+            main.set_is_running(true);
+            
+            if let Some(overlay) = overlay_weak.upgrade() {
+                // Set properties
+                overlay.set_window_w(w);
+                overlay.set_window_h(h);
+                overlay.set_window_x(0.0); // Internal offset should be 0 since window itself is moved
+                overlay.set_window_y(0.0);
+                
+                // Move and resize native window
+                let window = overlay.window();
+                window.set_position(slint::WindowPosition::Logical(slint::LogicalPosition::new(x, y)));
+                window.set_size(slint::LogicalSize::new(w, h));
+                
+                overlay.set_translated_text("Searching...".into());
+                overlay.set_is_searching(true);
+                overlay.set_font_size(calculate_font_size("Searching...", w, h));
+                main.set_overlay_visible(true);
+                overlay.set_show_text(true);
+                overlay.show().unwrap();
+                
+                // Set overlay to click-through and hide from taskbar
+                #[cfg(target_os = "windows")]
+                {
+                    let owner = main_hwnd;
+                    overlay.window().with_winit_window(move |winit_window| {
+                        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                        if let Ok(handle) = winit_window.window_handle() {
+                            if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                                let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
+                                win_utils::set_layered(hwnd);
+                                win_utils::set_tool_window(hwnd);
+                                win_utils::set_exclude_from_capture(hwnd);
+                                win_utils::disable_window_transitions(hwnd);
+                                if let Some(owner) = owner {
+                                    win_utils::set_window_owner(hwnd, owner);
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+
+            selection.hide().unwrap();
+        }).unwrap();
     });
 
     // Global Hotkey Setup
