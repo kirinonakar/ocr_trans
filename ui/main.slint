@@ -91,7 +91,10 @@ export component MainWindow inherits Window {
                         spacing: 6px;
                         ComboBox {
                             model: model_options;
-                            current-value <=> model_name;
+                            current-value: model_name;
+                            selected(val) => {
+                                model_name = val;
+                            }
                         }
                         Button {
                             text: "Sync";

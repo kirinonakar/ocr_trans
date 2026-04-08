@@ -203,7 +203,7 @@ impl ApiClient {
         if let Some(data) = json["data"].as_array() {
             for m in data {
                 if let Some(id) = m["id"].as_str() {
-                    models.push(id.to_string());
+                    models.push(id.trim().to_string());
                 }
             }
         }
