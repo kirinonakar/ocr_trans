@@ -38,6 +38,7 @@ struct AppState {
     api_key: String,
     model_name: String,
     interval_sec: u64,
+    system_prompt: String,
     last_text: String,
 }
 
@@ -93,6 +94,7 @@ async fn main() -> Result<()> {
     main_window.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
     main_window.set_model_name("translate-gemma-12b-it".into());
     main_window.set_api_key("lm-studio".into());
+    main_window.set_system_prompt("naturally translate into korean. only show translated texts.".into());
     main_window.set_interval(0.0);
 
     // Load API key from gemini.txt if exists
@@ -104,6 +106,7 @@ async fn main() -> Result<()> {
         api_endpoint: main_window.get_api_endpoint().to_string(),
         model_name: main_window.get_model_name().to_string(),
         interval_sec: 0,
+        system_prompt: main_window.get_system_prompt().to_string(),
         last_text: String::new(),
         ..Default::default()
     }));
@@ -144,12 +147,14 @@ async fn main() -> Result<()> {
             main.set_model_options(slint::ModelRc::from(gemini_models.as_slice()));
             main.set_model_name("gemini-3.1-flash-lite-preview".into());
             main.set_api_key(get_gemini_key().unwrap_or_default().into());
+            main.set_system_prompt("You are a verbatim translator. Extract all text from this image and translate it exactly and literally into Korean without summarizing, omitting, or changing any meaning. If the text is already in Korean, return it exactly as it is. Output ONLY the translated text, with no extra commentary or formatting.".into());
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
             let lm_models: Vec<slint::SharedString> = vec!["translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "google/gemma-4-26b-a4b".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
             main.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
             main.set_model_name("translate-gemma-12b-it".into());
             main.set_api_key("lm-studio".into());
+            main.set_system_prompt("You are a verbatim translator. Extract all text from this image and translate it exactly and literally into Korean without summarizing, omitting, or changing any meaning. If the text is already in Korean, return it exactly as it is. Output ONLY the translated text, with no extra commentary or formatting.".into());
         }
     });
 
@@ -213,6 +218,7 @@ async fn main() -> Result<()> {
             s.api_key = main.get_api_key().to_string();
             s.model_name = main.get_model_name().to_string();
             s.interval_sec = main.get_interval() as u64;
+            s.system_prompt = main.get_system_prompt().to_string();
             main.set_is_running(true);
             if let Some(overlay) = overlay_weak_for_stop.upgrade() {
                 overlay.set_translated_text("Searching...".into());
@@ -350,6 +356,7 @@ async fn main() -> Result<()> {
         s.api_key = main.get_api_key().to_string();
         s.model_name = main.get_model_name().to_string();
         s.interval_sec = main.get_interval() as u64;
+        s.system_prompt = main.get_system_prompt().to_string();
         main.set_is_running(true);
         
         if let Some(overlay) = overlay_weak.upgrade() {
@@ -410,10 +417,10 @@ async fn main() -> Result<()> {
         let mut prev_rect = None;
         
         loop {
-            let (is_running, rect, api_config, step_interval) = {
-                let s = state_for_worker.lock().unwrap();
-                (s.is_running, s.capture_rect, (s.api_endpoint.clone(), s.api_key.clone(), s.model_name.clone()), s.interval_sec)
-            };
+                let (is_running, rect, api_config, step_interval) = {
+                    let s = state_for_worker.lock().unwrap();
+                    (s.is_running, s.capture_rect, (s.api_endpoint.clone(), s.api_key.clone(), s.model_name.clone(), s.system_prompt.clone()), s.interval_sec)
+                };
 
             if is_running && rect.is_some() {
                 let current_rect = rect.unwrap();
@@ -431,7 +438,7 @@ async fn main() -> Result<()> {
                         prev_img = Some(curr_img.clone());
                         let _ = tx.send("Searching...".into()).await;
                         
-                        let client = api::ApiClient::new(api_config.0, api_config.1, api_config.2);
+                        let client = api::ApiClient::new(api_config.0, api_config.1, api_config.2, api_config.3);
                         match client.translate_image(&curr_img).await {
                             Ok(text) => {
                                 let is_new = {

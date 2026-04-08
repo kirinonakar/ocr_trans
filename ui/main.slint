@@ -1,10 +1,10 @@
-import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox } from "std-widgets.slint";
+import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox, TextEdit } from "std-widgets.slint";
 
 export component MainWindow inherits Window {
     title: "OCR Translator";
     icon: @image-url("../app.ico");
     width: 400px;
-    height: 700px;
+    height: 750px;
     background: @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
 
     in-out property <bool> is_running: false;
@@ -14,6 +14,8 @@ export component MainWindow inherits Window {
     in property <[string]> model_options: ["qwen3.5-4b", "qwen/qwen3.5-9b"];
     in-out property <float> interval: 0;
     in-out property <bool> overlay_visible: true;
+    in-out property <string> system_prompt: "naturally translate into korean. only show translated texts.";
+    
     
     callback start_stop_clicked();
     callback select_area_clicked();
@@ -21,13 +23,13 @@ export component MainWindow inherits Window {
     callback overlay_toggle_clicked(bool);
 
     VerticalLayout {
-        padding: 24px;
-        padding-bottom: 24px;
-        spacing: 18px;
+        padding: 14px;
+        padding-bottom: 8px;
+        spacing: 10px;
 
         Text {
             text: "OCR Translator";
-            font-size: 28px;
+            font-size: 18px;
             color: #2563eb;
             horizontal-alignment: center;
             font-weight: 800;
@@ -40,8 +42,8 @@ export component MainWindow inherits Window {
             border-color: #e2e8f0;
             
             VerticalLayout {
-                spacing: 12px;
-                padding: 12px;
+                spacing: 8px;
+                padding: 10px;
                 Text { text: "API SETTINGS"; font-weight: 700; color: #2563eb; font-size: 14px; }
                 
                 VerticalLayout {
@@ -88,6 +90,24 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "System Prompt:"; color: #64748b; font-size: 12px; }
+                    Rectangle {
+                        background: #f8fafc;
+                        border-radius: 4px;
+                        border-width: 1px;
+                        border-color: #e2e8f0;
+                        height: 120px;
+                        TextEdit {
+                            text <=> system_prompt;
+                            width: 100%;
+                            height: 100%;
+                            font-size: 13px;
+                        }
+                    }
+                }
             }
         }
 
@@ -98,8 +118,8 @@ export component MainWindow inherits Window {
             border-color: #e2e8f0;
             
             VerticalLayout {
-                spacing: 12px;
-                padding: 12px;
+                spacing: 8px;
+                padding: 10px;
                 Text { text: "CAPTURE SETTINGS"; font-weight: 700; color: #2563eb; font-size: 14px; }
                 
                 HorizontalLayout {
@@ -138,6 +158,8 @@ export component MainWindow inherits Window {
             }
         }
 
+        Rectangle { /* Spacer */ }
+
         VerticalLayout {
             alignment: end;
             Button {
@@ -147,7 +169,9 @@ export component MainWindow inherits Window {
                 clicked => { start_stop_clicked(); }
             }
         }
-        
+
+        Rectangle { /* Spacer */ }
+
         Text {
             text: is_running ? "● Active" : "○ Idle";
             color: is_running ? #4caf50 : #94a3b8;

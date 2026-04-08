@@ -31,10 +31,11 @@ pub struct ApiClient {
     endpoint: String,
     api_key: String,
     model: String,
+    system_prompt: String,
 }
 
 impl ApiClient {
-    pub fn new(endpoint: String, api_key: String, model: String) -> Self {
+    pub fn new(endpoint: String, api_key: String, model: String, system_prompt: String) -> Self {
         // Normalize endpoint: ensure it doesn't end with /v1 or /v1beta if it's the base
         let mut endpoint = endpoint.trim_end_matches('/').to_string();
         if endpoint.is_empty() {
@@ -45,6 +46,7 @@ impl ApiClient {
             endpoint,
             api_key,
             model,
+            system_prompt,
         }
     }
 
@@ -97,7 +99,7 @@ impl ApiClient {
             contents: vec![GeminiContent {
                 parts: vec![
                     GeminiPart::Text {
-                        text: "You are a verbatim translator. Extract all text from this image and translate it exactly and literally (직역) into Korean without summarizing, omitting, or changing any meaning. If the text is already in Korean, return it exactly as it is. Output ONLY the translated text, with no extra commentary or formatting.".to_string(),
+                        text: self.system_prompt.clone(),
                     },
                     GeminiPart::InlineData {
                         inline_data: InlineData {
@@ -144,7 +146,7 @@ impl ApiClient {
                 {
                     "role": "user",
                     "content": [
-                        { "type": "text", "text": "Extract all text from this image and translate it literally (직역) to Korean. Do not summarize or omit anything. Output ONLY the Korean text." },
+                        { "type": "text", "text": self.system_prompt.clone() },
                         { "type": "image_url", "image_url": { "url": format!("data:image/jpeg;base64,{}", base64_image) } }
                     ]
                 }
