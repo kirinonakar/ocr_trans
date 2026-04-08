@@ -284,7 +284,13 @@ async fn main() -> Result<()> {
         let main = main_weak_api.unwrap();
         if api_type == "Google Gemini" {
             main.set_api_endpoint("https://generativelanguage.googleapis.com".into());
-            let gemini_models: Vec<slint::SharedString> = vec!["gemini-3.1-flash-lite-preview".into()];
+            let gemini_models: Vec<slint::SharedString> = vec![
+                "gemini-3.1-flash-lite-preview".into(), 
+                "gemini-3-flash-preview".into(), 
+                "gemini-3.1-pro-preview".into(),
+                "gemma-4-26b-a4b-it".into(),
+                "gemma-4-31b-it".into()
+            ];
             main.set_model_options(slint::ModelRc::from(gemini_models.as_slice()));
             main.set_model_name("gemini-3.1-flash-lite-preview".into());
             main.set_model_index(0);
