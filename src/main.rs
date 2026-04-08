@@ -174,6 +174,7 @@ async fn main() -> Result<()> {
     let lm_models: Vec<slint::SharedString> = vec!["google/gemma-4-26b-a4b".into(), "qwen/qwen3.5-9b".into(), "translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into()];
     main_window.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
     main_window.set_model_name("google/gemma-4-26b-a4b".into());
+    main_window.set_model_index(0);
     main_window.set_api_key("lm-studio".into());
     main_window.set_system_prompt(get_system_prompt().into());
     main_window.set_interval(0.0);
@@ -197,18 +198,35 @@ async fn main() -> Result<()> {
                 let client = api::ApiClient::new(http_startup, endpoint, api_key, String::new(), String::new(), 0.0);
                 if let Ok(models) = client.get_models().await {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
-                    let current_model = main.get_model_name();
+                    let current_model_str = main.get_model_name().as_str().to_string();
+                    let default_model_str = "google/gemma-4-26b-a4b";
+                    
+                    // Debug: print what models we got from LM Studio
+                    println!("[Startup Sync] Models from API: {:?}", slint_models.iter().map(|m| m.as_str().to_string()).collect::<Vec<_>>());
+                    println!("[Startup Sync] Looking for current: {:?}, default: {:?}", current_model_str, default_model_str);
+                    
                     main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
                     
-                    if !current_model.is_empty() {
-                         // Keep the hardcoded default if it's there, but if it exists in sync, better.
-                         // For startup, if we found actual models, and current is the hardcoded default, 
-                         // we might want to switch to the first available loaded model.
-                         if !slint_models.iter().any(|m| m == &current_model) {
-                             if let Some(first) = slint_models.first() {
-                                 main.set_model_name(first.clone());
-                             }
-                         }
+                    let mut found_index = None;
+                    
+                    // Priority 1: Current model (might be saved from previous session)
+                    if let Some(idx) = slint_models.iter().position(|m| m.as_str() == current_model_str) {
+                        found_index = Some(idx);
+                        println!("[Startup Sync] Found current at index: {:?}", found_index);
+                    } 
+                    // Priority 2: Default model
+                    else if let Some(idx) = slint_models.iter().position(|m| m.as_str() == default_model_str) {
+                         found_index = Some(idx);
+                         println!("[Startup Sync] Found default at index: {:?}", found_index);
+                    }
+                    
+                    if let Some(idx) = found_index {
+                        main.set_model_name(slint_models[idx].clone());
+                        main.set_model_index(idx as i32);
+                    } else if let Some(first) = slint_models.first() {
+                        println!("[Startup Sync] Fallback to first model");
+                        main.set_model_name(first.clone());
+                        main.set_model_index(0);
                     }
                 }
             }
@@ -271,6 +289,7 @@ async fn main() -> Result<()> {
             let gemini_models: Vec<slint::SharedString> = vec!["gemini-3.1-flash-lite-preview".into()];
             main.set_model_options(slint::ModelRc::from(gemini_models.as_slice()));
             main.set_model_name("gemini-3.1-flash-lite-preview".into());
+            main.set_model_index(0);
             main.set_api_key(get_gemini_key().unwrap_or_default().into());
             main.set_system_prompt(main.get_system_prompt()); // Preserve current prompt if user edited it, or we could reset to default
 
@@ -279,6 +298,7 @@ async fn main() -> Result<()> {
             let lm_models: Vec<slint::SharedString> = vec!["google/gemma-4-26b-a4b".into(), "qwen/qwen3.5-9b".into(), "translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into()];
             main.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
             main.set_model_name("google/gemma-4-26b-a4b".into());
+            main.set_model_index(0);
             main.set_api_key("lm-studio".into());
             main.set_system_prompt(main.get_system_prompt()); // Preserve current prompt
 
@@ -299,13 +319,28 @@ async fn main() -> Result<()> {
             match client.get_models().await {
                 Ok(models) => {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
-                    let current_model = main.get_model_name();
+                    let current_model_str = main.get_model_name().as_str().to_string();
+                    let default_model_str = "google/gemma-4-26b-a4b";
+
                     main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
                     
-                    if !current_model.is_empty() {
-                        main.set_model_name(current_model);
+                    let mut found_index = None;
+                    
+                    // Priority 1: Current model
+                    if let Some(idx) = slint_models.iter().position(|m| m.as_str() == current_model_str) {
+                        found_index = Some(idx);
+                    } 
+                    // Priority 2: Default model
+                    else if let Some(idx) = slint_models.iter().position(|m| m.as_str() == default_model_str) {
+                        found_index = Some(idx);
+                    }
+
+                    if let Some(idx) = found_index {
+                        main.set_model_name(slint_models[idx].clone());
+                        main.set_model_index(idx as i32);
                     } else if let Some(first) = slint_models.first() {
                         main.set_model_name(first.clone());
+                        main.set_model_index(0);
                     }
                 }
                 Err(e) => {

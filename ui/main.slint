@@ -9,10 +9,13 @@ export component MainWindow inherits Window {
     default-font-family: "Yu Gothic UI";
 
     in-out property <bool> is_running: false;
+    in-out property <string> api_type: "LMStudio";
+    in-out property <int> api_type_index: 0;
     in-out property <string> api_endpoint: "http://localhost:1234/v1";
     in-out property <string> api_key: "";
     in-out property <string> model_name: "google/gemma-4-26b-a4b";
     in property <[string]> model_options: ["google/gemma-4-26b-a4b", "qwen/qwen3.5-9b"];
+    in-out property <int> model_index: 0;
     in-out property <float> interval: 0;
     in-out property <bool> overlay_visible: true;
     in-out property <string> system_prompt: "naturally translate into korean. only show translated texts.";
@@ -61,7 +64,8 @@ export component MainWindow inherits Window {
                     Text { text: "Provider:"; color: #64748b; font-size: 12px; }
                     ComboBox {
                         model: ["LMStudio", "Google Gemini"];
-                        current-value: "LMStudio";
+                        current-value <=> api_type;
+                        current-index <=> api_type_index;
                         selected(value) => {
                             api_type_changed(value);
                         }
@@ -94,10 +98,8 @@ export component MainWindow inherits Window {
                         spacing: 6px;
                         ComboBox {
                             model: model_options;
-                            current-value: model_name;
-                            selected(val) => {
-                                model_name = val;
-                            }
+                            current-value <=> model_name;
+                            current-index <=> model_index;
                         }
                         Button {
                             text: "Sync";
