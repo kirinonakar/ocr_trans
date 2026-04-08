@@ -523,7 +523,7 @@ async fn main() -> Result<()> {
 
     // Global Hotkey Setup
     let hotkey_manager = GlobalHotKeyManager::new().unwrap();
-    let hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::META), Code::KeyA);
+    let hotkey = HotKey::new(Some(Modifiers::META), Code::Backquote);
     hotkey_manager.register(hotkey).unwrap();
 
     let (tx, mut rx) = mpsc::channel(10);
