@@ -185,14 +185,14 @@ async fn main() -> Result<()> {
             main.set_model_options(slint::ModelRc::from(gemini_models.as_slice()));
             main.set_model_name("gemini-3.1-flash-lite-preview".into());
             main.set_api_key(get_gemini_key().unwrap_or_default().into());
-            main.set_system_prompt("You are a verbatim translator. Extract all text from this image and translate it exactly and literally into Korean without summarizing, omitting, or changing any meaning. If the text is already in Korean, return it exactly as it is. Output ONLY the translated text, with no extra commentary or formatting.".into());
+            main.set_system_prompt("naturally translate into korean. only show translated texts.".into());
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
             let lm_models: Vec<slint::SharedString> = vec!["qwen/qwen3.5-9b".into(), "translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "google/gemma-4-26b-a4b".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into()];
             main.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
             main.set_model_name("qwen/qwen3.5-9b".into());
             main.set_api_key("lm-studio".into());
-            main.set_system_prompt("You are a verbatim translator. Extract all text from this image and translate it exactly and literally into Korean without summarizing, omitting, or changing any meaning. If the text is already in Korean, return it exactly as it is. Output ONLY the translated text, with no extra commentary or formatting.".into());
+            main.set_system_prompt("naturally translate into korean. only show translated texts.".into());
         }
     });
 
