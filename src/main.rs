@@ -89,9 +89,9 @@ async fn main() -> Result<()> {
 
     // Setup initial window states
     main_window.set_api_endpoint("http://localhost:1234/v1".into());
-    let lm_models: Vec<slint::SharedString> = vec!["gemma-4-e4b-it".into(), "google/gemma-4-26b-a4b".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
+    let lm_models: Vec<slint::SharedString> = vec!["translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "google/gemma-4-26b-a4b".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
     main_window.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
-    main_window.set_model_name("gemma-4-e4b-it".into());
+    main_window.set_model_name("translate-gemma-12b-it".into());
     main_window.set_api_key("lm-studio".into());
     main_window.set_interval(0.0);
 
@@ -146,9 +146,9 @@ async fn main() -> Result<()> {
             main.set_api_key(get_gemini_key().unwrap_or_default().into());
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
-            let lm_models: Vec<slint::SharedString> = vec!["gemma-4-e4b-it".into(), "google/gemma-4-26b-a4b".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
+            let lm_models: Vec<slint::SharedString> = vec!["translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "google/gemma-4-26b-a4b".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into(), "qwen/qwen3.5-9b".into()];
             main.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
-            main.set_model_name("gemma-4-e4b-it".into());
+            main.set_model_name("translate-gemma-12b-it".into());
             main.set_api_key("lm-studio".into());
         }
     });
