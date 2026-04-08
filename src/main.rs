@@ -30,6 +30,25 @@ fn get_gemini_key() -> Option<String> {
     None
 }
 
+const DEFAULT_SYSTEM_PROMPT: &str = "naturally translate into korean. only show translated texts.";
+
+fn get_system_prompt() -> String {
+    // 1. Check current directory
+    if let Ok(prompt) = std::fs::read_to_string("system_prompt.txt") {
+        return prompt.trim().to_string();
+    }
+    // 2. Check executable directory
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let path = exe_dir.join("system_prompt.txt");
+            if let Ok(prompt) = std::fs::read_to_string(path) {
+                return prompt.trim().to_string();
+            }
+        }
+    }
+    DEFAULT_SYSTEM_PROMPT.to_string()
+}
+
 #[derive(Default)]
 struct AppState {
     is_running: bool,
@@ -39,6 +58,7 @@ struct AppState {
     model_name: String,
     interval_sec: u64,
     system_prompt: String,
+    temperature: f32,
     last_text: String,
     base_font_size: f32,
     overlay_bg_color: slint::Color,
@@ -151,11 +171,11 @@ async fn main() -> Result<()> {
 
     // Setup initial window states
     main_window.set_api_endpoint("http://localhost:1234/v1".into());
-    let lm_models: Vec<slint::SharedString> = vec!["qwen/qwen3.5-9b".into(), "translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "google/gemma-4-26b-a4b".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into()];
+    let lm_models: Vec<slint::SharedString> = vec!["google/gemma-4-26b-a4b".into(), "qwen/qwen3.5-9b".into(), "translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into()];
     main_window.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
-    main_window.set_model_name("qwen/qwen3.5-9b".into());
+    main_window.set_model_name("google/gemma-4-26b-a4b".into());
     main_window.set_api_key("lm-studio".into());
-    main_window.set_system_prompt("naturally translate into korean. only show translated texts.".into());
+    main_window.set_system_prompt(get_system_prompt().into());
     main_window.set_interval(0.0);
     main_window.set_base_font_size(18.0);
 
@@ -174,7 +194,7 @@ async fn main() -> Result<()> {
             let api_key = main.get_api_key().to_string();
             
             if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") {
-                let client = api::ApiClient::new(http_startup, endpoint, api_key, String::new(), String::new());
+                let client = api::ApiClient::new(http_startup, endpoint, api_key, String::new(), String::new(), 0.0);
                 if let Ok(models) = client.get_models().await {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
                     let current_model = main.get_model_name();
@@ -205,6 +225,7 @@ async fn main() -> Result<()> {
         overlay_bg_color: main_window.get_overlay_bg_color(),
         overlay_text_color: main_window.get_overlay_text_color(),
         overlay_bg_opacity: main_window.get_overlay_bg_opacity(),
+        temperature: main_window.get_temperature(),
         ..Default::default()
     }));
 
@@ -251,14 +272,16 @@ async fn main() -> Result<()> {
             main.set_model_options(slint::ModelRc::from(gemini_models.as_slice()));
             main.set_model_name("gemini-3.1-flash-lite-preview".into());
             main.set_api_key(get_gemini_key().unwrap_or_default().into());
-            main.set_system_prompt("naturally translate into korean. only show translated texts.".into());
+            main.set_system_prompt(main.get_system_prompt()); // Preserve current prompt if user edited it, or we could reset to default
+
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
-            let lm_models: Vec<slint::SharedString> = vec!["qwen/qwen3.5-9b".into(), "translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "google/gemma-4-26b-a4b".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into()];
+            let lm_models: Vec<slint::SharedString> = vec!["google/gemma-4-26b-a4b".into(), "qwen/qwen3.5-9b".into(), "translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into()];
             main.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
-            main.set_model_name("qwen/qwen3.5-9b".into());
+            main.set_model_name("google/gemma-4-26b-a4b".into());
             main.set_api_key("lm-studio".into());
-            main.set_system_prompt("naturally translate into korean. only show translated texts.".into());
+            main.set_system_prompt(main.get_system_prompt()); // Preserve current prompt
+
         }
     });
     
@@ -272,7 +295,7 @@ async fn main() -> Result<()> {
         let http = http_refresh.clone();
         
         slint::spawn_local(async move {
-            let client = api::ApiClient::new(http, endpoint, api_key, String::new(), String::new());
+            let client = api::ApiClient::new(http, endpoint, api_key, String::new(), String::new(), 0.0);
             match client.get_models().await {
                 Ok(models) => {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
@@ -393,6 +416,7 @@ async fn main() -> Result<()> {
                 s.model_name = main.get_model_name().to_string();
                 s.interval_sec = main.get_interval() as u64;
                 s.system_prompt = main.get_system_prompt().to_string();
+                s.temperature = main.get_temperature();
                 s.base_font_size = main.get_base_font_size();
                 s.overlay_bg_color = main.get_overlay_bg_color();
                 s.overlay_text_color = main.get_overlay_text_color();
@@ -561,6 +585,7 @@ async fn main() -> Result<()> {
             s.model_name = main.get_model_name().to_string();
             s.interval_sec = main.get_interval() as u64;
             s.system_prompt = main.get_system_prompt().to_string();
+            s.temperature = main.get_temperature();
             s.base_font_size = main.get_base_font_size();
             s.overlay_bg_color = main.get_overlay_bg_color();
             s.overlay_text_color = main.get_overlay_text_color();
@@ -638,7 +663,7 @@ async fn main() -> Result<()> {
         loop {
             let (is_running, rect, api_config, step_interval, _base_fs) = {
                 let s = state_for_worker.lock().unwrap();
-                (s.is_running, s.capture_rect, (s.api_endpoint.clone(), s.api_key.clone(), s.model_name.clone(), s.system_prompt.clone()), s.interval_sec, s.base_font_size)
+                (s.is_running, s.capture_rect, (s.api_endpoint.clone(), s.api_key.clone(), s.model_name.clone(), s.system_prompt.clone(), s.temperature), s.interval_sec, s.base_font_size)
             };
 
             if is_running && rect.is_some() {
@@ -677,7 +702,7 @@ async fn main() -> Result<()> {
                             });
                         }
                         
-                        let client = api::ApiClient::new(http_worker.clone(), api_config.0, api_config.1, api_config.2, api_config.3);
+                        let client = api::ApiClient::new(http_worker.clone(), api_config.0, api_config.1, api_config.2, api_config.3, api_config.4);
                         
                         // Use runtime handle to call async translation from sync thread
                         let api_result = runtime_handle.block_on(async {

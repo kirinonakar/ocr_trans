@@ -90,5 +90,5 @@ pub fn is_changed(prev: &Option<RgbaImage>, curr: &RgbaImage, _threshold: f32) -
     }
 
     if total_pixels == 0 { return false; }
-    (diff_sum as f32 / total_pixels as f32) >= 0.02
+    (diff_sum as f32 / total_pixels as f32) >= 0.01
 }

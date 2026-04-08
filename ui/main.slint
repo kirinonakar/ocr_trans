@@ -11,12 +11,13 @@ export component MainWindow inherits Window {
     in-out property <bool> is_running: false;
     in-out property <string> api_endpoint: "http://localhost:1234/v1";
     in-out property <string> api_key: "";
-    in-out property <string> model_name: "qwen3.5-4b";
-    in property <[string]> model_options: ["qwen3.5-4b", "qwen/qwen3.5-9b"];
+    in-out property <string> model_name: "google/gemma-4-26b-a4b";
+    in property <[string]> model_options: ["google/gemma-4-26b-a4b", "qwen/qwen3.5-9b"];
     in-out property <float> interval: 0;
     in-out property <bool> overlay_visible: true;
     in-out property <string> system_prompt: "naturally translate into korean. only show translated texts.";
     in-out property <float> base_font_size: 18;
+    in-out property <float> temperature: 0.7;
     in-out property <color> overlay_bg_color: #ffffff;
     in-out property <color> overlay_text_color: #1e293b;
     in-out property <float> overlay_bg_opacity: 0.9;
@@ -108,6 +109,19 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
+                
+                VerticalLayout {
+                    spacing: 4px;
+                    HorizontalLayout {
+                        Text { text: "Temperature: "; color: #64748b; font-size: 12px; }
+                        Text { text: round(temperature * 10) / 10; color: #1e293b; font-size: 12px; font-weight: 700; }
+                    }
+                    Slider {
+                        minimum: 0.0;
+                        maximum: 1.0;
+                        value <=> temperature;
+                    }
+                }
 
                 VerticalLayout {
                     spacing: 4px;
@@ -117,7 +131,7 @@ export component MainWindow inherits Window {
                         border-radius: 4px;
                         border-width: 1px;
                         border-color: #e2e8f0;
-                        height: 90px;
+                        height: 80px;
                         TextEdit {
                             text <=> system_prompt;
                             width: 100%;
@@ -281,14 +295,13 @@ export component MainWindow inherits Window {
             }
         }
 
-        Rectangle { /* Spacer to push button group down */ }
 
         VerticalLayout {
             spacing: 12px; // Space between Button and Idle text
             
             Button {
                 text: is_running ? "STOP" : "START";
-                height: 50px;
+                height: 42px;
                 primary: true;
                 clicked => { start_stop_clicked(); }
             }

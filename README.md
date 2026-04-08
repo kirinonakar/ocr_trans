@@ -15,7 +15,12 @@ A real-time screen OCR and translation tool built with Rust and Slint.
 - **Clipboard Sync**: Translated text is automatically copied to the system clipboard for easy use elsewhere.
 - **Multi-API Support**: 
   - **Google Gemini**: Supports gemini-3.1-flash-lite-preview (Auto-loads API key from `gemini.txt` in the app directory).
-  - **LMStudio / Ollama**: Works with any OpenAI-compatible local AI endpoint.(recommended: gemma-4-31b-it / gemma-4-26b-a4b (best), qwen3.5-9b (fast), translategemma-12b-it (fast))
+  - **LMStudio / Ollama**: Works with any OpenAI-compatible local AI endpoint. (Default: google/gemma-4-26b-a4b)
+    - Recommended: gemma-4-26b-a4b (best balance), gemma-4-31b-it (best quality), qwen3.5-9b (fast)
+- **External Config Files**:
+  - `gemini.txt`: Auto-loads your Google Gemini API key.
+  - `system_prompt.txt`: Auto-loads your custom translation instructions.
+- **Adjustable Creativity**: Use the **Temperature** slider (0.0 - 1.0) to control translation consistency vs. creativity.
 - **Global Hotkey**: Trigger area selection anytime with **Win + `**.
 
 ## Prerequisites
@@ -28,7 +33,7 @@ You can download the latest version from the [Releases Page](https://github.com/
 ### Manual build
 
 1. Clone the repository.
-2. (Optional) Create a `gemini.txt` file next to the executable and paste your Google Gemini API key.
+2. (Optional) Create `gemini.txt` (for API key) and `system_prompt.txt` (for custom instructions) next to the executable.
 3. Run `cargo run --release`. Or `cargo build --release` to generate the binary.
 4. Open the main window:
    - Select your provider (LMStudio or Google Gemini).

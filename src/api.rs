@@ -6,6 +6,13 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 #[derive(Serialize)]
 struct GeminiRequest {
     contents: Vec<GeminiContent>,
+    #[serde(rename = "generationConfig", skip_serializing_if = "Option::is_none")]
+    generation_config: Option<GeminiGenerationConfig>,
+}
+
+#[derive(Serialize)]
+struct GeminiGenerationConfig {
+    temperature: f32,
 }
 
 #[derive(Serialize)]
@@ -32,10 +39,11 @@ pub struct ApiClient {
     api_key: String,
     model: String,
     system_prompt: String,
+    temperature: f32,
 }
 
 impl ApiClient {
-    pub fn new(client: Client, endpoint: String, api_key: String, model: String, system_prompt: String) -> Self {
+    pub fn new(client: Client, endpoint: String, api_key: String, model: String, system_prompt: String, temperature: f32) -> Self {
         // Normalize endpoint: ensure it doesn't end with /v1 or /v1beta if it's the base
         let mut endpoint = endpoint.trim_end_matches('/').to_string();
         if endpoint.is_empty() {
@@ -47,6 +55,7 @@ impl ApiClient {
             api_key,
             model,
             system_prompt,
+            temperature,
         }
     }
 
@@ -109,6 +118,9 @@ impl ApiClient {
                     },
                 ],
             }],
+            generation_config: Some(GeminiGenerationConfig {
+                temperature: self.temperature,
+            }),
         };
 
         let response = self.client.post(url)
@@ -150,7 +162,8 @@ impl ApiClient {
                         { "type": "image_url", "image_url": { "url": format!("data:image/jpeg;base64,{}", base64_image) } }
                     ]
                 }
-            ]
+            ],
+            "temperature": self.temperature
         });
 
         let mut req = self.client.post(&url).json(&payload);
