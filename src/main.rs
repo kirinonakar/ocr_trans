@@ -208,26 +208,24 @@ async fn main() -> Result<()> {
                     main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
                     
                     let mut found_index = None;
-                    
-                    // Priority 1: Current model (might be saved from previous session)
                     if let Some(idx) = slint_models.iter().position(|m| m.as_str() == current_model_str) {
                         found_index = Some(idx);
-                        println!("[Startup Sync] Found current at index: {:?}", found_index);
-                    } 
-                    // Priority 2: Default model
-                    else if let Some(idx) = slint_models.iter().position(|m| m.as_str() == default_model_str) {
+                    } else if let Some(idx) = slint_models.iter().position(|m| m.as_str() == default_model_str) {
                          found_index = Some(idx);
-                         println!("[Startup Sync] Found default at index: {:?}", found_index);
                     }
                     
-                    if let Some(idx) = found_index {
-                        main.set_model_name(slint_models[idx].clone());
-                        main.set_model_index(idx as i32);
-                    } else if let Some(first) = slint_models.first() {
-                        println!("[Startup Sync] Fallback to first model");
-                        main.set_model_name(first.clone());
-                        main.set_model_index(0);
-                    }
+                    let main_weak = main.as_weak();
+                    slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
+                        if let Some(main) = main_weak.upgrade() {
+                            if let Some(idx) = found_index {
+                                main.set_model_name(slint_models[idx].clone());
+                                main.set_model_index(idx as i32);
+                            } else if let Some(first) = slint_models.first() {
+                                main.set_model_name(first.clone());
+                                main.set_model_index(0);
+                            }
+                        }
+                    });
                 }
             }
         }
@@ -325,23 +323,24 @@ async fn main() -> Result<()> {
                     main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
                     
                     let mut found_index = None;
-                    
-                    // Priority 1: Current model
                     if let Some(idx) = slint_models.iter().position(|m| m.as_str() == current_model_str) {
                         found_index = Some(idx);
-                    } 
-                    // Priority 2: Default model
-                    else if let Some(idx) = slint_models.iter().position(|m| m.as_str() == default_model_str) {
+                    } else if let Some(idx) = slint_models.iter().position(|m| m.as_str() == default_model_str) {
                         found_index = Some(idx);
                     }
 
-                    if let Some(idx) = found_index {
-                        main.set_model_name(slint_models[idx].clone());
-                        main.set_model_index(idx as i32);
-                    } else if let Some(first) = slint_models.first() {
-                        main.set_model_name(first.clone());
-                        main.set_model_index(0);
-                    }
+                    let main_weak = main.as_weak();
+                    slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
+                        if let Some(main) = main_weak.upgrade() {
+                            if let Some(idx) = found_index {
+                                main.set_model_name(slint_models[idx].clone());
+                                main.set_model_index(idx as i32);
+                            } else if let Some(first) = slint_models.first() {
+                                main.set_model_name(first.clone());
+                                main.set_model_index(0);
+                            }
+                        }
+                    });
                 }
                 Err(e) => {
                     log::error!("Failed to fetch models: {:?}", e);
