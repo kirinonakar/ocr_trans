@@ -6,6 +6,7 @@ export component MainWindow inherits Window {
     width: 400px;
     height: 730px;
     background: @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+    default-font-family: "Yu Gothic UI";
 
     in-out property <bool> is_running: false;
     in-out property <string> api_endpoint: "http://localhost:1234/v1";
@@ -187,6 +188,7 @@ export component OverlayWindow inherits Window {
     background: transparent;
     no-frame: true;
     icon: @image-url("../app.ico");
+    default-font-family: "Yu Gothic UI";
     
     in-out property <length> window_x;
     in-out property <length> window_y;
@@ -254,6 +256,7 @@ export component SelectionWindow inherits Window {
     background: black;
     no-frame: true;
     icon: @image-url("../app.ico");
+    default-font-family: "Yu Gothic UI";
     
     in-out property <image> screenshot;
     property <bool> selecting: false;
