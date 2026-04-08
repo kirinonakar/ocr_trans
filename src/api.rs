@@ -49,18 +49,38 @@ impl ApiClient {
     }
 
     pub async fn translate_image(&self, img: &image::RgbaImage) -> Result<String> {
+        let jpeg_data = self.prepare_image(img)?;
+        let base64_image = STANDARD.encode(&jpeg_data);
+        
         if self.endpoint.contains("googleapis.com") {
-            self.call_gemini(img).await
+            self.call_gemini(base64_image).await
         } else {
-            self.call_openai_compatible(img).await
+            self.call_openai_compatible(base64_image).await
         }
     }
 
-    async fn call_gemini(&self, img: &image::RgbaImage) -> Result<String> {
-        let mut buffer = Vec::<u8>::new();
-        img.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Png)
-            .context("Failed to encode image to PNG")?;
-        let base64_image = STANDARD.encode(&buffer);
+    fn prepare_image(&self, img: &image::RgbaImage) -> Result<Vec<u8>> {
+        let (w, h) = img.dimensions();
+        let new_w = 1024;
+        let new_h = if w > 0 {
+            (h as f32 * (new_w as f32 / w as f32)) as u32
+        } else {
+            h
+        };
+
+        log::info!("Resizing image from {}x{} to {}x{}", w, h, new_w, new_h);
+        let resized = image::imageops::resize(img, new_w, new_h.max(1), image::imageops::FilterType::Lanczos3);
+        let rgb_img = image::DynamicImage::ImageRgba8(resized).to_rgb8();
+
+        let mut buffer = Vec::new();
+        rgb_img.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Jpeg)
+            .context("Failed to encode image to JPEG")?;
+        
+        log::info!("Image prepared, size: {} bytes", buffer.len());
+        Ok(buffer)
+    }
+
+    async fn call_gemini(&self, base64_image: String) -> Result<String> {
 
         // Normalize model name: it shouldn't contain spaces and ideally starts with models/ if not provided, 
         // though the URL below adds it.
@@ -81,7 +101,7 @@ impl ApiClient {
                     },
                     GeminiPart::InlineData {
                         inline_data: InlineData {
-                            mime_type: "image/png".to_string(),
+                            mime_type: "image/jpeg".to_string(),
                             data: base64_image,
                         },
                     },
@@ -110,11 +130,7 @@ impl ApiClient {
         Ok(text.trim().to_string())
     }
 
-    async fn call_openai_compatible(&self, img: &image::RgbaImage) -> Result<String> {
-        let mut buffer = Vec::<u8>::new();
-        img.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Png)
-            .context("Failed to encode image to PNG")?;
-        let base64_image = STANDARD.encode(&buffer);
+    async fn call_openai_compatible(&self, base64_image: String) -> Result<String> {
 
         let url = if self.endpoint.ends_with("/chat/completions") {
             self.endpoint.clone()
@@ -129,7 +145,7 @@ impl ApiClient {
                     "role": "user",
                     "content": [
                         { "type": "text", "text": "Extract all text from this image and translate it literally (직역) to Korean. Do not summarize or omit anything. Output ONLY the Korean text." },
-                        { "type": "image_url", "image_url": { "url": format!("data:image/png;base64,{}", base64_image) } }
+                        { "type": "image_url", "image_url": { "url": format!("data:image/jpeg;base64,{}", base64_image) } }
                     ]
                 }
             ]
