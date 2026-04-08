@@ -13,7 +13,7 @@ A real-time screen OCR and translation tool built with Rust and Slint.
 - **Clipboard Sync**: Translated text is automatically copied to the system clipboard for easy use elsewhere.
 - **Multi-API Support**: 
   - **Google Gemini**: Supports gemini-3.1-flash-lite-preview (Auto-loads API key from `gemini.txt` in the app directory).
-  - **LMStudio / Ollama**: Works with any OpenAI-compatible local AI endpoint.(recommended: gemma-4-31b-it (best), qwen3.5-9b (fast), translategemma-12b-it (fast))
+  - **LMStudio / Ollama**: Works with any OpenAI-compatible local AI endpoint.(recommended: gemma-4-31b-it / gemma-4-26b-a4b (best), qwen3.5-9b (fast), translategemma-12b-it (fast))
 - **Global Hotkey**: Trigger area selection anytime with **Win + `**.
 
 ## Prerequisites

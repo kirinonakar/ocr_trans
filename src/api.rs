@@ -35,14 +35,14 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    pub fn new(endpoint: String, api_key: String, model: String, system_prompt: String) -> Self {
+    pub fn new(client: Client, endpoint: String, api_key: String, model: String, system_prompt: String) -> Self {
         // Normalize endpoint: ensure it doesn't end with /v1 or /v1beta if it's the base
         let mut endpoint = endpoint.trim_end_matches('/').to_string();
         if endpoint.is_empty() {
             endpoint = "https://generativelanguage.googleapis.com".to_string();
         }
         Self {
-            client: Client::new(),
+            client,
             endpoint,
             api_key,
             model,

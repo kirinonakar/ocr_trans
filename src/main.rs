@@ -41,6 +41,9 @@ struct AppState {
     system_prompt: String,
     last_text: String,
     base_font_size: f32,
+    overlay_bg_color: slint::Color,
+    overlay_text_color: slint::Color,
+    overlay_bg_opacity: f32,
 }
 
 
@@ -141,6 +144,8 @@ async fn main() -> Result<()> {
     let overlay_window = OverlayWindow::new()?;
     let selection_window = SelectionWindow::new()?;
 
+    let http_client = reqwest::Client::new();
+
     // Setup initial window states
     main_window.set_api_endpoint("http://localhost:1234/v1".into());
     let lm_models: Vec<slint::SharedString> = vec!["qwen/qwen3.5-9b".into(), "translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "google/gemma-4-26b-a4b".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into()];
@@ -159,13 +164,14 @@ async fn main() -> Result<()> {
 
     // Initial Model Sync (Localhost/LM Studio)
     let main_weak_startup = main_window.as_weak();
+    let http_startup = http_client.clone();
     slint::spawn_local(async move {
         if let Some(main) = main_weak_startup.upgrade() {
             let endpoint = main.get_api_endpoint().to_string();
             let api_key = main.get_api_key().to_string();
             
             if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") {
-                let client = api::ApiClient::new(endpoint, api_key, String::new(), String::new());
+                let client = api::ApiClient::new(http_startup, endpoint, api_key, String::new(), String::new());
                 if let Ok(models) = client.get_models().await {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
                     let current_model = main.get_model_name();
@@ -193,6 +199,9 @@ async fn main() -> Result<()> {
         system_prompt: main_window.get_system_prompt().to_string(),
         last_text: String::new(),
         base_font_size: main_window.get_base_font_size(),
+        overlay_bg_color: main_window.get_overlay_bg_color(),
+        overlay_text_color: main_window.get_overlay_text_color(),
+        overlay_bg_opacity: main_window.get_overlay_bg_opacity(),
         ..Default::default()
     }));
 
@@ -252,13 +261,15 @@ async fn main() -> Result<()> {
     
     // Refresh Models Callback
     let main_weak_refresh = main_window.as_weak();
+    let http_refresh = http_client.clone();
     main_window.on_refresh_models_clicked(move || {
         let main = main_weak_refresh.unwrap();
         let endpoint = main.get_api_endpoint().to_string();
         let api_key = main.get_api_key().to_string();
+        let http = http_refresh.clone();
         
         slint::spawn_local(async move {
-            let client = api::ApiClient::new(endpoint, api_key, String::new(), String::new());
+            let client = api::ApiClient::new(http, endpoint, api_key, String::new(), String::new());
             match client.get_models().await {
                 Ok(models) => {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
@@ -352,6 +363,9 @@ async fn main() -> Result<()> {
                 s.interval_sec = main.get_interval() as u64;
                 s.system_prompt = main.get_system_prompt().to_string();
                 s.base_font_size = main.get_base_font_size();
+                s.overlay_bg_color = main.get_overlay_bg_color();
+                s.overlay_text_color = main.get_overlay_text_color();
+                s.overlay_bg_opacity = main.get_overlay_bg_opacity();
                 main.set_is_running(true);
 
                 
@@ -360,6 +374,9 @@ async fn main() -> Result<()> {
                     overlay.set_is_searching(true);
                     overlay.set_font_size(calculate_font_size("Searching...", overlay.get_window_w(), overlay.get_window_h(), main.get_base_font_size()));
                     overlay.set_show_text(main.get_overlay_visible());
+                    overlay.set_bg_color(s.overlay_bg_color.clone());
+                    overlay.set_text_color(s.overlay_text_color.clone());
+                    overlay.set_bg_opacity(s.overlay_bg_opacity);
 
                     overlay.show().unwrap();
 
@@ -514,6 +531,9 @@ async fn main() -> Result<()> {
             s.interval_sec = main.get_interval() as u64;
             s.system_prompt = main.get_system_prompt().to_string();
             s.base_font_size = main.get_base_font_size();
+            s.overlay_bg_color = main.get_overlay_bg_color();
+            s.overlay_text_color = main.get_overlay_text_color();
+            s.overlay_bg_opacity = main.get_overlay_bg_opacity();
             main.set_is_running(true);
 
             
@@ -523,6 +543,10 @@ async fn main() -> Result<()> {
                 overlay.set_window_h(h);
                 overlay.set_window_x(0.0); // Internal offset should be 0 since window itself is moved
                 overlay.set_window_y(0.0);
+                
+                overlay.set_bg_color(s.overlay_bg_color.clone());
+                overlay.set_text_color(s.overlay_text_color.clone());
+                overlay.set_bg_opacity(s.overlay_bg_opacity);
                 
                 // Move and resize native window
                 let window = overlay.window();
@@ -566,11 +590,15 @@ async fn main() -> Result<()> {
 
     let (tx, mut rx) = mpsc::channel(10);
     let state_for_worker = state.clone();
-    
-    // Background Worker
-    tokio::spawn(async move {
+
+    // Background Worker - Dedicated thread to handle non-Send Monitor objects and CPU-intensive capture
+    let http_worker = http_client.clone();
+    let runtime_handle = tokio::runtime::Handle::current();
+    std::thread::spawn(move || {
         let mut prev_img = None;
         let mut prev_rect = None;
+        let mut cached_monitors = None;
+        let mut last_monitor_refresh = std::time::Instant::now();
         
         loop {
                 let (is_running, rect, api_config, step_interval, _base_fs) = {
@@ -586,40 +614,48 @@ async fn main() -> Result<()> {
                     prev_rect = Some(current_rect);
                 }
                 
-                if let Ok(curr_img) = capture::capture_area(&current_rect) {
-                    if capture::is_changed(&prev_img, &curr_img, 0.05) { // The threshold in capture.rs is now 0.02, but we pass 0.05 here? 
-                        // Actually, I'll update the capture.rs call to reflect the new logic.
-                        // I'll keep the param but capture.rs now ignores it after my previous edit.
-                        // I'll fix capture.rs to use the param properly later if needed, but for now 0.05 is fine.
-                        
+                // Refresh monitors every 60 seconds or if never fetched
+                if cached_monitors.is_none() || last_monitor_refresh.elapsed() > Duration::from_secs(60) {
+                    if let Ok(m) = xcap::Monitor::all() {
+                        cached_monitors = Some(m);
+                        last_monitor_refresh = std::time::Instant::now();
+                    }
+                }
+
+                if let Ok(curr_img) = capture::capture_area(&current_rect, &cached_monitors) {
+                    if capture::is_changed(&prev_img, &curr_img, 0.05) {
                         prev_img = Some(curr_img.clone());
-                        let _ = tx.send("Searching...".into()).await;
+                        let _ = tx.blocking_send("Searching...".into());
                         
-                        let client = api::ApiClient::new(api_config.0, api_config.1, api_config.2, api_config.3);
-                        match client.translate_image(&curr_img).await {
+                        let client = api::ApiClient::new(http_worker.clone(), api_config.0, api_config.1, api_config.2, api_config.3);
+                        
+                        // Use runtime handle to call async translation from sync thread
+                        let api_result = runtime_handle.block_on(async {
+                            client.translate_image(&curr_img).await
+                        });
+
+                        match api_result {
                             Ok(text) => {
-                                let is_new = {
+                                let (is_new, final_text) = {
                                     let mut s = state_for_worker.lock().unwrap();
                                     if s.last_text != text {
                                         s.last_text = text.clone();
-                                        true
+                                        (true, text)
                                     } else {
-                                        false
+                                        (false, s.last_text.clone())
                                     }
                                 };
                                 
-                                if is_new {
-                                    let _ = tx.send(text).await;
-                                } else if step_interval == 0 {
-                                    // In Once mode, even if text is same, keep showing it
-                                    let _ = tx.send(text).await;
+                                if is_new || step_interval == 0 {
+                                    let _ = tx.blocking_send(final_text);
                                 } else {
-                                    let _ = tx.send("".into()).await; // Clear "Searching..." if no change in text in loop mode
+                                    // If same text, send old text to clear "Searching..." without flickering
+                                    let _ = tx.blocking_send(final_text);
                                 }
                             }
                             Err(e) => {
                                 log::error!("API Error: {:?}", e);
-                                let _ = tx.send(format!("Error: {}", e)).await;
+                                let _ = tx.blocking_send(format!("Error: {}", e));
                             }
                         }
                     }
@@ -631,13 +667,14 @@ async fn main() -> Result<()> {
                         let mut s = state_for_worker.lock().unwrap();
                         s.is_running = false;
                     }
-                    let _ = tx.send("COMMAND:STOPPED".into()).await;
+                    let _ = tx.blocking_send("COMMAND:STOPPED".into());
                 }
             } else {
                 prev_img = None;
                 prev_rect = None;
+                // Important: Keep monitors cached but maybe refresh if we've been idle long
             }
-            tokio::time::sleep(Duration::from_secs(step_interval.max(1))).await;
+            std::thread::sleep(Duration::from_secs(step_interval.max(1)));
         }
     });
 
@@ -656,6 +693,7 @@ async fn main() -> Result<()> {
             
             if let Some(overlay) = overlay_weak_ui.upgrade() {
                 if text == "" {
+                    // Only hide if text is literally empty, but worker now avoids sending "" except errors
                     overlay.set_show_text(false);
                     continue;
                 }
@@ -679,6 +717,13 @@ async fn main() -> Result<()> {
                 
                 let is_overlay_visible = main_weak_ui.upgrade().map(|m| m.get_overlay_visible()).unwrap_or(true);
                 overlay.set_show_text(is_overlay_visible);
+
+                // Sync colors and opacity on each text update to ensure changes reflect immediately
+                if let Some(main) = main_weak_ui.upgrade() {
+                    overlay.set_bg_color(main.get_overlay_bg_color());
+                    overlay.set_text_color(main.get_overlay_text_color());
+                    overlay.set_bg_opacity(main.get_overlay_bg_opacity());
+                }
 
                 
                 // Copy to clipboard

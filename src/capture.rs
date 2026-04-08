@@ -10,14 +10,20 @@ pub struct CaptureRect {
     pub height: i32,
 }
 
-pub fn capture_area(rect: &CaptureRect) -> Result<RgbaImage> {
-    let monitors = Monitor::all().context("Failed to get monitors")?;
+pub fn capture_area(rect: &CaptureRect, monitors: &Option<Vec<Monitor>>) -> Result<RgbaImage> {
+    let local_monitors;
+    let monitors_ref = if let Some(m) = monitors {
+        m
+    } else {
+        local_monitors = Monitor::all().context("Failed to get monitors")?;
+        &local_monitors
+    };
     
     // Find monitor that contains the top-left point of the rect
-    let monitor = monitors.iter().find(|m| {
+    let monitor = monitors_ref.iter().find(|m| {
         rect.x >= m.x() && rect.x < m.x() + m.width() as i32 &&
         rect.y >= m.y() && rect.y < m.y() + m.height() as i32
-    }).unwrap_or(&monitors[0]);
+    }).unwrap_or(&monitors_ref[0]);
     
     let img = monitor.capture_image().context("Failed to capture monitor")?;
     

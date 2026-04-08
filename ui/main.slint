@@ -4,7 +4,7 @@ export component MainWindow inherits Window {
     title: "OCR Translator";
     icon: @image-url("../app.ico");
     width: 400px;
-    height: 780px;
+    height: 800px;
     background: @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
     default-font-family: "Yu Gothic UI";
 
@@ -17,6 +17,10 @@ export component MainWindow inherits Window {
     in-out property <bool> overlay_visible: true;
     in-out property <string> system_prompt: "naturally translate into korean. only show translated texts.";
     in-out property <float> base_font_size: 18;
+    in-out property <color> overlay_bg_color: #ffffff;
+    in-out property <color> overlay_text_color: #1e293b;
+    in-out property <float> overlay_bg_opacity: 0.9;
+    in-out property <bool> show_style_settings: false;
 
     
     
@@ -147,11 +151,50 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     Text { text: "Font Size: "; vertical-alignment: center; color: #64748b; }
                     Text { text: round(base_font_size); vertical-alignment: center; font-weight: 700; color: #1e293b; }
+                    Rectangle { width: 10px; }
+                    Button {
+                        text: show_style_settings ? "▲ Style" : "▼ Style";
+                        height: 24px;
+                        primary: false;
+                        clicked => { show_style_settings = !show_style_settings; }
+                    }
                 }
                 Slider {
                     minimum: 12;
-                    maximum: 40;
+                    maximum: 100; // Increased max font size
                     value <=> base_font_size;
+                }
+
+                if (show_style_settings) : VerticalLayout {
+                    spacing: 8px;
+                    padding-top: 4px;
+                    padding-bottom: 8px;
+                    
+                    Text { text: "Background Color:"; font-size: 11px; color: #64748b; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle { background: #ffffff; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_bg_color = #ffffff; } } }
+                        Rectangle { background: #000000; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_bg_color = #000000; } } }
+                        Rectangle { background: #1e293b; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_bg_color = #1e293b; } } }
+                        Rectangle { background: #fef08a; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_bg_color = #fef08a; } } }
+                        Rectangle { background: #dcfce7; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_bg_color = #dcfce7; } } }
+                    }
+
+                    Text { text: "Text Color:"; font-size: 11px; color: #64748b; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle { background: #1e293b; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_text_color = #1e293b; } } }
+                        Rectangle { background: #ffffff; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_text_color = #ffffff; } } }
+                        Rectangle { background: #ef4444; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_text_color = #ef4444; } } }
+                        Rectangle { background: #2563eb; border-width: 1px; border-color: #e2e8f0; width: 24px; height: 24px; border-radius: 4px; TouchArea { clicked => { overlay_text_color = #2563eb; } } }
+                    }
+
+                    Text { text: "Background Opacity:"; font-size: 11px; color: #64748b; }
+                    Slider {
+                        minimum: 0.1;
+                        maximum: 1.0;
+                        value <=> overlay_bg_opacity;
+                    }
                 }
 
                 HorizontalLayout {
@@ -226,14 +269,17 @@ export component OverlayWindow inherits Window {
     in-out property <bool> is_searching: false;
     in-out property <bool> show_text: false;
     in-out property <length> font_size: 16px;
+    in-out property <color> bg_color: #ffffff;
+    in-out property <color> text_color: #1e293b;
+    in-out property <float> bg_opacity: 0.9;
     callback close_clicked();
 
     Rectangle {
         visible: show_text && translated_text != "";
-        background: #ffffffe6;
+        background: bg_color.with-alpha(bg_opacity);
         border-radius: 12px;
         border-width: 1px;
-        border-color: #e2e8f0;
+        border-color: bg_color.darker(0.2);
         
         // Close Button (X)
         Rectangle {
@@ -262,7 +308,7 @@ export component OverlayWindow inherits Window {
             padding-top: 24px; // Spacing for the close button
             Text {
                 text: translated_text;
-                color: #1e293b;
+                color: text_color;
                 font-size: font_size;
                 wrap: word-wrap;
                 horizontal-alignment: left;
