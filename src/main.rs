@@ -417,7 +417,7 @@ async fn main() -> Result<()> {
                 overlay.set_is_textbox_mode(true);
                 let _ = textbox.show();
                 textbox.set_text_color(main.get_overlay_text_color());
-                textbox.set_font_size(slint::format!("{}px", main.get_base_font_size()).parse().unwrap_or(15f32.into()));
+                textbox.set_font_size(main.get_base_font_size());
             } else {
                 overlay.set_bg_opacity(base_opacity);
                 overlay.set_hide_text(false);
@@ -553,6 +553,8 @@ async fn main() -> Result<()> {
                     if s.use_textbox {
                         if let Some(textbox) = textbox_weak.upgrade() {
                             textbox.set_text("Searching...".into());
+                            textbox.set_text_color(main.get_overlay_text_color());
+                            textbox.set_font_size(main.get_base_font_size());
                             let _ = textbox.show();
                         }
                     }
@@ -861,6 +863,8 @@ async fn main() -> Result<()> {
                                         main.set_last_translated_text("Searching...".into());
                                         if let Some(tw) = tww.upgrade() {
                                             tw.set_text("Searching...".into());
+                                            tw.set_text_color(main.get_overlay_text_color());
+                                            tw.set_font_size(main.get_base_font_size());
                                         }
                                     }
                                 }
@@ -919,7 +923,7 @@ async fn main() -> Result<()> {
                                             if let Some(tw) = tww.upgrade() {
                                                 tw.set_text(display_text.clone().into());
                                                 tw.set_text_color(main.get_overlay_text_color());
-                                                tw.set_font_size(slint::format!("{}px", main.get_base_font_size()).parse().unwrap_or(15f32.into()));
+                                                tw.set_font_size(main.get_base_font_size());
                                             }
                                         }
                                         
