@@ -1,4 +1,4 @@
-# Rust OCR Translator Overlay
+# Rust OCR Translator powered by VLM
 
 A real-time screen OCR and translation tool built with Rust and Slint.
 
