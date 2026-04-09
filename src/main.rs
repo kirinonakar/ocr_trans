@@ -250,8 +250,10 @@ async fn main() -> Result<()> {
 
     // Global Hotkey Setup
     let hotkey_manager = Arc::new(GlobalHotKeyManager::new().unwrap());
-    let hotkey_capture = HotKey::new(Some(Modifiers::META), Code::Backquote);
-    hotkey_manager.register(hotkey_capture).unwrap();
+    let hotkey_capture = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyA);
+    if let Err(e) = hotkey_manager.register(hotkey_capture) {
+        log::error!("Failed to register capture hotkey: {:?}", e);
+    }
     let esc_hotkey = HotKey::new(None, Code::Escape);
 
 

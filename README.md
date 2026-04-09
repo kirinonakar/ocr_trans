@@ -22,7 +22,7 @@ A real-time screen OCR and translation tool built with Rust and Slint.
   - `gemini.txt`: Auto-loads your Google Gemini API key.
   - `system_prompt.txt`: Auto-loads your custom translation instructions.
 - **Adjustable Creativity**: Use the **Temperature** slider (0.0 - 1.0) to control translation consistency vs. creativity.
-- **Global Hotkey**: Trigger area selection anytime with **Win + `**.
+- **Global Hotkey**: Trigger area selection anytime with **Win + Alt + A**.
 
 ## Prerequisites
 - **Rust**: [Install Rust](https://www.rust-lang.org/tools/install)
@@ -39,7 +39,7 @@ You can download the latest version from the [Releases Page](https://github.com/
 4. Open the main window:
    - Select your provider (LMStudio or Google Gemini).
    - Click **SELECT AREA** and drag to select the region you want to translate (e.g. subtitles).
-   - Capture starts automatically. Use the **STOP** button to pause, or **Win + `** to re-select the area.
+   - Capture starts automatically. Use the **STOP** button to pause, or **Win + Alt + A** to re-select the area.
    - Use the **Overlay** checkbox to hide/show the translation text while running.
    - Use the **Textbox** mode to move translations into a separate, draggable window.
 
