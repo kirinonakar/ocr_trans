@@ -434,6 +434,23 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Textbox Closed Callback (Switch back to overlay)
+    let main_weak_tb_close = main_window.as_weak();
+    let overlay_weak_tb_close = overlay_window.as_weak();
+    let state_tb_close = state.clone();
+    textbox_window.window().on_close_requested(move || {
+        if let (Some(main), Some(overlay)) = (main_weak_tb_close.upgrade(), overlay_weak_tb_close.upgrade()) {
+            let mut s = state_tb_close.lock().unwrap();
+            s.use_textbox = false;
+            
+            main.set_use_textbox(false);
+            overlay.set_bg_opacity(main.get_overlay_bg_opacity());
+            overlay.set_hide_text(false);
+            overlay.set_show_text(main.get_overlay_visible());
+        }
+        slint::CloseRequestResponse::HideWindow
+    });
+
     // Close Clicked Callback
     let main_weak_close = main_window.as_weak();
     let overlay_weak_close = overlay_window.as_weak();
