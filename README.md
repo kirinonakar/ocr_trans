@@ -10,7 +10,7 @@ A real-time screen OCR and translation tool built with Rust and Slint.
 - **Interactive Region Selection**: Drag your mouse to select exactly what you want to translate. Supports **Escape** to cancel.
 - **Auto-Automation**: Selecting a region automatically starts the capture process for immediate results.
 - **Change Detection**: Intelligent logic avoids redundant API calls by detecting screen changes.
-- **Customizable Overlay**: Instantly change background color, text color, transparency, and seperate textbox to match your preference.
+- **Customizable Overlay**: Instantly change background color, text color, transparency, and separate textbox to match your preference.
 - **Dynamic scaling**: Font size automatically adjusts to fit the text within your selected area.
 - **Clipboard Sync**: Translated text is automatically copied to the system clipboard for easy use elsewhere.
 - **Multi-API Support**: 
