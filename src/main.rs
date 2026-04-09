@@ -406,6 +406,8 @@ async fn main() -> Result<()> {
                 overlay.set_bg_opacity(0.1);
                 overlay.set_hide_text(true);
                 let _ = textbox.show();
+                textbox.set_text_color(main.get_overlay_text_color());
+                textbox.set_font_size(slint::format!("{}px", main.get_base_font_size()).parse().unwrap_or(15f32.into()));
             } else {
                 overlay.set_bg_opacity(base_opacity);
                 overlay.set_hide_text(false);
@@ -853,6 +855,8 @@ async fn main() -> Result<()> {
                                             main.set_last_translated_text(display_text.clone().into());
                                             if let Some(tw) = tww.upgrade() {
                                                 tw.set_text(display_text.clone().into());
+                                                tw.set_text_color(main.get_overlay_text_color());
+                                                tw.set_font_size(slint::format!("{}px", main.get_base_font_size()).parse().unwrap_or(15f32.into()));
                                             }
                                         }
                                         

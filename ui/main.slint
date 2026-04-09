@@ -1,4 +1,4 @@
-import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox, TextEdit } from "std-widgets.slint";
+import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox, TextEdit, ScrollView } from "std-widgets.slint";
 
 export component MainWindow inherits Window {
     title: "OCR Translator";
@@ -235,42 +235,45 @@ export component MainWindow inherits Window {
                             spacing: 4px;
                             HorizontalLayout {
                                 Text { text: "Text Color:"; font-size: 11px; color: #64748b; vertical-alignment: center; }
-                                Rectangle { width: 10px; }
-                                CheckBox { 
-                                    text: "Textbox"; 
-                                    checked <=> use_textbox;
-                                    toggled => { style_changed(); }
-                                }
+                                Rectangle { } // Flexible spacer
+                                Text { text: "Textbox"; font-size: 11px; color: #64748b; vertical-alignment: center; }
                             }
                             HorizontalLayout {
-                                spacing: 6px;
-                                Rectangle { 
-                                    background: #1e293b; 
-                                    border-width: overlay_text_color == #1e293b ? 2px : 1px; 
-                                    border-color: overlay_text_color == #1e293b ? #2563eb : #e2e8f0; 
-                                    width: 22px; height: 22px; border-radius: 4px; 
-                                    TouchArea { clicked => { overlay_text_color = #1e293b; style_changed(); } } 
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Rectangle { 
+                                        background: #1e293b; 
+                                        border-width: overlay_text_color == #1e293b ? 2px : 1px; 
+                                        border-color: overlay_text_color == #1e293b ? #2563eb : #e2e8f0; 
+                                        width: 22px; height: 22px; border-radius: 4px; 
+                                        TouchArea { clicked => { overlay_text_color = #1e293b; style_changed(); } } 
+                                    }
+                                    Rectangle { 
+                                        background: #ffffff; 
+                                        border-width: overlay_text_color == #ffffff ? 2px : 1px; 
+                                        border-color: overlay_text_color == #ffffff ? #2563eb : #e2e8f0; 
+                                        width: 22px; height: 22px; border-radius: 4px; 
+                                        TouchArea { clicked => { overlay_text_color = #ffffff; style_changed(); } } 
+                                    }
+                                    Rectangle { 
+                                        background: #ef4444; 
+                                        border-width: overlay_text_color == #ef4444 ? 2px : 1px; 
+                                        border-color: overlay_text_color == #ef4444 ? #2563eb : #e2e8f0; 
+                                        width: 22px; height: 22px; border-radius: 4px; 
+                                        TouchArea { clicked => { overlay_text_color = #ef4444; style_changed(); } } 
+                                    }
+                                    Rectangle { 
+                                        background: #2563eb; 
+                                        border-width: overlay_text_color == #2563eb ? 2px : 1px; 
+                                        border-color: overlay_text_color == #2563eb ? #2563eb : #e2e8f0; 
+                                        width: 22px; height: 22px; border-radius: 4px; 
+                                        TouchArea { clicked => { overlay_text_color = #2563eb; style_changed(); } } 
+                                    }
                                 }
-                                Rectangle { 
-                                    background: #ffffff; 
-                                    border-width: overlay_text_color == #ffffff ? 2px : 1px; 
-                                    border-color: overlay_text_color == #ffffff ? #2563eb : #e2e8f0; 
-                                    width: 22px; height: 22px; border-radius: 4px; 
-                                    TouchArea { clicked => { overlay_text_color = #ffffff; style_changed(); } } 
-                                }
-                                Rectangle { 
-                                    background: #ef4444; 
-                                    border-width: overlay_text_color == #ef4444 ? 2px : 1px; 
-                                    border-color: overlay_text_color == #ef4444 ? #2563eb : #e2e8f0; 
-                                    width: 22px; height: 22px; border-radius: 4px; 
-                                    TouchArea { clicked => { overlay_text_color = #ef4444; style_changed(); } } 
-                                }
-                                Rectangle { 
-                                    background: #2563eb; 
-                                    border-width: overlay_text_color == #2563eb ? 2px : 1px; 
-                                    border-color: overlay_text_color == #2563eb ? #2563eb : #e2e8f0; 
-                                    width: 22px; height: 22px; border-radius: 4px; 
-                                    TouchArea { clicked => { overlay_text_color = #2563eb; style_changed(); } } 
+                                Rectangle { } // Flexible spacer to align CheckBox under Textbox label
+                                CheckBox { 
+                                    checked <=> use_textbox;
+                                    toggled => { style_changed(); }
                                 }
                             }
                         }
@@ -346,6 +349,8 @@ export component TextboxWindow inherits Window {
     default-font-family: "Yu Gothic UI";
     
     in-out property <string> text: "";
+    in-out property <color> text_color: #1e293b;
+    in-out property <length> font_size: 15px;
 
     VerticalLayout {
         padding: 12px;
@@ -356,12 +361,18 @@ export component TextboxWindow inherits Window {
             border-radius: 8px;
             border-width: 1px;
             border-color: #e2e8f0;
-            TextEdit {
-                text: text;
-                read-only: true;
-                font-size: 15px;
-                width: 100%;
-                height: 100%;
+            ScrollView {
+                VerticalLayout {
+                    width: parent.width;
+                    padding: 8px;
+                    TextInput {
+                        text: text;
+                        read-only: true;
+                        font-size: font_size;
+                        color: text_color;
+                        wrap: word-wrap;
+                    }
+                }
             }
         }
     }
