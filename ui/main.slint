@@ -25,6 +25,8 @@ export component MainWindow inherits Window {
     in-out property <color> overlay_text_color: #1e293b;
     in-out property <float> overlay_bg_opacity: 0.9;
     in-out property <bool> show_style_settings: false;
+    in-out property <bool> use_textbox: false;
+    in-out property <string> last_translated_text: "";
 
     
     
@@ -231,7 +233,15 @@ export component MainWindow inherits Window {
                         }
                         VerticalLayout {
                             spacing: 4px;
-                            Text { text: "Text Color:"; font-size: 11px; color: #64748b; }
+                            HorizontalLayout {
+                                Text { text: "Text Color:"; font-size: 11px; color: #64748b; vertical-alignment: center; }
+                                Rectangle { width: 10px; }
+                                CheckBox { 
+                                    text: "Textbox"; 
+                                    checked <=> use_textbox;
+                                    toggled => { style_changed(); }
+                                }
+                            }
                             HorizontalLayout {
                                 spacing: 6px;
                                 Rectangle { 
@@ -325,6 +335,38 @@ export component MainWindow inherits Window {
     }
 }
 
+export component TextboxWindow inherits Window {
+    title: "Translation Result";
+    icon: @image-url("../app.ico");
+    preferred-width: 500px;
+    preferred-height: 400px;
+    min-width: 320px;
+    min-height: 240px;
+    background: #f8fafc;
+    default-font-family: "Yu Gothic UI";
+    
+    in-out property <string> text: "";
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        Text { text: "TRANSLATION"; font-weight: 700; color: #2563eb; font-size: 14px; }
+        Rectangle {
+            background: #ffffff;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #e2e8f0;
+            TextEdit {
+                text: text;
+                read-only: true;
+                font-size: 15px;
+                width: 100%;
+                height: 100%;
+            }
+        }
+    }
+}
+
 export component OverlayWindow inherits Window {
     always-on-top: true;
     background: transparent;
@@ -349,6 +391,7 @@ export component OverlayWindow inherits Window {
     in-out property <color> bg_color: #ffffff;
     in-out property <color> text_color: #1e293b;
     in-out property <float> bg_opacity: 0.9;
+    in-out property <bool> hide_text: false;
     callback close_clicked();
 
     Rectangle {
@@ -381,6 +424,7 @@ export component OverlayWindow inherits Window {
         }
         
         VerticalLayout {
+            visible: !hide_text;
             padding: 16px;
             padding-top: 24px; // Spacing for the close button
             Text {

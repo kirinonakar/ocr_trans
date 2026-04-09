@@ -64,6 +64,7 @@ struct AppState {
     overlay_bg_color: slint::Color,
     overlay_text_color: slint::Color,
     overlay_bg_opacity: f32,
+    use_textbox: bool,
 }
 
 
@@ -163,6 +164,7 @@ async fn main() -> Result<()> {
     let main_window = MainWindow::new()?;
     let overlay_window = OverlayWindow::new()?;
     let selection_window = SelectionWindow::new()?;
+    let textbox_window = TextboxWindow::new()?;
 
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
@@ -242,6 +244,7 @@ async fn main() -> Result<()> {
         overlay_text_color: main_window.get_overlay_text_color(),
         overlay_bg_opacity: main_window.get_overlay_bg_opacity(),
         temperature: main_window.get_temperature(),
+        use_textbox: main_window.get_use_textbox(),
         ..Default::default()
     }));
 
@@ -274,6 +277,7 @@ async fn main() -> Result<()> {
     let main_weak_api = main_window.as_weak();
     let overlay_weak = overlay_window.as_weak();
     let selection_weak = selection_window.as_weak();
+    let textbox_weak = textbox_window.as_weak();
     let state_clone = state.clone();
 
     // Initial Selection Window Styles Setup
@@ -387,12 +391,28 @@ async fn main() -> Result<()> {
     // Style Changed Callback
     let main_weak_style = main_window.as_weak();
     let overlay_weak_style = overlay_window.as_weak();
+    let textbox_weak_style = textbox_window.as_weak();
     let state_style = state.clone();
     main_window.on_style_changed(move || {
-        if let (Some(main), Some(overlay)) = (main_weak_style.upgrade(), overlay_weak_style.upgrade()) {
+        if let (Some(main), Some(overlay), Some(textbox)) = (main_weak_style.upgrade(), overlay_weak_style.upgrade(), textbox_weak_style.upgrade()) {
             overlay.set_bg_color(main.get_overlay_bg_color());
             overlay.set_text_color(main.get_overlay_text_color());
-            overlay.set_bg_opacity(main.get_overlay_bg_opacity());
+            
+            // Handle Textbox mode toggle and opacity sync
+            let use_textbox = main.get_use_textbox();
+            let base_opacity = main.get_overlay_bg_opacity();
+            
+            if use_textbox {
+                overlay.set_bg_opacity(0.1);
+                overlay.set_hide_text(true);
+                let _ = textbox.show();
+            } else {
+                overlay.set_bg_opacity(base_opacity);
+                overlay.set_hide_text(false);
+                let _ = textbox.hide();
+            }
+            
+            overlay.set_show_text(main.get_overlay_visible());
             
             // Recalculate and sync font size immediately
             let last_text = {
@@ -430,10 +450,12 @@ async fn main() -> Result<()> {
     let overlay_weak_for_stop = overlay_window.as_weak();
     #[cfg(target_os = "windows")]
     let main_hwnd_stop = main_hwnd;
+    let textbox_weak_for_stop = textbox_weak.clone();
     main_window.on_start_stop_clicked(move || {
         let main = main_weak.unwrap();
         let state_clone = state_clone.clone();
         let overlay_weak = overlay_weak_for_stop.clone();
+        let textbox_weak = textbox_weak_for_stop.clone();
         
         if !main.get_is_running() {
             if main.get_is_running() { return; } // Should not happen
@@ -468,10 +490,17 @@ async fn main() -> Result<()> {
                     overlay.set_translated_text("Searching...".into());
                     overlay.set_is_searching(true);
                     overlay.set_font_size(calculate_font_size("Searching...", overlay.get_window_w(), overlay.get_window_h(), main.get_base_font_size()));
-                    overlay.set_show_text(main.get_overlay_visible());
                     overlay.set_bg_color(s.overlay_bg_color.clone());
                     overlay.set_text_color(s.overlay_text_color.clone());
-                    overlay.set_bg_opacity(s.overlay_bg_opacity);
+                    overlay.set_bg_opacity(if s.use_textbox { 0.1 } else { s.overlay_bg_opacity });
+                    overlay.set_hide_text(s.use_textbox);
+                    overlay.set_show_text(main.get_overlay_visible());
+                    if s.use_textbox {
+                        if let Some(textbox) = textbox_weak.upgrade() {
+                            textbox.set_text("Searching...".into());
+                            let _ = textbox.show();
+                        }
+                    }
 
                     overlay.show().unwrap();
 
@@ -589,7 +618,9 @@ async fn main() -> Result<()> {
     let state_for_selection = state.clone();
     let hotkey_manager_area = hotkey_manager.clone();
     let esc_hotkey_area = esc_hotkey.clone();
+    let textbox_weak_for_area = textbox_weak.clone();
     selection_window.on_area_selected(move |x, y, w, h| {
+        let textbox_weak = textbox_weak_for_area.clone();
         let selection = selection_weak.unwrap();
         if w < 5.0 || h < 5.0 {
             let _ = selection.hide();
@@ -601,7 +632,9 @@ async fn main() -> Result<()> {
 
         let hotkey_manager_async = hotkey_manager_area.clone();
         let esc_hotkey_async = esc_hotkey_area.clone();
+        let textbox_weak_async = textbox_weak.clone();
         slint::spawn_local(async move {
+            let textbox_weak = textbox_weak_async;
             let main = main_weak_for_sync.unwrap();
             
             // Sync with LM Studio if applicable
@@ -642,7 +675,8 @@ async fn main() -> Result<()> {
                 
                 overlay.set_bg_color(s.overlay_bg_color.clone());
                 overlay.set_text_color(s.overlay_text_color.clone());
-                overlay.set_bg_opacity(s.overlay_bg_opacity);
+                overlay.set_bg_opacity(if main.get_use_textbox() { 0.1 } else { s.overlay_bg_opacity });
+                overlay.set_hide_text(main.get_use_textbox());
                 
                 // Move and resize native window
                 let window = overlay.window();
@@ -653,6 +687,13 @@ async fn main() -> Result<()> {
                 overlay.set_is_searching(true);
                 overlay.set_font_size(calculate_font_size("Searching...", w, h, main.get_base_font_size()));
                 main.set_overlay_visible(true);
+
+                if main.get_use_textbox() {
+                    if let Some(tw) = textbox_weak.upgrade() {
+                        tw.set_text("Searching...".into());
+                        let _ = tw.show();
+                    }
+                }
 
                 overlay.set_show_text(true);
                 overlay.show().unwrap();
@@ -694,6 +735,7 @@ async fn main() -> Result<()> {
     let runtime_handle = tokio::runtime::Handle::current();
     let overlay_weak_worker = overlay_window.as_weak();
     let main_weak_worker = main_window.as_weak();
+    let textbox_weak_worker = textbox_window.as_weak();
     std::thread::spawn(move || {
         let mut prev_img = None;
         let mut prev_rect = None;
@@ -701,9 +743,9 @@ async fn main() -> Result<()> {
         let mut last_monitor_refresh = std::time::Instant::now();
         
         loop {
-            let (is_running, rect, api_config, step_interval, _base_fs) = {
+            let (is_running, rect, api_config, step_interval, _base_fs, _use_textbox) = {
                 let s = state_for_worker.lock().unwrap();
-                (s.is_running, s.capture_rect, (s.api_endpoint.clone(), s.api_key.clone(), s.model_name.clone(), s.system_prompt.clone(), s.temperature), s.interval_sec, s.base_font_size)
+                (s.is_running, s.capture_rect, (s.api_endpoint.clone(), s.api_key.clone(), s.model_name.clone(), s.system_prompt.clone(), s.temperature), s.interval_sec, s.base_font_size, s.use_textbox)
             };
 
             if is_running && rect.is_some() {
@@ -729,6 +771,7 @@ async fn main() -> Result<()> {
                         {
                             let ow = overlay_weak_worker.clone();
                             let mw = main_weak_worker.clone();
+                            let tww = textbox_weak_worker.clone();
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(overlay) = ow.upgrade() {
                                     overlay.set_translated_text("Searching...".into());
@@ -737,7 +780,24 @@ async fn main() -> Result<()> {
                                     let font_size = calculate_font_size("Searching...", overlay.get_window_w(), overlay.get_window_h(), base_fs);
                                     overlay.set_font_size(font_size);
                                     let is_visible = mw.upgrade().map(|m| m.get_overlay_visible()).unwrap_or(true);
-                                    overlay.set_show_text(is_visible);
+                                    let use_textbox = mw.upgrade().map(|m| m.get_use_textbox()).unwrap_or(false);
+                                    
+                                    if use_textbox {
+                                        overlay.set_show_text(is_visible);
+                                        overlay.set_hide_text(true);
+                                        overlay.set_bg_opacity(0.1);
+                                    } else {
+                                        overlay.set_show_text(is_visible);
+                                        overlay.set_hide_text(false);
+                                        overlay.set_bg_opacity(mw.upgrade().map(|m| m.get_overlay_bg_opacity()).unwrap_or(0.9));
+                                    }
+
+                                    if let Some(main) = mw.upgrade() {
+                                        main.set_last_translated_text("Searching...".into());
+                                        if let Some(tw) = tww.upgrade() {
+                                            tw.set_text("Searching...".into());
+                                        }
+                                    }
                                 }
                             });
                         }
@@ -760,6 +820,7 @@ async fn main() -> Result<()> {
                                 
                                 let ow = overlay_weak_worker.clone();
                                 let mw = main_weak_worker.clone();
+                                let tww = textbox_weak_worker.clone();
                                 let final_text = text;
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(overlay) = ow.upgrade() {
@@ -771,14 +832,28 @@ async fn main() -> Result<()> {
                                         let font_size = calculate_font_size(&display_text, overlay.get_window_w(), overlay.get_window_h(), base_fs);
                                         overlay.set_font_size(font_size);
                                         
-                                        let is_visible = mw.upgrade().map(|m| m.get_overlay_visible()).unwrap_or(true);
-                                        overlay.set_show_text(is_visible);
-                                        
                                         // Sync colors/opacity
                                         if let Some(main) = mw.upgrade() {
+                                            let use_textbox = main.get_use_textbox();
+                                            let is_visible = main.get_overlay_visible();
+                                            
                                             overlay.set_bg_color(main.get_overlay_bg_color());
                                             overlay.set_text_color(main.get_overlay_text_color());
-                                            overlay.set_bg_opacity(main.get_overlay_bg_opacity());
+                                            
+                                            if use_textbox {
+                                                overlay.set_bg_opacity(0.1);
+                                                overlay.set_hide_text(true);
+                                            } else {
+                                                overlay.set_bg_opacity(main.get_overlay_bg_opacity());
+                                                overlay.set_hide_text(false);
+                                            }
+                                            
+                                            overlay.set_show_text(is_visible);
+                                            
+                                            main.set_last_translated_text(display_text.clone().into());
+                                            if let Some(tw) = tww.upgrade() {
+                                                tw.set_text(display_text.clone().into());
+                                            }
                                         }
                                         
                                         // Copy to clipboard — create/drop immediately
