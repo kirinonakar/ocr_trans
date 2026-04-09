@@ -141,7 +141,18 @@ impl ApiClient {
             .as_str()
             .context("Missing text in Gemini response")?;
         
-        Ok(text.trim().to_string())
+        let mut processed_text = text.to_string();
+        
+        // Gemma models sometimes output lines starting with * (notes, thoughts, etc.)
+        // We filter these out if the model name contains "gemma"
+        if self.model.to_lowercase().contains("gemma") {
+            processed_text = processed_text.lines()
+                .filter(|line| !line.trim_start().starts_with('*'))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+        
+        Ok(processed_text.trim().to_string())
     }
 
     async fn call_openai_compatible(&self, base64_image: String) -> Result<String> {
