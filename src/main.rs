@@ -798,6 +798,7 @@ async fn main() -> Result<()> {
         let mut prev_img = None;
         let mut prev_rect = None;
         let mut cached_monitors = None;
+        let mut was_running = false;
         let mut last_monitor_refresh = std::time::Instant::now();
         
         loop {
@@ -805,6 +806,12 @@ async fn main() -> Result<()> {
                 let s = state_for_worker.lock().unwrap();
                 (s.is_running, s.capture_rect, (s.api_endpoint.clone(), s.api_key.clone(), s.model_name.clone(), s.system_prompt.clone(), s.temperature), s.interval_sec, s.base_font_size, s.use_textbox)
             };
+
+            if is_running && !was_running {
+                prev_img = None;
+                prev_rect = None;
+            }
+            was_running = is_running;
 
             if is_running && rect.is_some() {
                 let current_rect = rect.unwrap();
