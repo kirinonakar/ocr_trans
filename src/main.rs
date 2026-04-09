@@ -398,6 +398,11 @@ async fn main() -> Result<()> {
     let textbox_weak_style = textbox_window.as_weak();
     let state_style = state.clone();
     main_window.on_style_changed(move || {
+        let use_textbox = main_weak_style.upgrade().map(|m| m.get_use_textbox()).unwrap_or(false);
+        {
+            let mut s = state_style.lock().unwrap();
+            s.use_textbox = use_textbox;
+        }
         if let (Some(main), Some(overlay), Some(textbox)) = (main_weak_style.upgrade(), overlay_weak_style.upgrade(), textbox_weak_style.upgrade()) {
             overlay.set_bg_color(main.get_overlay_bg_color());
             overlay.set_text_color(main.get_overlay_text_color());
@@ -531,6 +536,7 @@ async fn main() -> Result<()> {
                 s.overlay_bg_color = main.get_overlay_bg_color();
                 s.overlay_text_color = main.get_overlay_text_color();
                 s.overlay_bg_opacity = main.get_overlay_bg_opacity();
+                s.use_textbox = main.get_use_textbox();
                 main.set_is_running(true);
 
                 
