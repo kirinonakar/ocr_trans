@@ -11,6 +11,7 @@ A real-time screen OCR and translation tool built with Rust and Slint.
 - **Auto-Automation**: Selecting a region automatically starts the capture process for immediate results.
 - **Change Detection**: Intelligent logic avoids redundant API calls by detecting screen changes.
 - **Customizable Overlay**: Instantly change background color, text color, transparency, and separate textbox to match your preference.
+- **Textbox mode & Click-Through**: Enable Textbox mode to hide the overlay's close button and allow **Click-Through Interaction**, letting you click applications behind the capture area while still seeing the translation boundary.
 - **Dynamic scaling**: Font size automatically adjusts to fit the text within your selected area.
 - **Clipboard Sync**: Translated text is automatically copied to the system clipboard for easy use elsewhere.
 - **Multi-API Support**: 
@@ -48,7 +49,7 @@ You can download the latest version from the [Releases Page](https://github.com/
 - **Text Color**: Select a readable contrast for your chosen background.
 - **Opacity**: Use the slider to adjust how much of the original screen shows through the overlay. Changes are reflected in real-time.
 - **Dynamic Scaling**: The application automatically adjusts font size to fit the content within your chosen area.
-- **Textbox Mode**: Optionally display translation results in a separate, resizable window while keeping the overlay active (at 10% opacity) for better focus.
+- **Textbox Mode**: Optionally display translation results in a separate, resizable window while keeping the overlay active (at 10% opacity) for better focus. In this mode, the overlay's close button is hidden and **Click-Through Interaction** is enabled, allowing you to click on applications behind the capture area.
 
 ## Project Structure
 - `src/main.rs`: Orchestration, event loop, and UI logic.

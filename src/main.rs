@@ -369,7 +369,8 @@ async fn main() -> Result<()> {
             
             #[cfg(target_os = "windows")]
             if visible {
-                overlay.window().with_winit_window(|winit_window| {
+                let is_textbox = overlay.get_is_textbox_mode();
+                overlay.window().with_winit_window(move |winit_window| {
                     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
                     if let Ok(handle) = winit_window.window_handle() {
                         if let RawWindowHandle::Win32(h) = handle.as_raw() {
@@ -378,6 +379,7 @@ async fn main() -> Result<()> {
                             win_utils::set_tool_window(hwnd, false);
                             win_utils::set_exclude_from_capture(hwnd);
                             win_utils::disable_window_transitions(hwnd);
+                            win_utils::set_click_through(hwnd, is_textbox);
                             if let Some(owner) = main_hwnd_overlay {
                                 win_utils::set_window_owner(hwnd, owner);
                             }
@@ -405,14 +407,27 @@ async fn main() -> Result<()> {
             if use_textbox {
                 overlay.set_bg_opacity(0.1);
                 overlay.set_hide_text(true);
+                overlay.set_is_textbox_mode(true);
                 let _ = textbox.show();
                 textbox.set_text_color(main.get_overlay_text_color());
                 textbox.set_font_size(slint::format!("{}px", main.get_base_font_size()).parse().unwrap_or(15f32.into()));
             } else {
                 overlay.set_bg_opacity(base_opacity);
                 overlay.set_hide_text(false);
+                overlay.set_is_textbox_mode(false);
                 let _ = textbox.hide();
             }
+
+            #[cfg(target_os = "windows")]
+            overlay.window().with_winit_window(move |winit_window| {
+                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(handle) = winit_window.window_handle() {
+                    if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                        let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
+                        win_utils::set_click_through(hwnd, use_textbox);
+                    }
+                }
+            });
             
             overlay.set_show_text(main.get_overlay_visible());
             
@@ -444,9 +459,21 @@ async fn main() -> Result<()> {
             s.use_textbox = false;
             
             main.set_use_textbox(false);
+            overlay.set_is_textbox_mode(false);
             overlay.set_bg_opacity(main.get_overlay_bg_opacity());
             overlay.set_hide_text(false);
             overlay.set_show_text(main.get_overlay_visible());
+
+            #[cfg(target_os = "windows")]
+            overlay.window().with_winit_window(|winit_window| {
+                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(handle) = winit_window.window_handle() {
+                    if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                        let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
+                        win_utils::set_click_through(hwnd, false);
+                    }
+                }
+            });
         }
         slint::CloseRequestResponse::HideWindow
     });
@@ -513,6 +540,7 @@ async fn main() -> Result<()> {
                     overlay.set_text_color(s.overlay_text_color.clone());
                     overlay.set_bg_opacity(if s.use_textbox { 0.1 } else { s.overlay_bg_opacity });
                     overlay.set_hide_text(s.use_textbox);
+                    overlay.set_is_textbox_mode(s.use_textbox);
                     overlay.set_show_text(main.get_overlay_visible());
                     if s.use_textbox {
                         if let Some(textbox) = textbox_weak.upgrade() {
@@ -533,6 +561,7 @@ async fn main() -> Result<()> {
                                 win_utils::set_tool_window(hwnd, false);
                                 win_utils::set_exclude_from_capture(hwnd);
                                 win_utils::disable_window_transitions(hwnd);
+                                win_utils::set_click_through(hwnd, s.use_textbox);
                                 if let Some(owner) = main_hwnd_stop {
                                     win_utils::set_window_owner(hwnd, owner);
                                 }
@@ -696,6 +725,7 @@ async fn main() -> Result<()> {
                 overlay.set_text_color(s.overlay_text_color.clone());
                 overlay.set_bg_opacity(if main.get_use_textbox() { 0.1 } else { s.overlay_bg_opacity });
                 overlay.set_hide_text(main.get_use_textbox());
+                overlay.set_is_textbox_mode(main.get_use_textbox());
                 
                 // Move and resize native window
                 let window = overlay.window();
@@ -730,6 +760,7 @@ async fn main() -> Result<()> {
                                 win_utils::set_tool_window(hwnd, false);
                                 win_utils::set_exclude_from_capture(hwnd);
                                 win_utils::disable_window_transitions(hwnd);
+                                win_utils::set_click_through(hwnd, main.get_use_textbox());
                                 if let Some(owner) = owner {
                                     win_utils::set_window_owner(hwnd, owner);
                                 }
