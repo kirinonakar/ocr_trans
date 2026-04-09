@@ -339,7 +339,7 @@ export component MainWindow inherits Window {
 }
 
 export component TextboxWindow inherits Window {
-    title: "Translation Result";
+    title: "Result";
     icon: @image-url("../app.ico");
     always-on-top: true;
     preferred-width: 500px;
@@ -355,8 +355,7 @@ export component TextboxWindow inherits Window {
 
     VerticalLayout {
         padding: 12px;
-        spacing: 8px;
-        Text { text: "TRANSLATION"; font-weight: 700; color: #2563eb; font-size: 14px; }
+        spacing: 0px; // Reduced spacing since header is removed
         Rectangle {
             background: #ffffff;
             border-radius: 8px;
