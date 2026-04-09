@@ -1,6 +1,6 @@
 # Rust OCR Translator powered by VLM
 
-A real-time screen OCR and translation tool built with Rust and Slint powered by VLM (Visual Language Model).
+A real-time screen OCR and translation tool built with Rust and Slint powered by VLM (Vision-Language Model).
 
 <img src="screenshot.png" alt="screenshot1" width="50%">
 
