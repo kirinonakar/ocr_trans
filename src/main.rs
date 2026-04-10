@@ -248,13 +248,21 @@ async fn main() -> Result<()> {
         ..Default::default()
     }));
 
-    // Global Hotkey Setup
-    let hotkey_manager = Arc::new(GlobalHotKeyManager::new().unwrap());
+    // Global Hotkey Setup - Initialize safely without panicking on failure
+    let hotkey_manager = GlobalHotKeyManager::new().ok().map(Arc::new);
+    
     let hotkey_capture = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyA);
-    if let Err(e) = hotkey_manager.register(hotkey_capture) {
-        log::error!("Failed to register capture hotkey: {:?}", e);
-    }
+    let hotkey_start_stop = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyO);
     let esc_hotkey = HotKey::new(None, Code::Escape);
+
+    if let Some(ref mgr) = hotkey_manager {
+        if let Err(e) = mgr.register(hotkey_capture) {
+            log::error!("Failed to register capture hotkey: {:?}", e);
+        }
+        if let Err(e) = mgr.register(hotkey_start_stop) {
+            log::error!("Failed to register start/stop hotkey: {:?}", e);
+        }
+    }
 
 
     // Setup Transparency and Windows Specifics
@@ -660,7 +668,9 @@ async fn main() -> Result<()> {
         }
 
         selection.show().unwrap();
-        let _ = hotkey_manager_trigger.register(esc_hotkey_trigger);
+        if let Some(ref mgr) = hotkey_manager_trigger {
+            let _ = mgr.register(esc_hotkey_trigger);
+        }
     });
 
     // Close Requested - Hard Exit
@@ -675,7 +685,9 @@ async fn main() -> Result<()> {
     selection_window.on_closed(move || {
         let selection = selection_weak_for_close.unwrap();
         let _ = selection.hide();
-        let _ = hotkey_manager_for_close.unregister(esc_hotkey_for_close);
+        if let Some(ref mgr) = hotkey_manager_for_close {
+            let _ = mgr.unregister(esc_hotkey_for_close);
+        }
     });
 
     let state_for_selection = state.clone();
@@ -786,7 +798,9 @@ async fn main() -> Result<()> {
             }
 
             selection.hide().unwrap();
-            let _ = hotkey_manager_async.unregister(esc_hotkey_async);
+            if let Some(ref mgr) = hotkey_manager_async {
+                let _ = mgr.unregister(esc_hotkey_async);
+            }
         }).unwrap();
     });
 
@@ -984,6 +998,7 @@ async fn main() -> Result<()> {
     let main_weak_hk = main_window.as_weak();
     let selection_weak_hk = selection_window.as_weak();
     let hk_id = hotkey_capture.id();
+    let ss_id = hotkey_start_stop.id();
     let esc_id = esc_hotkey.id();
     std::thread::spawn(move || {
         loop {
@@ -994,6 +1009,13 @@ async fn main() -> Result<()> {
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(main) = main_weak.upgrade() {
                                 main.invoke_select_area_clicked();
+                            }
+                        });
+                    } else if event.id == ss_id {
+                        let main_weak = main_weak_hk.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(main) = main_weak.upgrade() {
+                                main.invoke_start_stop_clicked();
                             }
                         });
                     } else if event.id == esc_id {

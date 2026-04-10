@@ -334,7 +334,7 @@ export component MainWindow inherits Window {
             spacing: 12px; // Space between Button and Idle text
             
             Button {
-                text: is_running ? "STOP" : "START";
+                text: is_running ? "STOP (Win+Alt+O)" : "START (Win+Alt+O)";
                 height: 42px;
                 primary: true;
                 clicked => { start_stop_clicked(); }
@@ -383,7 +383,7 @@ export component TextboxWindow inherits Window {
                         text: text;
                         read-only: true;
                         font-size: font_size;
-                        color: text_color;
+                        color: text_color == #ffffff ? #000000 : text_color;
                         wrap: word-wrap;
                     }
                 }
