@@ -24,7 +24,7 @@ A real-time screen OCR and translation tool built with Rust and Slint powered by
 - **Adjustable Creativity**: Use the **Temperature** slider (0.0 - 1.0) to control translation consistency vs. creativity.
 - **Global Hotkeys**: 
   - **Win + Alt + A**: Trigger area selection.
-  - **Win + Alt + O**: Start or Stop the translation process.
+  - **Win + Alt + P**: Start or Stop the translation process.
 
 ## Prerequisites
 - **Rust**: [Install Rust](https://www.rust-lang.org/tools/install)

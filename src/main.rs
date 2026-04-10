@@ -252,7 +252,7 @@ async fn main() -> Result<()> {
     let hotkey_manager = GlobalHotKeyManager::new().ok().map(Arc::new);
     
     let hotkey_capture = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyA);
-    let hotkey_start_stop = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyO);
+    let hotkey_start_stop = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyP);
     let esc_hotkey = HotKey::new(None, Code::Escape);
 
     if let Some(ref mgr) = hotkey_manager {
