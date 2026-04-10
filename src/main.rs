@@ -294,6 +294,8 @@ async fn main() -> Result<()> {
                 "gemini-3.1-flash-lite-preview".into(), 
                 "gemini-3-flash-preview".into(), 
                 "gemini-3.1-pro-preview".into(),
+                "gemini-2.5-flash".into(),
+                "gemini-2.5-flash-lite".into(),
                 "gemma-4-26b-a4b-it".into(),
                 "gemma-4-31b-it".into()
             ];
