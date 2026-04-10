@@ -156,8 +156,10 @@ export component MainWindow inherits Window {
                 Text { text: "CAPTURE SETTINGS"; font-weight: 700; color: #2563eb; font-size: 14px; }
                 
                 HorizontalLayout {
+                    spacing: 4px;
                     Text { text: "Interval (s): "; vertical-alignment: center; color: #64748b; }
                     Text { text: interval == 0 ? "Once" : round(interval); vertical-alignment: center; font-weight: 700; color: #1e293b; }
+                    Rectangle { } // Flexible spacer to push content left
                 }
                 Slider {
                     minimum: 0;
@@ -167,7 +169,20 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     Text { text: "Font Size: "; vertical-alignment: center; color: #64748b; }
                     Text { text: round(base_font_size); vertical-alignment: center; font-weight: 700; color: #1e293b; }
-                    Rectangle { width: 10px; }
+                    
+                    Rectangle { } // Flexible spacer
+                    
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text { text: "Textbox"; vertical-alignment: center; color: #64748b; font-size: 12px; }
+                        CheckBox { 
+                            checked <=> use_textbox;
+                            toggled => { style_changed(); }
+                        }
+                    }
+                    
+                    Rectangle { width: 8px; }
+                    
                     Button {
                         text: show_style_settings ? "▲ Style" : "▼ Style";
                         height: 24px;
@@ -236,44 +251,36 @@ export component MainWindow inherits Window {
                             HorizontalLayout {
                                 Text { text: "Text Color:"; font-size: 11px; color: #64748b; vertical-alignment: center; }
                                 Rectangle { } // Flexible spacer
-                                Text { text: "Textbox"; font-size: 11px; color: #64748b; vertical-alignment: center; }
                             }
                             HorizontalLayout {
-                                HorizontalLayout {
-                                    spacing: 6px;
-                                    Rectangle { 
-                                        background: #1e293b; 
-                                        border-width: overlay_text_color == #1e293b ? 2px : 1px; 
-                                        border-color: overlay_text_color == #1e293b ? #2563eb : #e2e8f0; 
-                                        width: 22px; height: 22px; border-radius: 4px; 
-                                        TouchArea { clicked => { overlay_text_color = #1e293b; style_changed(); } } 
-                                    }
-                                    Rectangle { 
-                                        background: #ffffff; 
-                                        border-width: overlay_text_color == #ffffff ? 2px : 1px; 
-                                        border-color: overlay_text_color == #ffffff ? #2563eb : #e2e8f0; 
-                                        width: 22px; height: 22px; border-radius: 4px; 
-                                        TouchArea { clicked => { overlay_text_color = #ffffff; style_changed(); } } 
-                                    }
-                                    Rectangle { 
-                                        background: #ef4444; 
-                                        border-width: overlay_text_color == #ef4444 ? 2px : 1px; 
-                                        border-color: overlay_text_color == #ef4444 ? #2563eb : #e2e8f0; 
-                                        width: 22px; height: 22px; border-radius: 4px; 
-                                        TouchArea { clicked => { overlay_text_color = #ef4444; style_changed(); } } 
-                                    }
-                                    Rectangle { 
-                                        background: #2563eb; 
-                                        border-width: overlay_text_color == #2563eb ? 2px : 1px; 
-                                        border-color: overlay_text_color == #2563eb ? #2563eb : #e2e8f0; 
-                                        width: 22px; height: 22px; border-radius: 4px; 
-                                        TouchArea { clicked => { overlay_text_color = #2563eb; style_changed(); } } 
-                                    }
+                                spacing: 6px;
+                                Rectangle { 
+                                    background: #1e293b; 
+                                    border-width: overlay_text_color == #1e293b ? 2px : 1px; 
+                                    border-color: overlay_text_color == #1e293b ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_text_color = #1e293b; style_changed(); } } 
                                 }
-                                Rectangle { } // Flexible spacer to align CheckBox under Textbox label
-                                CheckBox { 
-                                    checked <=> use_textbox;
-                                    toggled => { style_changed(); }
+                                Rectangle { 
+                                    background: #ffffff; 
+                                    border-width: overlay_text_color == #ffffff ? 2px : 1px; 
+                                    border-color: overlay_text_color == #ffffff ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_text_color = #ffffff; style_changed(); } } 
+                                }
+                                Rectangle { 
+                                    background: #ef4444; 
+                                    border-width: overlay_text_color == #ef4444 ? 2px : 1px; 
+                                    border-color: overlay_text_color == #ef4444 ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_text_color = #ef4444; style_changed(); } } 
+                                }
+                                Rectangle { 
+                                    background: #2563eb; 
+                                    border-width: overlay_text_color == #2563eb ? 2px : 1px; 
+                                    border-color: overlay_text_color == #2563eb ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_text_color = #2563eb; style_changed(); } } 
                                 }
                             }
                         }
