@@ -158,13 +158,20 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     spacing: 4px;
                     Text { text: "Interval (s): "; vertical-alignment: center; color: #64748b; }
-                    Text { text: interval == 0 ? "Once" : round(interval); vertical-alignment: center; font-weight: 700; color: #1e293b; }
+                    Text { text: interval == 0 ? "Once" : (round(interval * 10) / 10); vertical-alignment: center; font-weight: 700; color: #1e293b; }
                     Rectangle { } // Flexible spacer to push content left
                 }
                 Slider {
                     minimum: 0;
                     maximum: 10;
-                    value <=> interval;
+                    value: interval;
+                    changed(val) => {
+                        if (val < 0.25) {
+                            interval = 0;
+                        } else {
+                            interval = round(val * 2) / 2;
+                        }
+                    }
                 }
                 HorizontalLayout {
                     Text { text: "Font Size: "; vertical-alignment: center; color: #64748b; }
@@ -191,8 +198,8 @@ export component MainWindow inherits Window {
                     }
                 }
                 Slider {
-                    minimum: 12;
-                    maximum: 100; // Increased max font size
+                    minimum: 8;
+                    maximum: 72; // Increased max font size
                     value: base_font_size;
                     changed(val) => { base_font_size = val; style_changed(); }
                 }

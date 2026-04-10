@@ -56,7 +56,7 @@ struct AppState {
     api_endpoint: String,
     api_key: String,
     model_name: String,
-    interval_sec: u64,
+    interval_sec: f32,
     system_prompt: String,
     temperature: f32,
     last_text: String,
@@ -236,7 +236,7 @@ async fn main() -> Result<()> {
     let state = Arc::new(Mutex::new(AppState {
         api_endpoint: main_window.get_api_endpoint().to_string(),
         model_name: main_window.get_model_name().to_string(),
-        interval_sec: 0,
+        interval_sec: 0.0,
         system_prompt: main_window.get_system_prompt().to_string(),
         last_text: String::new(),
         base_font_size: main_window.get_base_font_size(),
@@ -531,7 +531,7 @@ async fn main() -> Result<()> {
                 s.api_endpoint = main.get_api_endpoint().to_string();
                 s.api_key = main.get_api_key().to_string();
                 s.model_name = main.get_model_name().to_string();
-                s.interval_sec = main.get_interval() as u64;
+                s.interval_sec = main.get_interval();
                 s.system_prompt = main.get_system_prompt().to_string();
                 s.temperature = main.get_temperature();
                 s.base_font_size = main.get_base_font_size();
@@ -719,7 +719,7 @@ async fn main() -> Result<()> {
             s.api_endpoint = main.get_api_endpoint().to_string();
             s.api_key = main.get_api_key().to_string();
             s.model_name = main.get_model_name().to_string();
-            s.interval_sec = main.get_interval() as u64;
+            s.interval_sec = main.get_interval();
             s.system_prompt = main.get_system_prompt().to_string();
             s.temperature = main.get_temperature();
             s.base_font_size = main.get_base_font_size();
@@ -959,7 +959,7 @@ async fn main() -> Result<()> {
                 }
                 
                 // Handle Interval 0 (One-shot)
-                if step_interval == 0 {
+                if step_interval <= 0.01 {
                     {
                         let mut s = state_for_worker.lock().unwrap();
                         s.is_running = false;
@@ -975,8 +975,8 @@ async fn main() -> Result<()> {
                 prev_img = None;
                 prev_rect = None;
             }
-            let sleep_secs = if step_interval == 0 { 1 } else { step_interval };
-            std::thread::sleep(Duration::from_secs(sleep_secs));
+            let sleep_duration = if step_interval <= 0.01 { Duration::from_secs(1) } else { Duration::from_secs_f32(step_interval) };
+            std::thread::sleep(sleep_duration);
         }
     });
 
