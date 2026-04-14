@@ -18,6 +18,7 @@ A real-time screen OCR and translation tool built with Rust and Slint powered by
   - **Google Gemini**: Supports gemini-3.1-pro-preview, gemini-3.1-flash-lite-preview, gemini-3-flash-preview, gemma-4-26b-a4b-it, gemma-4-31b-it (Auto-loads API key from `gemini.txt` in the app directory).
   - **LMStudio / Ollama**: Works with any OpenAI-compatible local AI endpoint. (Default: unsloth/gemma-4-26b-a4b-it or user-defined)
     - Recommended: gemma-4-26b-a4b (best balance), gemma-4-31b-it (best quality), qwen3.5-9b (fast)
+    - Disable thinking for faster response
 - **External Config Files**:
   - `gemini.txt`: Auto-loads your Google Gemini API key.
   - `system_prompt.txt`: Auto-loads your custom translation instructions.
