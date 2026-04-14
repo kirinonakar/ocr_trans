@@ -112,58 +112,74 @@ fn clean_text(text: &str) -> String {
 fn calculate_font_size(text: &str, width: f32, height: f32, max_size: f32) -> f32 {
     if text.is_empty() { return max_size; }
     
-    // Safety padding for UI elements like the close button
-    // top (24) + bottom (16) + extra bottom buffer (8) = 48
-    let padding_v = 48.0; 
-    let padding_h = 32.0; // 16 + 16
+    // 1. Dynamic padding based on window size to maximize space in small overlays
+    let padding_v = if height < 120.0 { (height * 0.2).max(20.0) } else { 48.0 };
+    let padding_h = if width < 120.0 { (width * 0.1).max(12.0) } else { 32.0 };
     
-    let available_w = (width - padding_h).max(40.0);
-    let available_h = (height - padding_v).max(30.0);
+    let available_w = (width - padding_h).max(20.0);
+    let available_h = (height - padding_v).max(20.0);
 
     // Responsive font size for Searching...
     if text.starts_with("Searching...") {
-        return (max_size * 1.2).min(available_h).max(10.0);
+        return (max_size * 1.1).min(available_h).max(10.0);
     }
     
-    // Calculate how many CJK characters are in the text to adjust width heuristic
-    let cjk_count = text.chars().filter(|&c| {
-        // Simple CJK range check
-        (c >= '\u{3000}' && c <= '\u{9FFF}') || (c >= '\u{AC00}' && c <= '\u{D7AF}')
-    }).count();
-    let total_chars = text.chars().count();
-    let cjk_ratio = if total_chars > 0 { cjk_count as f32 / total_chars as f32 } else { 0.0 };
-    
-    // Iterative approach to find a fitting font size
-    let mut best_size = 8.0;
-    let start_size = (max_size as i32).max(8);
-    
-    for size in (8..=start_size).rev() {
-        let f_size = size as f32;
-        // CJK characters are roughly square (1.0 width ratio), 
-        // while Latin/Numerical are roughly 0.5-0.6.
-        let char_width_est = f_size * (0.55 + (0.45 * cjk_ratio)); 
-        let line_height_est = f_size * 1.4; // Slightly more generous line height
-        
+    // Helper closure to check if text fits at a given font size
+    let fits = |size: f32| -> bool {
+        let line_height_est = size * 1.35; // Slightly tighter line height for better fitting
         let mut total_height = 0.0;
+        
         for line in text.lines() {
             let line_trimmed = line.trim();
             if line_trimmed.is_empty() {
                 total_height += line_height_est;
             } else {
-                let line_len = line_trimmed.chars().count() as f32;
-                let num_wrapped_lines = (line_len * char_width_est / available_w).ceil().max(1.0);
+                let mut line_width = 0.0;
+                for c in line_trimmed.chars() {
+                    // CJK characters are essentially square (1.0 ratio)
+                    // Latin/Numbers are roughly 0.55-0.6 ratio
+                    // Spaces are narrower (0.3 ratio)
+                    let char_w = if (c >= '\u{3000}' && c <= '\u{9FFF}') || (c >= '\u{AC00}' && c <= '\u{D7AF}') {
+                        size
+                    } else if c.is_whitespace() {
+                        size * 0.3
+                    } else {
+                        size * 0.58
+                    };
+                    line_width += char_w;
+                }
+                let num_wrapped_lines = (line_width / available_w).ceil().max(1.0);
                 total_height += num_wrapped_lines * line_height_est;
             }
+            if total_height > available_h { return false; }
         }
-        
-        if total_height <= available_h {
-            best_size = f_size;
-            break;
+        total_height <= available_h
+    };
+
+    // 2. Binary search for the best font size (8.0 to max_size)
+    // This provides much better precision and performance than linear search.
+    let mut low = 8.0;
+    let mut high = max_size;
+    let mut best_size = low;
+
+    // Fast-path: check if max_size already fits
+    if fits(max_size) {
+        return max_size;
+    }
+
+    // Binary search for precision (8 iterations = ~0.25px precision for range 8-72)
+    for _ in 0..8 {
+        let mid = (low + high) / 2.0;
+        if fits(mid) {
+            best_size = mid;
+            low = mid;
+        } else {
+            high = mid;
         }
-        best_size = f_size; 
     }
     
-    best_size
+    // Round to 0.5 for stability and clean appearance
+    (best_size * 2.0).round() / 2.0
 }
 
 
