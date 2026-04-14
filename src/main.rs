@@ -49,6 +49,24 @@ fn get_system_prompt() -> String {
     DEFAULT_SYSTEM_PROMPT.to_string()
 }
 
+fn get_model_name() -> String {
+    let default = "unsloth/gemma-4-26b-a4b-it";
+    // 1. Check current directory
+    if let Ok(model) = std::fs::read_to_string("model.txt") {
+        return model.trim().to_string();
+    }
+    // 2. Check executable directory
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let path = exe_dir.join("model.txt");
+            if let Ok(model) = std::fs::read_to_string(path) {
+                return model.trim().to_string();
+            }
+        }
+    }
+    default.to_string()
+}
+
 #[derive(Default)]
 struct AppState {
     is_running: bool,
@@ -173,20 +191,23 @@ async fn main() -> Result<()> {
 
     // Setup initial window states
     main_window.set_api_endpoint("http://localhost:1234/v1".into());
-    let lm_models: Vec<slint::SharedString> = vec!["google/gemma-4-26b-a4b".into(), "qwen/qwen3.5-9b".into(), "translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into()];
+    let default_model = get_model_name();
+    let lm_models: Vec<slint::SharedString> = vec![
+        default_model.clone().into(),
+        "unsloth/gemma-4-26b-a4b-it".into(),
+        "qwen/qwen3.5-9b".into(),
+        "translate-gemma-12b-it".into(),
+        "gemma-4-e4b-it".into(),
+        "gemma-4-31b-it".into(),
+        "qwen3.5-4b".into()
+    ];
     main_window.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
-    main_window.set_model_name("google/gemma-4-26b-a4b".into());
+    main_window.set_model_name(default_model.into());
     main_window.set_model_index(0);
     main_window.set_api_key("lm-studio".into());
     main_window.set_system_prompt(get_system_prompt().into());
     main_window.set_interval(0.0);
     main_window.set_base_font_size(18.0);
-
-
-    // Load API key from gemini.txt if exists
-    if let Some(key) = get_gemini_key() {
-        main_window.set_api_key(key.into());
-    }
 
     // Initial Model Sync (Localhost/LM Studio)
     let main_weak_startup = main_window.as_weak();
@@ -201,7 +222,7 @@ async fn main() -> Result<()> {
                 if let Ok(models) = client.get_models().await {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
                     let current_model_str = main.get_model_name().as_str().to_string();
-                    let default_model_str = "google/gemma-4-26b-a4b";
+                    let default_model_str = get_model_name();
                     
                     // Debug: print what models we got from LM Studio
                     println!("[Startup Sync] Models from API: {:?}", slint_models.iter().map(|m| m.as_str().to_string()).collect::<Vec<_>>());
@@ -315,9 +336,18 @@ async fn main() -> Result<()> {
 
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
-            let lm_models: Vec<slint::SharedString> = vec!["google/gemma-4-26b-a4b".into(), "qwen/qwen3.5-9b".into(), "translate-gemma-12b-it".into(), "gemma-4-e4b-it".into(), "gemma-4-31b-it".into(), "qwen3.5-4b".into()];
+            let default_model = get_model_name();
+            let lm_models: Vec<slint::SharedString> = vec![
+                default_model.clone().into(),
+                "unsloth/gemma-4-26b-a4b-it".into(),
+                "qwen/qwen3.5-9b".into(),
+                "translate-gemma-12b-it".into(),
+                "gemma-4-e4b-it".into(),
+                "gemma-4-31b-it".into(),
+                "qwen3.5-4b".into()
+            ];
             main.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
-            main.set_model_name("google/gemma-4-26b-a4b".into());
+            main.set_model_name(default_model.into());
             main.set_model_index(0);
             main.set_api_key("lm-studio".into());
             main.set_system_prompt(main.get_system_prompt()); // Preserve current prompt
@@ -340,7 +370,7 @@ async fn main() -> Result<()> {
                 Ok(models) => {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
                     let current_model_str = main.get_model_name().as_str().to_string();
-                    let default_model_str = "google/gemma-4-26b-a4b";
+                    let default_model_str = get_model_name();
 
                     main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
                     
@@ -373,15 +403,25 @@ async fn main() -> Result<()> {
 
     // Overlay Toggle Callback
     let overlay_weak_toggle = overlay_window.as_weak();
+    let state_for_toggle = state.clone();
     #[cfg(target_os = "windows")]
     let main_hwnd_overlay = main_hwnd;
     main_window.on_overlay_toggle_clicked(move |visible| {
         if let Some(overlay) = overlay_weak_toggle.upgrade() {
             overlay.set_show_text(visible && !overlay.get_translated_text().is_empty() && !overlay.get_translated_text().starts_with("COMMAND:"));
             
-            #[cfg(target_os = "windows")]
             if visible {
+                let has_rect = {
+                    let s = state_for_toggle.lock().unwrap();
+                    s.capture_rect.is_some()
+                };
+                
+                if has_rect {
+                    let _ = overlay.show();
+                }
+
                 let is_textbox = overlay.get_is_textbox_mode();
+                #[cfg(target_os = "windows")]
                 overlay.window().with_winit_window(move |winit_window| {
                     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
                     if let Ok(handle) = winit_window.window_handle() {
@@ -398,6 +438,8 @@ async fn main() -> Result<()> {
                         }
                     }
                 });
+            } else {
+                let _ = overlay.hide();
             }
         }
     });
@@ -506,6 +548,7 @@ async fn main() -> Result<()> {
         
         s.is_running = false;
         main.set_is_running(false);
+        main.set_overlay_visible(false);
         overlay.hide().unwrap();
     });
 
@@ -548,6 +591,7 @@ async fn main() -> Result<()> {
                 s.overlay_bg_opacity = main.get_overlay_bg_opacity();
                 s.use_textbox = main.get_use_textbox();
                 main.set_is_running(true);
+                main.set_overlay_visible(true);
 
                 
                 if let Some(overlay) = overlay_weak.upgrade() {
@@ -594,6 +638,7 @@ async fn main() -> Result<()> {
             let mut s = state_clone.lock().unwrap();
             s.is_running = false;
             main.set_is_running(false);
+            main.set_overlay_visible(false);
             if let Some(overlay) = overlay_weak_for_stop.upgrade() {
                 overlay.hide().unwrap();
             }
@@ -946,7 +991,7 @@ async fn main() -> Result<()> {
                                             }
                                         }
                                         
-                                        // Copy to clipboard — create/drop immediately
+                                        // Copy to clipboard ??create/drop immediately
                                         if let Ok(mut cb) = arboard::Clipboard::new() {
                                             let _ = cb.set_text(&final_text);
                                         }
