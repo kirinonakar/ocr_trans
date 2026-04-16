@@ -13,6 +13,14 @@ struct GeminiRequest {
 #[derive(Serialize)]
 struct GeminiGenerationConfig {
     temperature: f32,
+    #[serde(rename = "thinkingConfig", skip_serializing_if = "Option::is_none")]
+    thinking_config: Option<GeminiThinkingConfig>,
+}
+
+#[derive(Serialize)]
+struct GeminiThinkingConfig {
+    #[serde(rename = "thinkingLevel")]
+    thinking_level: String,
 }
 
 #[derive(Serialize)]
@@ -104,6 +112,13 @@ impl ApiClient {
             self.endpoint, model, self.api_key
         );
 
+        let mut thinking_config = None;
+        if self.model.to_lowercase().contains("gemma") {
+            thinking_config = Some(GeminiThinkingConfig {
+                thinking_level: "MINIMAL".to_string(),
+            });
+        }
+
         let request = GeminiRequest {
             contents: vec![GeminiContent {
                 parts: vec![
@@ -120,28 +135,45 @@ impl ApiClient {
             }],
             generation_config: Some(GeminiGenerationConfig {
                 temperature: self.temperature,
+                thinking_config,
             }),
         };
 
+        let log_url = url.split('?').next().unwrap_or(&url);
+        log::info!("Sending Gemini request to URL: {} (Model: {})", log_url, model);
         let response = self.client.post(url)
             .json(&request)
             .send()
             .await
             .context("HTTP request failed")?;
         
-        if !response.status().is_success() {
-            let status = response.status();
+        let status = response.status();
+        log::info!("Gemini Response Status: {}", status);
+
+        if !status.is_success() {
             let err_body = response.text().await?;
+            log::error!("Gemini API Error ({}): {}", status, err_body);
             anyhow::bail!("Gemini API Error ({}): {}", status, err_body);
         }
 
-        let json: serde_json::Value = response.json().await.context("Failed to parse JSON")?;
+        let json_text = response.text().await.context("Failed to get response text")?;
+        let json: serde_json::Value = serde_json::from_str(&json_text).context("Failed to parse JSON")?;
         
-        let text = json["candidates"][0]["content"]["parts"][0]["text"]
-            .as_str()
-            .context("Missing text in Gemini response")?;
+        let mut full_text = String::new();
+        if let Some(parts) = json["candidates"][0]["content"]["parts"].as_array() {
+            for part in parts {
+                if let Some(t) = part["text"].as_str() {
+                    full_text.push_str(t);
+                }
+            }
+        }
+
+        if full_text.is_empty() {
+             anyhow::bail!("No text found in Gemini response parts. Check for safety filters or model compatibility.");
+        }
         
-        let mut processed_text = text.to_string();
+        log::info!("Total Gemini response text received (length: {})", full_text.len());
+        let mut processed_text = full_text;
         
         // Gemma models sometimes output lines starting with * (notes, thoughts, etc.)
         // We filter these out if the model name contains "gemma"
