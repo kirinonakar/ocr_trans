@@ -71,11 +71,15 @@ impl ApiClient {
         let jpeg_data = self.prepare_image(img)?;
         let base64_image = STANDARD.encode(&jpeg_data);
         
-        if self.endpoint.contains("googleapis.com") {
+        if self.is_gemini_endpoint() {
             self.call_gemini(base64_image).await
         } else {
             self.call_openai_compatible(base64_image).await
         }
+    }
+
+    fn is_gemini_endpoint(&self) -> bool {
+        self.endpoint.contains("googleapis.com")
     }
 
     fn prepare_image(&self, img: &image::RgbaImage) -> Result<Vec<u8>> {
@@ -108,8 +112,8 @@ impl ApiClient {
         let model = model.strip_prefix("models/").unwrap_or(&model);
 
         let url = format!(
-            "{}/v1beta/models/{}:generateContent?key={}",
-            self.endpoint, model, self.api_key
+            "{}/v1beta/models/{}:generateContent",
+            self.endpoint, model
         );
 
         let mut thinking_config = None;
@@ -139,13 +143,14 @@ impl ApiClient {
             }),
         };
 
-        let log_url = url.split('?').next().unwrap_or(&url);
-        log::info!("Sending Gemini request to URL: {} (Model: {})", log_url, model);
-        let response = self.client.post(url)
-            .json(&request)
-            .send()
-            .await
-            .context("HTTP request failed")?;
+        log::info!("Sending Gemini request to URL: {} (Model: {})", url, model);
+        let mut req = self.client.post(&url).json(&request);
+        let api_key = self.api_key.trim();
+        if !api_key.is_empty() {
+            req = req.header("x-goog-api-key", api_key);
+        }
+
+        let response = req.send().await.context("HTTP request failed")?;
         
         let status = response.status();
         log::info!("Gemini Response Status: {}", status);
@@ -235,6 +240,10 @@ impl ApiClient {
     }
 
     pub async fn get_models(&self) -> Result<Vec<String>> {
+        if self.is_gemini_endpoint() {
+            return self.get_gemini_models().await;
+        }
+
         let url = if self.endpoint.ends_with("/models") {
             self.endpoint.clone()
         } else if self.endpoint.ends_with("/v1") {
@@ -260,6 +269,39 @@ impl ApiClient {
             for m in data {
                 if let Some(id) = m["id"].as_str() {
                     models.push(id.trim().to_string());
+                }
+            }
+        }
+
+        Ok(models)
+    }
+
+    async fn get_gemini_models(&self) -> Result<Vec<String>> {
+        let url = if self.endpoint.ends_with("/models") {
+            self.endpoint.clone()
+        } else {
+            format!("{}/v1beta/models", self.endpoint)
+        };
+
+        let mut req = self.client.get(&url);
+        let api_key = self.api_key.trim();
+        if !api_key.is_empty() {
+            req = req.header("x-goog-api-key", api_key);
+        }
+
+        let response = req.send().await.context("Failed to fetch Gemini models")?;
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to fetch Gemini models: {}", response.status());
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let mut models = Vec::new();
+
+        if let Some(data) = json["models"].as_array() {
+            for m in data {
+                if let Some(name) = m["name"].as_str() {
+                    let name = name.trim();
+                    models.push(name.strip_prefix("models/").unwrap_or(name).to_string());
                 }
             }
         }

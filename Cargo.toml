@@ -19,6 +19,7 @@ log = "0.4"
 env_logger = "0.11"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
+    "Win32_Security_Credentials",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi"

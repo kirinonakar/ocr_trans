@@ -4,6 +4,7 @@ slint::include_modules!();
 mod win_utils;
 mod capture;
 mod api;
+mod credentials;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,21 +14,47 @@ use global_hotkey::{GlobalHotKeyManager, hotkey::{HotKey, Modifiers, Code}, Glob
 
 use i_slint_backend_winit::WinitWindowAccessor; // To access HWND on Windows
 
-fn get_gemini_key() -> Option<String> {
+fn read_gemini_txt_key() -> Option<String> {
     // 1. Check current directory
-    if let Ok(key) = std::fs::read_to_string("gemini.txt") {
-        return Some(key.trim().to_string());
+    if let Ok(cwd) = std::env::current_dir() {
+        let path = cwd.join("gemini.txt");
+        if let Ok(key) = std::fs::read_to_string(path) {
+            let key = key.trim().to_string();
+            if !key.is_empty() {
+                return Some(key);
+            }
+        }
     }
     // 2. Check executable directory
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             let path = exe_dir.join("gemini.txt");
             if let Ok(key) = std::fs::read_to_string(path) {
-                return Some(key.trim().to_string());
+                let key = key.trim().to_string();
+                if !key.is_empty() {
+                    return Some(key);
+                }
             }
         }
     }
     None
+}
+
+fn get_gemini_key() -> Option<String> {
+    if let Some(key) = read_gemini_txt_key() {
+        if let Err(err) = credentials::store_google_api_key(&key) {
+            log::warn!("Failed to save gemini.txt key to Credential Manager: {err:?}");
+        }
+        return Some(key);
+    }
+
+    credentials::read_google_api_key()
+}
+
+fn persist_google_api_key(api_key: &str) {
+    if let Err(err) = credentials::store_google_api_key(api_key) {
+        log::warn!("Failed to update Google API key in Credential Manager: {err:?}");
+    }
 }
 
 const DEFAULT_SYSTEM_PROMPT: &str = "naturally translate into korean. only show translated texts.";
@@ -322,6 +349,7 @@ async fn main() -> Result<()> {
 
     let main_weak = main_window.as_weak();
     let main_weak_api = main_window.as_weak();
+    let main_weak_api_key = main_window.as_weak();
     let overlay_weak = overlay_window.as_weak();
     let selection_weak = selection_window.as_weak();
     let textbox_weak = textbox_window.as_weak();
@@ -370,6 +398,19 @@ async fn main() -> Result<()> {
 
         }
     });
+
+    let state_api_key = state.clone();
+    main_window.on_api_key_changed(move |api_key| {
+        if let Some(main) = main_weak_api_key.upgrade() {
+            let api_key = api_key.to_string();
+            if main.get_api_type().as_str() == "Google Gemini" {
+                persist_google_api_key(&api_key);
+            }
+
+            let mut s = state_api_key.lock().unwrap();
+            s.api_key = api_key;
+        }
+    });
     
     // Refresh Models Callback
     let main_weak_refresh = main_window.as_weak();
@@ -378,6 +419,9 @@ async fn main() -> Result<()> {
         let main = main_weak_refresh.unwrap();
         let endpoint = main.get_api_endpoint().to_string();
         let api_key = main.get_api_key().to_string();
+        if main.get_api_type().as_str() == "Google Gemini" {
+            persist_google_api_key(&api_key);
+        }
         let http = http_refresh.clone();
         
         slint::spawn_local(async move {
@@ -588,6 +632,9 @@ async fn main() -> Result<()> {
                 
                 // Sync with LM Studio if applicable
                 // (Removed automatic sync on start to prevent model reverting bug)
+                if main.get_api_type().as_str() == "Google Gemini" {
+                    persist_google_api_key(&main.get_api_key().to_string());
+                }
                 
                 let mut s = state_clone.lock().unwrap();
                 if s.capture_rect.is_none() {
@@ -775,6 +822,9 @@ async fn main() -> Result<()> {
             
             // Sync with LM Studio if applicable
             // (Removed automatic sync on area selected to prevent model reverting bug)
+            if main.get_api_type().as_str() == "Google Gemini" {
+                persist_google_api_key(&main.get_api_key().to_string());
+            }
 
             let mut s = state_for_selection.lock().unwrap();
             // Convert logical to physical coordinates using scale factor

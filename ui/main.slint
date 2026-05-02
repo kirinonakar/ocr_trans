@@ -33,6 +33,7 @@ export component MainWindow inherits Window {
     callback start_stop_clicked();
     callback select_area_clicked();
     callback api_type_changed(string);
+    callback api_key_changed(string);
     callback overlay_toggle_clicked(bool);
     callback refresh_models_clicked();
     callback style_changed();
@@ -90,6 +91,8 @@ export component MainWindow inherits Window {
                         text <=> api_key;
                         input-type: password;
                         placeholder-text: "Leave empty for LMStudio";
+                        edited(value) => { api_key_changed(value); }
+                        accepted(value) => { api_key_changed(value); }
                     }
                 }
                 
