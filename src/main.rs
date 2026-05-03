@@ -233,6 +233,7 @@ async fn main() -> Result<()> {
         .expect("Failed to build HTTP client");
 
     // Setup initial window states
+    main_window.window().set_size(slint::LogicalSize::new(400.0, 780.0));
     main_window.set_api_endpoint("http://localhost:1234/v1".into());
     let default_model = get_model_name();
     let lm_models: Vec<slint::SharedString> = vec![
@@ -504,6 +505,15 @@ async fn main() -> Result<()> {
             } else {
                 let _ = overlay.hide();
             }
+        }
+    });
+
+    // Style Panel Toggle Callback - force window resize
+    let main_weak_panel = main_window.as_weak();
+    main_window.on_style_panel_toggled(move |is_open| {
+        if let Some(main) = main_weak_panel.upgrade() {
+            let new_height = if is_open { 895.0_f32 } else { 780.0_f32 };
+            main.window().set_size(slint::LogicalSize::new(400.0, new_height));
         }
     });
 

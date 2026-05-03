@@ -4,8 +4,8 @@ export component MainWindow inherits Window {
     title: "OCR Translator";
     icon: @image-url("../app.ico");
     width: 400px;
-    preferred-height: show_style_settings ? 940px : 790px;
-    min-height: show_style_settings ? 940px : 790px;
+    preferred-height: show_style_settings ? 895px : 780px;
+    max-height: show_style_settings ? 895px : 780px;
     background: @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
     default-font-family: "Yu Gothic UI";
 
@@ -38,9 +38,11 @@ export component MainWindow inherits Window {
     callback overlay_toggle_clicked(bool);
     callback refresh_models_clicked();
     callback sync_lmstudio_models();
+    callback style_panel_toggled(bool);
     callback style_changed();
 
     VerticalLayout {
+        alignment: start;
         padding: 14px;
         padding-bottom: 30px; // Increased bottom padding to lift content
         spacing: 10px;
@@ -258,7 +260,10 @@ export component MainWindow inherits Window {
                         text: show_style_settings ? "▲ Style" : "▼ Style";
                         height: 24px;
                         primary: false;
-                        clicked => { show_style_settings = !show_style_settings; }
+                        clicked => {
+                            show_style_settings = !show_style_settings;
+                            style_panel_toggled(show_style_settings);
+                        }
                     }
                 }
                 Slider {
