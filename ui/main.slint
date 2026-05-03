@@ -1,10 +1,11 @@
-import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox, TextEdit, ScrollView } from "std-widgets.slint";
+﻿import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox, TextEdit, ScrollView } from "std-widgets.slint";
 
 export component MainWindow inherits Window {
     title: "OCR Translator";
     icon: @image-url("../app.ico");
     width: 400px;
-    height: 780px;
+    preferred-height: show_style_settings ? 940px : 790px;
+    min-height: show_style_settings ? 940px : 790px;
     background: @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
     default-font-family: "Yu Gothic UI";
 
@@ -36,6 +37,7 @@ export component MainWindow inherits Window {
     callback api_key_changed(string);
     callback overlay_toggle_clicked(bool);
     callback refresh_models_clicked();
+    callback sync_lmstudio_models();
     callback style_changed();
 
     VerticalLayout {
@@ -63,14 +65,73 @@ export component MainWindow inherits Window {
                 Text { text: "API SETTINGS"; font-weight: 700; color: #2563eb; font-size: 14px; }
                 
                 VerticalLayout {
-                    spacing: 4px;
+                    spacing: 6px;
                     Text { text: "Provider:"; color: #64748b; font-size: 12px; }
-                    ComboBox {
-                        model: ["LMStudio", "Google Gemini"];
-                        current-value <=> api_type;
-                        current-index <=> api_type_index;
-                        selected(value) => {
-                            api_type_changed(value);
+                    Rectangle {
+                        height: 34px;
+                        background: #f1f5f9;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #e2e8f0;
+                        HorizontalLayout {
+                            padding: 3px;
+                            spacing: 2px;
+                            lm_touch := TouchArea {
+                                width: parent.width / 2 - 2px;
+                                clicked => {
+                                    if (api_type != "LMStudio") {
+                                        api_type = "LMStudio";
+                                        api_type_index = 0;
+                                        api_type_changed("LMStudio");
+                                        sync_lmstudio_models();
+                                    }
+                                }
+                                Rectangle {
+                                    background: api_type == "LMStudio" ? #ffffff : lm_touch.has-hover ? #e8eef6 : transparent;
+                                    border-radius: 6px;
+                                    border-width: api_type == "LMStudio" ? 1px : 0px;
+                                    border-color: #d1d5db;
+                                    animate background { duration: 160ms; easing: ease-in-out; }
+                                    drop-shadow-blur: api_type == "LMStudio" ? 4px : 0px;
+                                    drop-shadow-color: #0000001a;
+                                    Text {
+                                        text: "LMStudio";
+                                        color: api_type == "LMStudio" ? #2563eb : #64748b;
+                                        font-size: 12px;
+                                        font-weight: api_type == "LMStudio" ? 700 : 400;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        animate color { duration: 160ms; }
+                                    }
+                                }
+                            }
+                            g_touch := TouchArea {
+                                clicked => {
+                                    if (api_type != "Google Gemini") {
+                                        api_type = "Google Gemini";
+                                        api_type_index = 1;
+                                        api_type_changed("Google Gemini");
+                                    }
+                                }
+                                Rectangle {
+                                    background: api_type == "Google Gemini" ? #ffffff : g_touch.has-hover ? #e8eef6 : transparent;
+                                    border-radius: 6px;
+                                    border-width: api_type == "Google Gemini" ? 1px : 0px;
+                                    border-color: #d1d5db;
+                                    animate background { duration: 160ms; easing: ease-in-out; }
+                                    drop-shadow-blur: api_type == "Google Gemini" ? 4px : 0px;
+                                    drop-shadow-color: #0000001a;
+                                    Text {
+                                        text: "Google Gemini";
+                                        color: api_type == "Google Gemini" ? #2563eb : #64748b;
+                                        font-size: 12px;
+                                        font-weight: api_type == "Google Gemini" ? 700 : 400;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        animate color { duration: 160ms; }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

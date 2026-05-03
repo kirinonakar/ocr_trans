@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 slint::include_modules!();
 
 mod win_utils;
@@ -380,22 +380,8 @@ async fn main() -> Result<()> {
 
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
-            let default_model = get_model_name();
-            let lm_models: Vec<slint::SharedString> = vec![
-                default_model.clone().into(),
-                "unsloth/gemma-4-26b-a4b-it".into(),
-                "qwen/qwen3.5-9b".into(),
-                "translate-gemma-12b-it".into(),
-                "gemma-4-e4b-it".into(),
-                "gemma-4-31b-it".into(),
-                "qwen3.5-4b".into()
-            ];
-            main.set_model_options(slint::ModelRc::from(lm_models.as_slice()));
-            main.set_model_name(default_model.into());
-            main.set_model_index(0);
             main.set_api_key("lm-studio".into());
-            main.set_system_prompt(main.get_system_prompt()); // Preserve current prompt
-
+            // Model sync will be triggered separately by sync_lmstudio_models() from UI
         }
     });
 
@@ -412,19 +398,14 @@ async fn main() -> Result<()> {
         }
     });
     
-    // Refresh Models Callback
-    let main_weak_refresh = main_window.as_weak();
-    let http_refresh = http_client.clone();
-    main_window.on_refresh_models_clicked(move || {
-        let main = main_weak_refresh.unwrap();
-        let endpoint = main.get_api_endpoint().to_string();
-        let api_key = main.get_api_key().to_string();
-        if main.get_api_type().as_str() == "Google Gemini" {
-            persist_google_api_key(&api_key);
-        }
-        let http = http_refresh.clone();
-        
-        slint::spawn_local(async move {
+    // Sync LMStudio Models helper (shared logic)
+    fn make_sync_lm_future(
+        http: reqwest::Client,
+        main: MainWindow,
+    ) -> impl std::future::Future<Output = ()> {
+        async move {
+            let endpoint = main.get_api_endpoint().to_string();
+            let api_key = main.get_api_key().to_string();
             let client = api::ApiClient::new(http, endpoint, api_key, String::new(), String::new(), 0.0);
             match client.get_models().await {
                 Ok(models) => {
@@ -433,7 +414,7 @@ async fn main() -> Result<()> {
                     let default_model_str = get_model_name();
 
                     main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
-                    
+
                     let mut found_index = None;
                     if let Some(idx) = slint_models.iter().position(|m| m.as_str() == current_model_str) {
                         found_index = Some(idx);
@@ -458,7 +439,29 @@ async fn main() -> Result<()> {
                     log::error!("Failed to fetch models: {:?}", e);
                 }
             }
-        }).unwrap();
+        }
+    }
+
+    // Sync LMStudio Models Callback (triggered on provider switch to LMStudio)
+    let main_weak_sync = main_window.as_weak();
+    let http_sync = http_client.clone();
+    main_window.on_sync_lmstudio_models(move || {
+        let main = main_weak_sync.unwrap();
+        let http = http_sync.clone();
+        slint::spawn_local(make_sync_lm_future(http, main)).unwrap();
+    });
+
+    // Refresh Models Callback
+    let main_weak_refresh = main_window.as_weak();
+    let http_refresh = http_client.clone();
+    main_window.on_refresh_models_clicked(move || {
+        let main = main_weak_refresh.unwrap();
+        let api_key = main.get_api_key().to_string();
+        if main.get_api_type().as_str() == "Google Gemini" {
+            persist_google_api_key(&api_key);
+        }
+        let http = http_refresh.clone();
+        slint::spawn_local(make_sync_lm_future(http, main)).unwrap();
     });
 
     // Overlay Toggle Callback
