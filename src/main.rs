@@ -251,7 +251,7 @@ async fn main() -> Result<()> {
     main_window.set_api_key("lm-studio".into());
     main_window.set_system_prompt(get_system_prompt().into());
     main_window.set_interval(0.0);
-    main_window.set_base_font_size(18.0);
+    main_window.set_base_font_size(16.0);
 
     // Initial Model Sync (Localhost/LM Studio)
     let main_weak_startup = main_window.as_weak();
@@ -986,7 +986,7 @@ async fn main() -> Result<()> {
                                 if let Some(overlay) = ow.upgrade() {
                                     overlay.set_translated_text("Searching...".into());
                                     overlay.set_is_searching(true);
-                                    let base_fs = mw.upgrade().map(|m| m.get_base_font_size()).unwrap_or(18.0);
+                                    let base_fs = mw.upgrade().map(|m| m.get_base_font_size()).unwrap_or(16.0);
                                     let font_size = calculate_font_size("Searching...", overlay.get_window_w(), overlay.get_window_h(), base_fs);
                                     overlay.set_font_size(font_size);
                                     let is_visible = mw.upgrade().map(|m| m.get_overlay_visible()).unwrap_or(true);
@@ -1040,7 +1040,7 @@ async fn main() -> Result<()> {
                                         overlay.set_translated_text(display_text.clone().into());
                                         overlay.set_is_searching(false);
                                         
-                                        let base_fs = mw.upgrade().map(|m| m.get_base_font_size()).unwrap_or(18.0);
+                                        let base_fs = mw.upgrade().map(|m| m.get_base_font_size()).unwrap_or(16.0);
                                         let font_size = calculate_font_size(&display_text, overlay.get_window_w(), overlay.get_window_h(), base_fs);
                                         overlay.set_font_size(font_size);
                                         
@@ -1086,7 +1086,7 @@ async fn main() -> Result<()> {
                                     if let Some(overlay) = ow.upgrade() {
                                         overlay.set_translated_text(err_msg.clone().into());
                                         overlay.set_is_searching(false);
-                                        let base_fs = mw.upgrade().map(|m| m.get_base_font_size()).unwrap_or(18.0);
+                                        let base_fs = mw.upgrade().map(|m| m.get_base_font_size()).unwrap_or(16.0);
                                         let font_size = calculate_font_size(&err_msg, overlay.get_window_w(), overlay.get_window_h(), base_fs);
                                         overlay.set_font_size(font_size);
                                     }
