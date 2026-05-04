@@ -1,4 +1,4 @@
-﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 slint::include_modules!();
 
 mod win_utils;
@@ -234,6 +234,7 @@ async fn main() -> Result<()> {
 
     // Setup initial window states
     main_window.window().set_size(slint::LogicalSize::new(400.0, 780.0));
+    textbox_window.window().set_size(slint::LogicalSize::new(600.0, 200.0));
     main_window.set_api_endpoint("http://localhost:1234/v1".into());
     let default_model = get_model_name();
     let lm_models: Vec<slint::SharedString> = vec![

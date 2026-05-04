@@ -1,4 +1,4 @@
-﻿import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox, TextEdit, ScrollView } from "std-widgets.slint";
+import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox, TextEdit, ScrollView } from "std-widgets.slint";
 
 export component MainWindow inherits Window {
     title: "OCR Translator";
@@ -180,8 +180,10 @@ export component MainWindow inherits Window {
                 VerticalLayout {
                     spacing: 4px;
                     HorizontalLayout {
-                        Text { text: "Temperature: "; color: #64748b; font-size: 12px; }
+                        spacing: 4px;
+                        Text { text: "Temperature:"; color: #64748b; font-size: 12px; }
                         Text { text: round(temperature * 10) / 10; color: #1e293b; font-size: 12px; font-weight: 700; }
+                        Rectangle { } // Flexible spacer to push content left
                     }
                     Slider {
                         minimum: 0.0;
@@ -425,8 +427,8 @@ export component TextboxWindow inherits Window {
     title: "Result";
     icon: @image-url("../app.ico");
     always-on-top: true;
-    preferred-width: 500px;
-    preferred-height: 400px;
+    preferred-width: 600px;
+    preferred-height: 200px;
     min-width: 320px;
     min-height: 100px;
     background: #f8fafc;
