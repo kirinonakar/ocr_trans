@@ -366,16 +366,14 @@ async fn main() -> Result<()> {
         if api_type == "Google Gemini" {
             main.set_api_endpoint("https://generativelanguage.googleapis.com".into());
             let gemini_models: Vec<slint::SharedString> = vec![
-                "gemini-3.1-flash-lite-preview".into(), 
-                "gemini-3-flash-preview".into(), 
-                "gemini-3.1-pro-preview".into(),
-                "gemini-2.5-flash".into(),
-                "gemini-2.5-flash-lite".into(),
+                "gemini-flash-lite-latest".into(), 
+                "gemini-flash-latest".into(), 
+                "gemini-pro-lates".into(),
                 "gemma-4-26b-a4b-it".into(),
                 "gemma-4-31b-it".into()
             ];
             main.set_model_options(slint::ModelRc::from(gemini_models.as_slice()));
-            main.set_model_name("gemini-3.1-flash-lite-preview".into());
+            main.set_model_name("gemini-flash-lite-latest".into());
             main.set_model_index(0);
             main.set_api_key(get_gemini_key().unwrap_or_default().into());
             main.set_system_prompt(main.get_system_prompt()); // Preserve current prompt if user edited it, or we could reset to default

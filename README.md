@@ -15,8 +15,7 @@ A real-time screen OCR and translation tool built with Rust and Slint powered by
 - **Dynamic scaling**: Font size automatically adjusts to fit the text within your selected area.
 - **Clipboard Sync**: Translated text is automatically copied to the system clipboard for easy use elsewhere.
 - **Multi-API Support**: 
-  - **Google Gemini**: Supports gemini-3.1-pro-preview, gemini-3.1-flash-lite-preview, gemini-3-flash-preview, gemma-4-26b-a4b-it, gemma-4-31b-it.
-    - The API key is stored as a Generic Credential in Windows Credential Manager and sent with the `x-goog-api-key` header.
+  - **Google Gemini**: The API key is stored as a Generic Credential in Windows Credential Manager and sent with the `x-goog-api-key` header.
   - **LMStudio / Ollama**: Works with any OpenAI-compatible local AI endpoint. (Default: unsloth/gemma-4-26b-a4b-it or user-defined)
     - Recommended: gemma-4-26b-a4b (best balance), gemma-4-31b-it (best quality), qwen3.5-9b (fast)
     - Disable thinking for faster response
