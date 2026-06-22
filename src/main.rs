@@ -357,6 +357,7 @@ async fn main() -> Result<()> {
             let api_key = main.get_api_key().to_string();
             
             if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") {
+                let saved_config = load_provider_config();
                 let client = api::ApiClient::new(http_startup, endpoint, api_key, String::new(), String::new(), 0.0);
                 if let Ok(models) = client.get_models().await {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
@@ -373,7 +374,11 @@ async fn main() -> Result<()> {
                     if let Some(idx) = slint_models.iter().position(|m| m.as_str() == current_model_str) {
                         found_index = Some(idx);
                     } else if let Some(idx) = slint_models.iter().position(|m| m.as_str() == default_model_str) {
-                         found_index = Some(idx);
+                        found_index = Some(idx);
+                    } else if !saved_config.lm_model.is_empty() {
+                        if let Some(idx) = slint_models.iter().position(|m| m.as_str() == saved_config.lm_model) {
+                            found_index = Some(idx);
+                        }
                     }
                     
                     let main_weak = main.as_weak();
@@ -458,38 +463,68 @@ async fn main() -> Result<()> {
     let main_weak_api_config = main_window.as_weak();
     main_window.on_api_type_changed(move |api_type| {
         let main = main_weak_api.unwrap();
+        let current = load_provider_config();
         if api_type == "Google Gemini" {
             main.set_api_endpoint("https://generativelanguage.googleapis.com".into());
-            let gemini_models: Vec<slint::SharedString> = vec![
-                "gemini-flash-lite-latest".into(), 
-                "gemini-flash-latest".into(), 
-                "gemini-pro-latest".into(),
-                "gemma-4-26b-a4b-it".into(),
-                "gemma-4-31b-it".into()
-            ];
-            main.set_model_options(slint::ModelRc::from(gemini_models.as_slice()));
-            main.set_model_name("gemini-flash-lite-latest".into());
-            main.set_model_index(0);
             main.set_api_key(get_gemini_key().unwrap_or_default().into());
+
+            let gemini_base: Vec<&str> = vec![
+                "gemini-flash-lite-latest",
+                "gemini-flash-latest",
+                "gemini-pro-latest",
+                "gemma-4-26b-a4b-it",
+                "gemma-4-31b-it"
+            ];
+            let mut gemini_models: Vec<String> = gemini_base.into_iter().map(|s| s.to_string()).collect();
+            if !current.gemini_model.is_empty() && !gemini_models.contains(&current.gemini_model) {
+                gemini_models.push(current.gemini_model.clone());
+            }
+            let gemini_models_slint: Vec<slint::SharedString> = gemini_models.iter().map(|s| s.into()).collect();
+            main.set_model_options(slint::ModelRc::from(gemini_models_slint.as_slice()));
+
+            let idx = gemini_models.iter().position(|m| m == &current.gemini_model).unwrap_or(0);
+            main.set_model_name(gemini_models_slint[idx].clone());
+            main.set_model_index(idx as i32);
             main.set_system_prompt(main.get_system_prompt());
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
             main.set_api_key("lm-studio".into());
+
+            // Restore saved LMStudio model from config
+            let default_model = get_model_name();
+            let lm_base: Vec<&str> = vec![
+                "unsloth/gemma-4-26b-a4b-it",
+                "qwen/qwen3.5-9b",
+                "translate-gemma-12b-it",
+                "gemma-4-e4b-it",
+                "gemma-4-31b-it",
+                "qwen3.5-4b"
+            ];
+            let mut lm_models: Vec<String> = lm_base.into_iter().map(|s| s.to_string()).collect();
+            if !lm_models.contains(&default_model) {
+                lm_models.insert(0, default_model.clone());
+            }
+            if !current.lm_model.is_empty() && !lm_models.contains(&current.lm_model) {
+                lm_models.push(current.lm_model.clone());
+            }
+            let lm_models_slint: Vec<slint::SharedString> = lm_models.iter().map(|s| s.into()).collect();
+            main.set_model_options(slint::ModelRc::from(lm_models_slint.as_slice()));
+
+            let idx = lm_models.iter().position(|m| m == &current.lm_model).unwrap_or(0);
+            main.set_model_name(lm_models_slint[idx].clone());
+            main.set_model_index(idx as i32);
         }
 
         // Save provider change with current model
         let config_main = main_weak_api_config.unwrap();
-        let current = load_provider_config();
         let mut config = ProviderConfig {
             provider: api_type.to_string(),
-            ..ProviderConfig::default()
+            ..current
         };
         if api_type == "LMStudio" {
             config.lm_model = config_main.get_model_name().to_string();
-            config.gemini_model = current.gemini_model;
         } else {
             config.gemini_model = config_main.get_model_name().to_string();
-            config.lm_model = current.lm_model;
         }
         save_provider_config(&config);
     });
@@ -534,6 +569,7 @@ async fn main() -> Result<()> {
         async move {
             let endpoint = main.get_api_endpoint().to_string();
             let api_key = main.get_api_key().to_string();
+            let saved_config = load_provider_config();
             let client = api::ApiClient::new(http, endpoint, api_key, String::new(), String::new(), 0.0);
             match client.get_models().await {
                 Ok(models) => {
@@ -548,6 +584,10 @@ async fn main() -> Result<()> {
                         found_index = Some(idx);
                     } else if let Some(idx) = slint_models.iter().position(|m| m.as_str() == default_model_str) {
                         found_index = Some(idx);
+                    } else if !saved_config.lm_model.is_empty() {
+                        if let Some(idx) = slint_models.iter().position(|m| m.as_str() == saved_config.lm_model) {
+                            found_index = Some(idx);
+                        }
                     }
 
                     let main_weak = main.as_weak();
