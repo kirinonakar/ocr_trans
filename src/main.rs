@@ -58,6 +58,48 @@ fn persist_google_api_key(api_key: &str) {
     }
 }
 
+fn read_cerebras_txt_key() -> Option<String> {
+    // 1. Check current directory
+    if let Ok(cwd) = std::env::current_dir() {
+        let path = cwd.join("cerebras.txt");
+        if let Ok(key) = std::fs::read_to_string(path) {
+            let key = key.trim().to_string();
+            if !key.is_empty() {
+                return Some(key);
+            }
+        }
+    }
+    // 2. Check executable directory
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let path = exe_dir.join("cerebras.txt");
+            if let Ok(key) = std::fs::read_to_string(path) {
+                let key = key.trim().to_string();
+                if !key.is_empty() {
+                    return Some(key);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn get_cerebras_key() -> Option<String> {
+    if let Some(key) = read_cerebras_txt_key() {
+        if let Err(err) = credentials::store_cerebras_api_key(&key) {
+            log::warn!("Failed to save cerebras.txt key to Credential Manager: {err:?}");
+        }
+        return Some(key);
+    }
+    credentials::read_cerebras_api_key()
+}
+
+fn persist_cerebras_api_key(api_key: &str) {
+    if let Err(err) = credentials::store_cerebras_api_key(api_key) {
+        log::warn!("Failed to update Cerebras API key in Credential Manager: {err:?}");
+    }
+}
+
 const DEFAULT_SYSTEM_PROMPT: &str = "naturally translate into korean. only show translated texts.";
 
 fn get_system_prompt() -> String {
@@ -101,6 +143,8 @@ struct ProviderConfig {
     provider: String,
     lm_model: String,
     gemini_model: String,
+    #[serde(default)]
+    cerebras_model: String,
 }
 
 fn get_config_path() -> Option<std::path::PathBuf> {
@@ -313,6 +357,27 @@ async fn main() -> Result<()> {
         let idx = gemini_models.iter().position(|m| m == &config.gemini_model).unwrap_or(0);
         main_window.set_model_name(gemini_models_slint[idx].clone());
         main_window.set_model_index(idx as i32);
+    } else if config.provider == "Cerebras" {
+        main_window.set_api_endpoint("https://api.cerebras.ai/v1".into());
+        main_window.set_api_key(get_cerebras_key().unwrap_or_default().into());
+        main_window.set_api_type("Cerebras".into());
+        main_window.set_api_type_index(2);
+
+        let cerebras_base: Vec<&str> = vec![
+            "gemma-4-31b",
+            "gpt-oss-120b",
+            "zai-glm-4.7"
+        ];
+        let mut cerebras_models: Vec<String> = cerebras_base.into_iter().map(|s| s.to_string()).collect();
+        if !config.cerebras_model.is_empty() && !cerebras_models.contains(&config.cerebras_model) {
+            cerebras_models.push(config.cerebras_model.clone());
+        }
+        let cerebras_models_slint: Vec<slint::SharedString> = cerebras_models.iter().map(|s| s.into()).collect();
+        main_window.set_model_options(slint::ModelRc::from(cerebras_models_slint.as_slice()));
+
+        let idx = cerebras_models.iter().position(|m| m == &config.cerebras_model).unwrap_or(0);
+        main_window.set_model_name(cerebras_models_slint[idx].clone());
+        main_window.set_model_index(idx as i32);
     } else {
         // LMStudio (default)
         main_window.set_api_endpoint("http://localhost:1234/v1".into());
@@ -486,6 +551,25 @@ async fn main() -> Result<()> {
             main.set_model_name(gemini_models_slint[idx].clone());
             main.set_model_index(idx as i32);
             main.set_system_prompt(main.get_system_prompt());
+        } else if api_type == "Cerebras" {
+            main.set_api_endpoint("https://api.cerebras.ai/v1".into());
+            main.set_api_key(get_cerebras_key().unwrap_or_default().into());
+
+            let cerebras_base: Vec<&str> = vec![
+                "gemma-4-31b",
+                "gpt-oss-120b",
+                "zai-glm-4.7"
+            ];
+            let mut cerebras_models: Vec<String> = cerebras_base.into_iter().map(|s| s.to_string()).collect();
+            if !current.cerebras_model.is_empty() && !cerebras_models.contains(&current.cerebras_model) {
+                cerebras_models.push(current.cerebras_model.clone());
+            }
+            let cerebras_models_slint: Vec<slint::SharedString> = cerebras_models.iter().map(|s| s.into()).collect();
+            main.set_model_options(slint::ModelRc::from(cerebras_models_slint.as_slice()));
+
+            let idx = cerebras_models.iter().position(|m| m == &current.cerebras_model).unwrap_or(0);
+            main.set_model_name(cerebras_models_slint[idx].clone());
+            main.set_model_index(idx as i32);
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
             main.set_api_key("lm-studio".into());
@@ -523,6 +607,8 @@ async fn main() -> Result<()> {
         };
         if api_type == "LMStudio" {
             config.lm_model = config_main.get_model_name().to_string();
+        } else if api_type == "Cerebras" {
+            config.cerebras_model = config_main.get_model_name().to_string();
         } else {
             config.gemini_model = config_main.get_model_name().to_string();
         }
@@ -535,6 +621,8 @@ async fn main() -> Result<()> {
             let api_key = api_key.to_string();
             if main.get_api_type().as_str() == "Google Gemini" {
                 persist_google_api_key(&api_key);
+            } else if main.get_api_type().as_str() == "Cerebras" {
+                persist_cerebras_api_key(&api_key);
             }
 
             let mut s = state_api_key.lock().unwrap();
@@ -553,6 +641,8 @@ async fn main() -> Result<()> {
             };
             if main.get_api_type().as_str() == "LMStudio" {
                 config.lm_model = model_name.to_string();
+            } else if main.get_api_type().as_str() == "Cerebras" {
+                config.cerebras_model = model_name.to_string();
             } else {
                 config.gemini_model = model_name.to_string();
             }
@@ -627,6 +717,8 @@ async fn main() -> Result<()> {
         let api_key = main.get_api_key().to_string();
         if main.get_api_type().as_str() == "Google Gemini" {
             persist_google_api_key(&api_key);
+        } else if main.get_api_type().as_str() == "Cerebras" {
+            persist_cerebras_api_key(&api_key);
         }
         let http = http_refresh.clone();
         slint::spawn_local(make_sync_lm_future(http, main)).unwrap();
@@ -814,6 +906,8 @@ async fn main() -> Result<()> {
                 // (Removed automatic sync on start to prevent model reverting bug)
                 if main.get_api_type().as_str() == "Google Gemini" {
                     persist_google_api_key(&main.get_api_key().to_string());
+                } else if main.get_api_type().as_str() == "Cerebras" {
+                    persist_cerebras_api_key(&main.get_api_key().to_string());
                 }
                 
                 let mut s = state_clone.lock().unwrap();
@@ -1004,6 +1098,8 @@ async fn main() -> Result<()> {
             // (Removed automatic sync on area selected to prevent model reverting bug)
             if main.get_api_type().as_str() == "Google Gemini" {
                 persist_google_api_key(&main.get_api_key().to_string());
+            } else if main.get_api_type().as_str() == "Cerebras" {
+                persist_cerebras_api_key(&main.get_api_key().to_string());
             }
 
             let mut s = state_for_selection.lock().unwrap();

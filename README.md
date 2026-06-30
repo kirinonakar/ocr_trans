@@ -16,11 +16,11 @@ A real-time screen OCR and translation tool built with Rust and Slint powered by
 - **Clipboard Sync**: Translated text is automatically copied to the system clipboard for easy use elsewhere.
 - **Multi-API Support**: 
   - **Google Gemini**: The API key is stored as a Generic Credential in Windows Credential Manager and sent with the `x-goog-api-key` header.
+  - **Cerebras**: Extremely fast inference provider. The API key is stored as a Generic Credential in Windows Credential Manager.
   - **LMStudio / Ollama**: Works with any OpenAI-compatible local AI endpoint. (Default: unsloth/gemma-4-26b-a4b-it or user-defined)
     - Recommended: gemma-4-26b-a4b (best balance), gemma-4-31b-it (best quality), qwen3.5-9b (fast)
     - Disable thinking for faster response
 - **External Config Files**:
-  - `gemini.txt`: Auto-loads your Google Gemini API key from the current working directory or the executable directory only. If a value is found, it is saved to Windows Credential Manager.
   - `system_prompt.txt`: Auto-loads your custom translation instructions.
   - `model.txt`: Auto-loads your preferred default model name for LMStudio.
 - **Adjustable Creativity**: Use the **Temperature** slider (0.0 - 1.0) to control translation consistency vs. creativity.
@@ -38,10 +38,10 @@ You can download the latest version from the [Releases Page](https://github.com/
 ### Manual build
 
 1. Clone the repository.
-2. (Optional) Create `gemini.txt` (for API key) and `system_prompt.txt` (for custom instructions) in the current working directory or next to the executable.
+2. (Optional) Create `system_prompt.txt` (for custom instructions) in the current working directory or next to the executable.
 3. Run `cargo run --release`. Or `cargo build --release` to generate the binary.
 4. Open the main window:
-   - Select your provider (LMStudio or Google Gemini).
+   - Select your provider (LMStudio, Google Gemini, or Cerebras).
    - Click **SELECT AREA** and drag to select the region you want to translate (e.g. subtitles).
    - Capture starts automatically. Use the **STOP** button to pause, or **Win + Alt + A** to re-select the area.
    - Use the **Overlay** checkbox to hide/show the translation text while running.

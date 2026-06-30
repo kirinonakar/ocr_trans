@@ -1,10 +1,11 @@
 use anyhow::Result;
 
 pub const GOOGLE_API_KEY_TARGET: &str = "ocr_trans/google-gemini-api-key";
+pub const CEREBRAS_API_KEY_TARGET: &str = "ocr_trans/cerebras-api-key";
 
 #[cfg(target_os = "windows")]
 mod platform {
-    use super::GOOGLE_API_KEY_TARGET;
+    use super::{GOOGLE_API_KEY_TARGET, CEREBRAS_API_KEY_TARGET};
     use anyhow::{Context, Result};
     use std::ffi::c_void;
     use windows::core::{HSTRING, PWSTR};
@@ -14,17 +15,14 @@ mod platform {
         CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
     };
 
-    const USER_NAME: &str = "Google Gemini";
-    const COMMENT: &str = "OCR Translator Google Gemini API key";
-
-    pub fn read_google_api_key() -> Option<String> {
-        let target = HSTRING::from(GOOGLE_API_KEY_TARGET);
+    fn read_credential(target: &str) -> Option<String> {
+        let target_h = HSTRING::from(target);
         let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
 
-        let read_result = unsafe { CredReadW(&target, CRED_TYPE_GENERIC, 0, &mut credential) };
+        let read_result = unsafe { CredReadW(&target_h, CRED_TYPE_GENERIC, 0, &mut credential) };
         if let Err(err) = read_result {
             if !is_not_found(&err) {
-                log::warn!("Failed to read Google API key from Credential Manager: {err}");
+                log::warn!("Failed to read credential '{}' from Credential Manager: {err}", target);
             }
             return None;
         }
@@ -55,42 +53,42 @@ mod platform {
             .filter(|key| !key.is_empty())
     }
 
-    pub fn store_google_api_key(api_key: &str) -> Result<()> {
+    fn store_credential(target: &str, user_name: &str, comment: &str, api_key: &str) -> Result<()> {
         let api_key = api_key.trim();
         if api_key.is_empty() {
-            return delete_google_api_key();
+            return delete_credential(target);
         }
 
-        let mut target = to_wide(GOOGLE_API_KEY_TARGET);
-        let mut user_name = to_wide(USER_NAME);
-        let mut comment = to_wide(COMMENT);
+        let mut target_w = to_wide(target);
+        let mut user_name_w = to_wide(user_name);
+        let mut comment_w = to_wide(comment);
         let mut blob = api_key.as_bytes().to_vec();
 
         let credential = CREDENTIALW {
             Flags: CRED_FLAGS(0),
             Type: CRED_TYPE_GENERIC,
-            TargetName: PWSTR(target.as_mut_ptr()),
-            Comment: PWSTR(comment.as_mut_ptr()),
+            TargetName: PWSTR(target_w.as_mut_ptr()),
+            Comment: PWSTR(comment_w.as_mut_ptr()),
             CredentialBlobSize: blob
                 .len()
                 .try_into()
-                .context("Google API key is too large for Credential Manager")?,
+                .context("API key is too large for Credential Manager")?,
             CredentialBlob: blob.as_mut_ptr(),
             Persist: CRED_PERSIST_LOCAL_MACHINE,
-            UserName: PWSTR(user_name.as_mut_ptr()),
+            UserName: PWSTR(user_name_w.as_mut_ptr()),
             ..Default::default()
         };
 
         unsafe { CredWriteW(&credential, 0) }
-            .context("Failed to store Google API key in Credential Manager")
+            .context("Failed to store API key in Credential Manager")
     }
 
-    pub fn delete_google_api_key() -> Result<()> {
-        let target = HSTRING::from(GOOGLE_API_KEY_TARGET);
-        match unsafe { CredDeleteW(&target, CRED_TYPE_GENERIC, 0) } {
+    fn delete_credential(target: &str) -> Result<()> {
+        let target_h = HSTRING::from(target);
+        match unsafe { CredDeleteW(&target_h, CRED_TYPE_GENERIC, 0) } {
             Ok(()) => Ok(()),
             Err(err) if is_not_found(&err) => Ok(()),
-            Err(err) => Err(err).context("Failed to delete Google API key from Credential Manager"),
+            Err(err) => Err(err).context("Failed to delete API key from Credential Manager"),
         }
     }
 
@@ -109,6 +107,22 @@ mod platform {
             windows::core::HRESULT(((error & 0x0000_FFFF) | (7 << 16) | 0x8000_0000) as i32)
         }
     }
+
+    pub fn read_google_api_key() -> Option<String> {
+        read_credential(GOOGLE_API_KEY_TARGET)
+    }
+
+    pub fn store_google_api_key(api_key: &str) -> Result<()> {
+        store_credential(GOOGLE_API_KEY_TARGET, "Google Gemini", "OCR Translator Google Gemini API key", api_key)
+    }
+
+    pub fn read_cerebras_api_key() -> Option<String> {
+        read_credential(CEREBRAS_API_KEY_TARGET)
+    }
+
+    pub fn store_cerebras_api_key(api_key: &str) -> Result<()> {
+        store_credential(CEREBRAS_API_KEY_TARGET, "Cerebras", "OCR Translator Cerebras API key", api_key)
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -122,6 +136,14 @@ mod platform {
     pub fn store_google_api_key(_api_key: &str) -> Result<()> {
         Ok(())
     }
+
+    pub fn read_cerebras_api_key() -> Option<String> {
+        None
+    }
+
+    pub fn store_cerebras_api_key(_api_key: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub fn read_google_api_key() -> Option<String> {
@@ -130,4 +152,12 @@ pub fn read_google_api_key() -> Option<String> {
 
 pub fn store_google_api_key(api_key: &str) -> Result<()> {
     platform::store_google_api_key(api_key)
+}
+
+pub fn read_cerebras_api_key() -> Option<String> {
+    platform::read_cerebras_api_key()
+}
+
+pub fn store_cerebras_api_key(api_key: &str) -> Result<()> {
+    platform::store_cerebras_api_key(api_key)
 }
