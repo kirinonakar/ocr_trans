@@ -12,7 +12,7 @@ export component MainWindow inherits Window {
     in-out property <bool> is_running: false;
     in-out property <string> api_type: "LMStudio";
     in-out property <int> api_type_index: 0;
-    in property <[string]> provider_options: ["LMStudio", "Google Gemini", "Cerebras"];
+    in property <[string]> provider_options: ["LMStudio", "Google Gemini", "Cerebras", "Ollama", "Ollama Cloud"];
     in-out property <string> api_endpoint: "http://localhost:1234/v1";
     in-out property <string> api_key: "";
     in-out property <string> model_name: "google/gemma-4-26b-a4b";
@@ -77,7 +77,7 @@ export component MainWindow inherits Window {
                         current-index <=> api_type_index;
                         selected(value) => {
                             api_type_changed(value);
-                            if (value == "LMStudio") { sync_lmstudio_models(); }
+                            if (value == "LMStudio" || value == "Ollama" || value == "Ollama Cloud") { sync_lmstudio_models(); }
                         }
                     }
                 }
@@ -97,7 +97,7 @@ export component MainWindow inherits Window {
                     LineEdit {
                         text <=> api_key;
                         input-type: password;
-                        placeholder-text: "Leave empty for LMStudio";
+                        placeholder-text: "Leave empty for local providers";
                         edited(value) => { api_key_changed(value); }
                         accepted(value) => { api_key_changed(value); }
                     }

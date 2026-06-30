@@ -100,6 +100,50 @@ fn persist_cerebras_api_key(api_key: &str) {
     }
 }
 
+fn read_ollama_cloud_txt_key() -> Option<String> {
+    // 1. Check current directory
+    if let Ok(cwd) = std::env::current_dir() {
+        let path = cwd.join("ollama_cloud.txt");
+        if let Ok(key) = std::fs::read_to_string(path) {
+            let key = key.trim().to_string();
+            if !key.is_empty() {
+                return Some(key);
+            }
+        }
+    }
+    // 2. Check executable directory
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let path = exe_dir.join("ollama_cloud.txt");
+            if let Ok(key) = std::fs::read_to_string(path) {
+                let key = key.trim().to_string();
+                if !key.is_empty() {
+                    return Some(key);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn get_ollama_cloud_key() -> Option<String> {
+    if let Some(key) = read_ollama_cloud_txt_key() {
+        if let Err(err) = credentials::store_ollama_cloud_api_key(&key) {
+            log::warn!("Failed to save ollama_cloud.txt key to Credential Manager: {err:?}");
+        }
+        return Some(key);
+    }
+
+    credentials::read_ollama_cloud_api_key()
+        .or_else(|| std::env::var("OLLAMA_API_KEY").ok())
+}
+
+fn persist_ollama_cloud_api_key(api_key: &str) {
+    if let Err(err) = credentials::store_ollama_cloud_api_key(api_key) {
+        log::warn!("Failed to update Ollama Cloud API key in Credential Manager: {err:?}");
+    }
+}
+
 const DEFAULT_SYSTEM_PROMPT: &str = "naturally translate into korean. only show translated texts.";
 
 fn get_system_prompt() -> String {
@@ -145,6 +189,36 @@ struct ProviderConfig {
     gemini_model: String,
     #[serde(default)]
     cerebras_model: String,
+    #[serde(default)]
+    ollama_model: String,
+    #[serde(default)]
+    ollama_cloud_model: String,
+}
+
+const PROVIDER_LMSTUDIO: &str = "LMStudio";
+const PROVIDER_GEMINI: &str = "Google Gemini";
+const PROVIDER_CEREBRAS: &str = "Cerebras";
+const PROVIDER_OLLAMA: &str = "Ollama";
+const PROVIDER_OLLAMA_CLOUD: &str = "Ollama Cloud";
+
+fn saved_model_for_provider(config: &ProviderConfig, provider: &str) -> String {
+    match provider {
+        PROVIDER_GEMINI => config.gemini_model.clone(),
+        PROVIDER_CEREBRAS => config.cerebras_model.clone(),
+        PROVIDER_OLLAMA => config.ollama_model.clone(),
+        PROVIDER_OLLAMA_CLOUD => config.ollama_cloud_model.clone(),
+        _ => config.lm_model.clone(),
+    }
+}
+
+fn set_saved_model_for_provider(config: &mut ProviderConfig, provider: &str, model: String) {
+    match provider {
+        PROVIDER_GEMINI => config.gemini_model = model,
+        PROVIDER_CEREBRAS => config.cerebras_model = model,
+        PROVIDER_OLLAMA => config.ollama_model = model,
+        PROVIDER_OLLAMA_CLOUD => config.ollama_cloud_model = model,
+        _ => config.lm_model = model,
+    }
 }
 
 fn get_config_path() -> Option<std::path::PathBuf> {
@@ -334,10 +408,10 @@ async fn main() -> Result<()> {
     let config = load_provider_config();
 
     // Initialize based on saved config (fallback to defaults if empty)
-    if config.provider == "Google Gemini" {
+    if config.provider == PROVIDER_GEMINI {
         main_window.set_api_endpoint("https://generativelanguage.googleapis.com".into());
         main_window.set_api_key(get_gemini_key().unwrap_or_default().into());
-        main_window.set_api_type("Google Gemini".into());
+        main_window.set_api_type(PROVIDER_GEMINI.into());
         main_window.set_api_type_index(1);
 
         let gemini_base: Vec<&str> = vec![
@@ -357,10 +431,10 @@ async fn main() -> Result<()> {
         let idx = gemini_models.iter().position(|m| m == &config.gemini_model).unwrap_or(0);
         main_window.set_model_name(gemini_models_slint[idx].clone());
         main_window.set_model_index(idx as i32);
-    } else if config.provider == "Cerebras" {
+    } else if config.provider == PROVIDER_CEREBRAS {
         main_window.set_api_endpoint("https://api.cerebras.ai/v1".into());
         main_window.set_api_key(get_cerebras_key().unwrap_or_default().into());
-        main_window.set_api_type("Cerebras".into());
+        main_window.set_api_type(PROVIDER_CEREBRAS.into());
         main_window.set_api_type_index(2);
 
         let cerebras_base: Vec<&str> = vec![
@@ -378,11 +452,55 @@ async fn main() -> Result<()> {
         let idx = cerebras_models.iter().position(|m| m == &config.cerebras_model).unwrap_or(0);
         main_window.set_model_name(cerebras_models_slint[idx].clone());
         main_window.set_model_index(idx as i32);
+    } else if config.provider == PROVIDER_OLLAMA {
+        main_window.set_api_endpoint("http://localhost:11434/api".into());
+        main_window.set_api_key("".into());
+        main_window.set_api_type(PROVIDER_OLLAMA.into());
+        main_window.set_api_type_index(3);
+
+        let ollama_base: Vec<&str> = vec![
+            "gemma4",
+            "llava",
+            "moondream",
+            "qwen2.5vl:7b",
+            "gpt-oss:120b-cloud"
+        ];
+        let mut ollama_models: Vec<String> = ollama_base.into_iter().map(|s| s.to_string()).collect();
+        if !config.ollama_model.is_empty() && !ollama_models.contains(&config.ollama_model) {
+            ollama_models.push(config.ollama_model.clone());
+        }
+        let ollama_models_slint: Vec<slint::SharedString> = ollama_models.iter().map(|s| s.into()).collect();
+        main_window.set_model_options(slint::ModelRc::from(ollama_models_slint.as_slice()));
+
+        let idx = ollama_models.iter().position(|m| m == &config.ollama_model).unwrap_or(0);
+        main_window.set_model_name(ollama_models_slint[idx].clone());
+        main_window.set_model_index(idx as i32);
+    } else if config.provider == PROVIDER_OLLAMA_CLOUD {
+        main_window.set_api_endpoint("https://ollama.com/api".into());
+        main_window.set_api_key(get_ollama_cloud_key().unwrap_or_default().into());
+        main_window.set_api_type(PROVIDER_OLLAMA_CLOUD.into());
+        main_window.set_api_type_index(4);
+
+        let ollama_cloud_base: Vec<&str> = vec![
+            "gemma4:31b",
+            "gpt-oss:120b",
+            "gpt-oss:20b",
+        ];
+        let mut ollama_cloud_models: Vec<String> = ollama_cloud_base.into_iter().map(|s| s.to_string()).collect();
+        if !config.ollama_cloud_model.is_empty() && !ollama_cloud_models.contains(&config.ollama_cloud_model) {
+            ollama_cloud_models.push(config.ollama_cloud_model.clone());
+        }
+        let ollama_cloud_models_slint: Vec<slint::SharedString> = ollama_cloud_models.iter().map(|s| s.into()).collect();
+        main_window.set_model_options(slint::ModelRc::from(ollama_cloud_models_slint.as_slice()));
+
+        let idx = ollama_cloud_models.iter().position(|m| m == &config.ollama_cloud_model).unwrap_or(0);
+        main_window.set_model_name(ollama_cloud_models_slint[idx].clone());
+        main_window.set_model_index(idx as i32);
     } else {
         // LMStudio (default)
         main_window.set_api_endpoint("http://localhost:1234/v1".into());
         main_window.set_api_key("lm-studio".into());
-        main_window.set_api_type("LMStudio".into());
+        main_window.set_api_type(PROVIDER_LMSTUDIO.into());
         main_window.set_api_type_index(0);
 
         let default_model = get_model_name();
@@ -421,13 +539,15 @@ async fn main() -> Result<()> {
             let endpoint = main.get_api_endpoint().to_string();
             let api_key = main.get_api_key().to_string();
             
-            if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") {
+            if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") || endpoint.contains("ollama.com") {
                 let saved_config = load_provider_config();
+                let provider = main.get_api_type().to_string();
                 let client = api::ApiClient::new(http_startup, endpoint, api_key, String::new(), String::new(), 0.0);
                 if let Ok(models) = client.get_models().await {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
                     let current_model_str = main.get_model_name().as_str().to_string();
                     let default_model_str = get_model_name();
+                    let saved_model_str = saved_model_for_provider(&saved_config, &provider);
                     
                     // Debug: print what models we got from LM Studio
                     println!("[Startup Sync] Models from API: {:?}", slint_models.iter().map(|m| m.as_str().to_string()).collect::<Vec<_>>());
@@ -440,8 +560,8 @@ async fn main() -> Result<()> {
                         found_index = Some(idx);
                     } else if let Some(idx) = slint_models.iter().position(|m| m.as_str() == default_model_str) {
                         found_index = Some(idx);
-                    } else if !saved_config.lm_model.is_empty() {
-                        if let Some(idx) = slint_models.iter().position(|m| m.as_str() == saved_config.lm_model) {
+                    } else if !saved_model_str.is_empty() {
+                        if let Some(idx) = slint_models.iter().position(|m| m.as_str() == saved_model_str) {
                             found_index = Some(idx);
                         }
                     }
@@ -465,6 +585,7 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(Mutex::new(AppState {
         api_endpoint: main_window.get_api_endpoint().to_string(),
+        api_key: main_window.get_api_key().to_string(),
         model_name: main_window.get_model_name().to_string(),
         interval_sec: 0.0,
         system_prompt: main_window.get_system_prompt().to_string(),
@@ -529,7 +650,7 @@ async fn main() -> Result<()> {
     main_window.on_api_type_changed(move |api_type| {
         let main = main_weak_api.unwrap();
         let current = load_provider_config();
-        if api_type == "Google Gemini" {
+        if api_type == PROVIDER_GEMINI {
             main.set_api_endpoint("https://generativelanguage.googleapis.com".into());
             main.set_api_key(get_gemini_key().unwrap_or_default().into());
 
@@ -551,7 +672,7 @@ async fn main() -> Result<()> {
             main.set_model_name(gemini_models_slint[idx].clone());
             main.set_model_index(idx as i32);
             main.set_system_prompt(main.get_system_prompt());
-        } else if api_type == "Cerebras" {
+        } else if api_type == PROVIDER_CEREBRAS {
             main.set_api_endpoint("https://api.cerebras.ai/v1".into());
             main.set_api_key(get_cerebras_key().unwrap_or_default().into());
 
@@ -569,6 +690,46 @@ async fn main() -> Result<()> {
 
             let idx = cerebras_models.iter().position(|m| m == &current.cerebras_model).unwrap_or(0);
             main.set_model_name(cerebras_models_slint[idx].clone());
+            main.set_model_index(idx as i32);
+        } else if api_type == PROVIDER_OLLAMA {
+            main.set_api_endpoint("http://localhost:11434/api".into());
+            main.set_api_key("".into());
+
+            let ollama_base: Vec<&str> = vec![
+                "gemma4",
+                "llava",
+                "moondream",
+                "qwen2.5vl:7b",
+                "gpt-oss:120b-cloud"
+            ];
+            let mut ollama_models: Vec<String> = ollama_base.into_iter().map(|s| s.to_string()).collect();
+            if !current.ollama_model.is_empty() && !ollama_models.contains(&current.ollama_model) {
+                ollama_models.push(current.ollama_model.clone());
+            }
+            let ollama_models_slint: Vec<slint::SharedString> = ollama_models.iter().map(|s| s.into()).collect();
+            main.set_model_options(slint::ModelRc::from(ollama_models_slint.as_slice()));
+
+            let idx = ollama_models.iter().position(|m| m == &current.ollama_model).unwrap_or(0);
+            main.set_model_name(ollama_models_slint[idx].clone());
+            main.set_model_index(idx as i32);
+        } else if api_type == PROVIDER_OLLAMA_CLOUD {
+            main.set_api_endpoint("https://ollama.com/api".into());
+            main.set_api_key(get_ollama_cloud_key().unwrap_or_default().into());
+
+            let ollama_cloud_base: Vec<&str> = vec![
+                "gemma4:31b",
+                "gpt-oss:120b",
+                "gpt-oss:20b",
+            ];
+            let mut ollama_cloud_models: Vec<String> = ollama_cloud_base.into_iter().map(|s| s.to_string()).collect();
+            if !current.ollama_cloud_model.is_empty() && !ollama_cloud_models.contains(&current.ollama_cloud_model) {
+                ollama_cloud_models.push(current.ollama_cloud_model.clone());
+            }
+            let ollama_cloud_models_slint: Vec<slint::SharedString> = ollama_cloud_models.iter().map(|s| s.into()).collect();
+            main.set_model_options(slint::ModelRc::from(ollama_cloud_models_slint.as_slice()));
+
+            let idx = ollama_cloud_models.iter().position(|m| m == &current.ollama_cloud_model).unwrap_or(0);
+            main.set_model_name(ollama_cloud_models_slint[idx].clone());
             main.set_model_index(idx as i32);
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
@@ -605,13 +766,7 @@ async fn main() -> Result<()> {
             provider: api_type.to_string(),
             ..current
         };
-        if api_type == "LMStudio" {
-            config.lm_model = config_main.get_model_name().to_string();
-        } else if api_type == "Cerebras" {
-            config.cerebras_model = config_main.get_model_name().to_string();
-        } else {
-            config.gemini_model = config_main.get_model_name().to_string();
-        }
+        set_saved_model_for_provider(&mut config, api_type.as_str(), config_main.get_model_name().to_string());
         save_provider_config(&config);
     });
 
@@ -619,10 +774,12 @@ async fn main() -> Result<()> {
     main_window.on_api_key_changed(move |api_key| {
         if let Some(main) = main_weak_api_key.upgrade() {
             let api_key = api_key.to_string();
-            if main.get_api_type().as_str() == "Google Gemini" {
+            if main.get_api_type().as_str() == PROVIDER_GEMINI {
                 persist_google_api_key(&api_key);
-            } else if main.get_api_type().as_str() == "Cerebras" {
+            } else if main.get_api_type().as_str() == PROVIDER_CEREBRAS {
                 persist_cerebras_api_key(&api_key);
+            } else if main.get_api_type().as_str() == PROVIDER_OLLAMA_CLOUD {
+                persist_ollama_cloud_api_key(&api_key);
             }
 
             let mut s = state_api_key.lock().unwrap();
@@ -639,13 +796,7 @@ async fn main() -> Result<()> {
                 provider: main.get_api_type().to_string(),
                 ..current
             };
-            if main.get_api_type().as_str() == "LMStudio" {
-                config.lm_model = model_name.to_string();
-            } else if main.get_api_type().as_str() == "Cerebras" {
-                config.cerebras_model = model_name.to_string();
-            } else {
-                config.gemini_model = model_name.to_string();
-            }
+            set_saved_model_for_provider(&mut config, main.get_api_type().as_str(), model_name.to_string());
             save_provider_config(&config);
         }
     });
@@ -659,6 +810,7 @@ async fn main() -> Result<()> {
         async move {
             let endpoint = main.get_api_endpoint().to_string();
             let api_key = main.get_api_key().to_string();
+            let provider = main.get_api_type().to_string();
             let saved_config = load_provider_config();
             let client = api::ApiClient::new(http, endpoint, api_key, String::new(), String::new(), 0.0);
             match client.get_models().await {
@@ -666,6 +818,7 @@ async fn main() -> Result<()> {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
                     let current_model_str = main.get_model_name().as_str().to_string();
                     let default_model_str = get_model_name();
+                    let saved_model_str = saved_model_for_provider(&saved_config, &provider);
 
                     main.set_model_options(slint::ModelRc::from(slint_models.as_slice()));
 
@@ -674,21 +827,32 @@ async fn main() -> Result<()> {
                         found_index = Some(idx);
                     } else if let Some(idx) = slint_models.iter().position(|m| m.as_str() == default_model_str) {
                         found_index = Some(idx);
-                    } else if !saved_config.lm_model.is_empty() {
-                        if let Some(idx) = slint_models.iter().position(|m| m.as_str() == saved_config.lm_model) {
+                    } else if !saved_model_str.is_empty() {
+                        if let Some(idx) = slint_models.iter().position(|m| m.as_str() == saved_model_str) {
                             found_index = Some(idx);
                         }
                     }
 
                     let main_weak = main.as_weak();
+                    let provider_for_save = provider.clone();
                     slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
                         if let Some(main) = main_weak.upgrade() {
+                            let mut selected_model = None;
                             if let Some(idx) = found_index {
                                 main.set_model_name(slint_models[idx].clone());
                                 main.set_model_index(idx as i32);
+                                selected_model = Some(slint_models[idx].as_str().to_string());
                             } else if let Some(first) = slint_models.first() {
                                 main.set_model_name(first.clone());
                                 main.set_model_index(0);
+                                selected_model = Some(first.as_str().to_string());
+                            }
+
+                            if let Some(model) = selected_model {
+                                let mut config = load_provider_config();
+                                config.provider = provider_for_save.clone();
+                                set_saved_model_for_provider(&mut config, &provider_for_save, model);
+                                save_provider_config(&config);
                             }
                         }
                     });
@@ -715,10 +879,12 @@ async fn main() -> Result<()> {
     main_window.on_refresh_models_clicked(move || {
         let main = main_weak_refresh.unwrap();
         let api_key = main.get_api_key().to_string();
-        if main.get_api_type().as_str() == "Google Gemini" {
+        if main.get_api_type().as_str() == PROVIDER_GEMINI {
             persist_google_api_key(&api_key);
-        } else if main.get_api_type().as_str() == "Cerebras" {
+        } else if main.get_api_type().as_str() == PROVIDER_CEREBRAS {
             persist_cerebras_api_key(&api_key);
+        } else if main.get_api_type().as_str() == PROVIDER_OLLAMA_CLOUD {
+            persist_ollama_cloud_api_key(&api_key);
         }
         let http = http_refresh.clone();
         slint::spawn_local(make_sync_lm_future(http, main)).unwrap();
@@ -904,10 +1070,12 @@ async fn main() -> Result<()> {
                 
                 // Sync with LM Studio if applicable
                 // (Removed automatic sync on start to prevent model reverting bug)
-                if main.get_api_type().as_str() == "Google Gemini" {
+                if main.get_api_type().as_str() == PROVIDER_GEMINI {
                     persist_google_api_key(&main.get_api_key().to_string());
-                } else if main.get_api_type().as_str() == "Cerebras" {
+                } else if main.get_api_type().as_str() == PROVIDER_CEREBRAS {
                     persist_cerebras_api_key(&main.get_api_key().to_string());
+                } else if main.get_api_type().as_str() == PROVIDER_OLLAMA_CLOUD {
+                    persist_ollama_cloud_api_key(&main.get_api_key().to_string());
                 }
                 
                 let mut s = state_clone.lock().unwrap();
@@ -1096,10 +1264,12 @@ async fn main() -> Result<()> {
             
             // Sync with LM Studio if applicable
             // (Removed automatic sync on area selected to prevent model reverting bug)
-            if main.get_api_type().as_str() == "Google Gemini" {
+            if main.get_api_type().as_str() == PROVIDER_GEMINI {
                 persist_google_api_key(&main.get_api_key().to_string());
-            } else if main.get_api_type().as_str() == "Cerebras" {
+            } else if main.get_api_type().as_str() == PROVIDER_CEREBRAS {
                 persist_cerebras_api_key(&main.get_api_key().to_string());
+            } else if main.get_api_type().as_str() == PROVIDER_OLLAMA_CLOUD {
+                persist_ollama_cloud_api_key(&main.get_api_key().to_string());
             }
 
             let mut s = state_for_selection.lock().unwrap();

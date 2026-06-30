@@ -73,6 +73,8 @@ impl ApiClient {
         
         if self.is_gemini_endpoint() {
             self.call_gemini(base64_image).await
+        } else if self.is_ollama_endpoint() {
+            self.call_ollama(base64_image).await
         } else {
             self.call_openai_compatible(base64_image).await
         }
@@ -80,6 +82,23 @@ impl ApiClient {
 
     fn is_gemini_endpoint(&self) -> bool {
         self.endpoint.contains("googleapis.com")
+    }
+
+    fn is_ollama_endpoint(&self) -> bool {
+        let endpoint = self.endpoint.to_lowercase();
+        endpoint.contains("ollama.com")
+            || endpoint.contains(":11434")
+            || endpoint.ends_with("/api")
+    }
+
+    fn ollama_api_url(&self, path: &str) -> String {
+        let base = self.endpoint.trim_end_matches('/');
+        let path = path.trim_start_matches('/');
+        if base.ends_with("/api") {
+            format!("{}/{}", base, path)
+        } else {
+            format!("{}/api/{}", base, path)
+        }
     }
 
     fn prepare_image(&self, img: &image::RgbaImage) -> Result<Vec<u8>> {
@@ -239,9 +258,56 @@ impl ApiClient {
         Ok(text.trim().to_string())
     }
 
+    async fn call_ollama(&self, base64_image: String) -> Result<String> {
+        let url = self.ollama_api_url("chat");
+
+        let payload = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": self.system_prompt.clone(),
+                    "images": [base64_image]
+                }
+            ],
+            "stream": false,
+            "options": {
+                "temperature": self.temperature
+            }
+        });
+
+        let mut req = self.client.post(&url).json(&payload);
+        let api_key = self.api_key.trim();
+        if !api_key.is_empty() {
+            req = req.bearer_auth(api_key);
+        }
+
+        log::info!("Sending Ollama request to: {}", url);
+        let response = req.send().await.context("HTTP request failed")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let err_body = response.text().await?;
+            log::error!("Ollama API Error ({}): {}", status, err_body);
+            anyhow::bail!("Ollama API Error ({}): {}", status, err_body);
+        }
+
+        let json: serde_json::Value = response.json().await.context("Failed to decode JSON")?;
+        log::info!("Ollama response received.");
+
+        let text = json["message"]["content"]
+            .as_str()
+            .context("Missing text in Ollama response. Check if your model supports Vision!")?;
+
+        Ok(text.trim().to_string())
+    }
+
     pub async fn get_models(&self) -> Result<Vec<String>> {
         if self.is_gemini_endpoint() {
             return self.get_gemini_models().await;
+        }
+        if self.is_ollama_endpoint() {
+            return self.get_ollama_models().await;
         }
 
         let url = if self.endpoint.ends_with("/models") {
@@ -269,6 +335,34 @@ impl ApiClient {
             for m in data {
                 if let Some(id) = m["id"].as_str() {
                     models.push(id.trim().to_string());
+                }
+            }
+        }
+
+        Ok(models)
+    }
+
+    async fn get_ollama_models(&self) -> Result<Vec<String>> {
+        let url = self.ollama_api_url("tags");
+
+        let mut req = self.client.get(&url);
+        let api_key = self.api_key.trim();
+        if !api_key.is_empty() {
+            req = req.bearer_auth(api_key);
+        }
+
+        let response = req.send().await.context("Failed to fetch Ollama models")?;
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to fetch Ollama models: {}", response.status());
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let mut models = Vec::new();
+
+        if let Some(data) = json["models"].as_array() {
+            for m in data {
+                if let Some(name) = m["name"].as_str().or_else(|| m["model"].as_str()) {
+                    models.push(name.trim().to_string());
                 }
             }
         }
