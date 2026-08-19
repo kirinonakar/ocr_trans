@@ -16,12 +16,9 @@ A real-time screen OCR and translation tool built with Rust and Slint powered by
 - **Clipboard Sync**: Translated text is automatically copied to the system clipboard for easy use elsewhere.
 - **Multi-API Support**: 
   - **Cloud Providers**:
-    - **Google Gemini, Cerebras, Ollama Cloud**: API key stored in Windows Credential Manager.
+    - **Google Gemini, Cerebras, Ollama Cloud, OpenCode Go, OpenCode Zen**: API key stored in Windows Credential Manager.
   - **Local Providers**:
-    - **Ollama**: Direct integration with local Ollama (`http://localhost:11434/api`). No key required.
-    - **LMStudio / Custom**: Any OpenAI-compatible local AI endpoint. (Default model: gemma-4-26b-a4b-it)
-      - Recommended models: gemma-4-26b-a4b (balanced), gemma-4-31b-it (quality), qwen3.5-9b (fast)
-      - Disable thinking feature for faster responses.
+    - **Ollama, Unsloth Desktop, LMStudio / Custom**
 - **External Config Files**:
   - `system_prompt.txt`: Auto-loads your custom translation instructions.
   - `model.txt`: Auto-loads your preferred default model name for LMStudio.
@@ -43,7 +40,7 @@ You can download the latest version from the [Releases Page](https://github.com/
 2. (Optional) Create `system_prompt.txt` (for custom instructions) in the current working directory or next to the executable.
 3. Run `cargo run --release`. Or `cargo build --release` to generate the binary.
 4. Open the main window:
-   - Select your provider (LMStudio, Google Gemini, Cerebras, Ollama, or Ollama Cloud).
+   - Select your provider (LMStudio, Google Gemini, Cerebras, Ollama, Ollama Cloud, Unsloth Desktop, OpenCode Go, or OpenCode Zen).
    - Click **SELECT AREA** and drag to select the region you want to translate (e.g. subtitles).
    - Capture starts automatically. Use the **STOP** button to pause, or **Win + Alt + A** to re-select the area.
    - Use the **Overlay** checkbox to hide/show the translation text while running.
