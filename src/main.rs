@@ -144,6 +144,39 @@ fn persist_ollama_cloud_api_key(api_key: &str) {
     }
 }
 
+fn get_unsloth_key() -> Option<String> {
+    credentials::read_unsloth_api_key()
+        .or_else(|| std::env::var("UNSLOTH_STUDIO_AUTH_TOKEN").ok())
+}
+
+fn persist_unsloth_api_key(api_key: &str) {
+    if let Err(err) = credentials::store_unsloth_api_key(api_key) {
+        log::warn!("Failed to update Unsloth Desktop API key in Credential Manager: {err:?}");
+    }
+}
+
+fn get_opencode_go_key() -> Option<String> {
+    credentials::read_opencode_go_api_key()
+        .or_else(|| std::env::var("OPENCODE_GO_API_KEY").ok())
+}
+
+fn persist_opencode_go_api_key(api_key: &str) {
+    if let Err(err) = credentials::store_opencode_go_api_key(api_key) {
+        log::warn!("Failed to update OpenCode Go API key in Credential Manager: {err:?}");
+    }
+}
+
+fn get_opencode_zen_key() -> Option<String> {
+    credentials::read_opencode_zen_api_key()
+        .or_else(|| std::env::var("OPENCODE_ZEN_API_KEY").ok())
+}
+
+fn persist_opencode_zen_api_key(api_key: &str) {
+    if let Err(err) = credentials::store_opencode_zen_api_key(api_key) {
+        log::warn!("Failed to update OpenCode Zen API key in Credential Manager: {err:?}");
+    }
+}
+
 const DEFAULT_SYSTEM_PROMPT: &str = "naturally translate into korean. only show translated texts.";
 
 fn get_system_prompt() -> String {
@@ -193,6 +226,14 @@ struct ProviderConfig {
     ollama_model: String,
     #[serde(default)]
     ollama_cloud_model: String,
+    #[serde(default)]
+    unsloth_model: String,
+    #[serde(default)]
+    thinking_level: String,
+    #[serde(default)]
+    opencode_go_model: String,
+    #[serde(default)]
+    opencode_zen_model: String,
 }
 
 const PROVIDER_LMSTUDIO: &str = "LMStudio";
@@ -200,6 +241,17 @@ const PROVIDER_GEMINI: &str = "Google Gemini";
 const PROVIDER_CEREBRAS: &str = "Cerebras";
 const PROVIDER_OLLAMA: &str = "Ollama";
 const PROVIDER_OLLAMA_CLOUD: &str = "Ollama Cloud";
+const PROVIDER_UNSLOTH: &str = "Unsloth Desktop";
+const PROVIDER_OPENCODE_GO: &str = "OpenCode Go";
+const PROVIDER_OPENCODE_ZEN: &str = "OpenCode Zen";
+
+fn configured_thinking_level(config: &ProviderConfig) -> String {
+    match config.thinking_level.trim().to_lowercase().as_str() {
+        "disable" | "disabled" => "disable".to_string(),
+        "low" | "medium" | "high" | "xhigh" | "max" => config.thinking_level.trim().to_lowercase(),
+        _ => "default".to_string(),
+    }
+}
 
 fn saved_model_for_provider(config: &ProviderConfig, provider: &str) -> String {
     match provider {
@@ -207,6 +259,9 @@ fn saved_model_for_provider(config: &ProviderConfig, provider: &str) -> String {
         PROVIDER_CEREBRAS => config.cerebras_model.clone(),
         PROVIDER_OLLAMA => config.ollama_model.clone(),
         PROVIDER_OLLAMA_CLOUD => config.ollama_cloud_model.clone(),
+        PROVIDER_UNSLOTH => config.unsloth_model.clone(),
+        PROVIDER_OPENCODE_GO => config.opencode_go_model.clone(),
+        PROVIDER_OPENCODE_ZEN => config.opencode_zen_model.clone(),
         _ => config.lm_model.clone(),
     }
 }
@@ -217,6 +272,9 @@ fn set_saved_model_for_provider(config: &mut ProviderConfig, provider: &str, mod
         PROVIDER_CEREBRAS => config.cerebras_model = model,
         PROVIDER_OLLAMA => config.ollama_model = model,
         PROVIDER_OLLAMA_CLOUD => config.ollama_cloud_model = model,
+        PROVIDER_UNSLOTH => config.unsloth_model = model,
+        PROVIDER_OPENCODE_GO => config.opencode_go_model = model,
+        PROVIDER_OPENCODE_ZEN => config.opencode_zen_model = model,
         _ => config.lm_model = model,
     }
 }
@@ -273,6 +331,8 @@ struct AppState {
     interval_sec: f32,
     system_prompt: String,
     temperature: f32,
+    thinking_level: String,
+    provider: String,
     last_text: String,
     base_font_size: f32,
     overlay_bg_color: slint::Color,
@@ -496,6 +556,65 @@ async fn main() -> Result<()> {
         let idx = ollama_cloud_models.iter().position(|m| m == &config.ollama_cloud_model).unwrap_or(0);
         main_window.set_model_name(ollama_cloud_models_slint[idx].clone());
         main_window.set_model_index(idx as i32);
+    } else if config.provider == PROVIDER_UNSLOTH {
+        main_window.set_api_endpoint("http://localhost:8888/v1".into());
+        main_window.set_api_key(get_unsloth_key().unwrap_or_default().into());
+        main_window.set_api_type(PROVIDER_UNSLOTH.into());
+        main_window.set_api_type_index(5);
+
+        let mut unsloth_models = vec!["default".to_string()];
+        if !config.unsloth_model.is_empty() && !unsloth_models.contains(&config.unsloth_model) {
+            unsloth_models.push(config.unsloth_model.clone());
+        }
+        let unsloth_models_slint: Vec<slint::SharedString> = unsloth_models.iter().map(|s| s.into()).collect();
+        main_window.set_model_options(slint::ModelRc::from(unsloth_models_slint.as_slice()));
+
+        let idx = unsloth_models.iter().position(|m| m == &config.unsloth_model).unwrap_or(0);
+        main_window.set_model_name(unsloth_models_slint[idx].clone());
+        main_window.set_model_index(idx as i32);
+    } else if config.provider == PROVIDER_OPENCODE_GO {
+        main_window.set_api_endpoint("https://opencode.ai/zen/go/v1".into());
+        main_window.set_api_key(get_opencode_go_key().unwrap_or_default().into());
+        main_window.set_api_type(PROVIDER_OPENCODE_GO.into());
+        main_window.set_api_type_index(6);
+
+        let mut opencode_go_models = vec![
+            "kimi-k3".to_string(),
+            "glm-5.3".to_string(),
+            "deepseek-v4-flash".to_string(),
+            "mimo-v2.5".to_string(),
+            "gpt-5.6-luna".to_string(),
+        ];
+        if !config.opencode_go_model.is_empty() && !opencode_go_models.contains(&config.opencode_go_model) {
+            opencode_go_models.push(config.opencode_go_model.clone());
+        }
+        let opencode_go_models_slint: Vec<slint::SharedString> = opencode_go_models.iter().map(|s| s.into()).collect();
+        main_window.set_model_options(slint::ModelRc::from(opencode_go_models_slint.as_slice()));
+
+        let idx = opencode_go_models.iter().position(|m| m == &config.opencode_go_model).unwrap_or(0);
+        main_window.set_model_name(opencode_go_models_slint[idx].clone());
+        main_window.set_model_index(idx as i32);
+    } else if config.provider == PROVIDER_OPENCODE_ZEN {
+        main_window.set_api_endpoint("https://opencode.ai/zen/v1".into());
+        main_window.set_api_key(get_opencode_zen_key().unwrap_or_default().into());
+        main_window.set_api_type(PROVIDER_OPENCODE_ZEN.into());
+        main_window.set_api_type_index(7);
+
+        let mut opencode_zen_models = vec![
+            "gpt-5.5".to_string(),
+            "claude-sonnet-4-6".to_string(),
+            "deepseek-v4-flash".to_string(),
+            "kimi-k3".to_string(),
+        ];
+        if !config.opencode_zen_model.is_empty() && !opencode_zen_models.contains(&config.opencode_zen_model) {
+            opencode_zen_models.push(config.opencode_zen_model.clone());
+        }
+        let opencode_zen_models_slint: Vec<slint::SharedString> = opencode_zen_models.iter().map(|s| s.into()).collect();
+        main_window.set_model_options(slint::ModelRc::from(opencode_zen_models_slint.as_slice()));
+
+        let idx = opencode_zen_models.iter().position(|m| m == &config.opencode_zen_model).unwrap_or(0);
+        main_window.set_model_name(opencode_zen_models_slint[idx].clone());
+        main_window.set_model_index(idx as i32);
     } else {
         // LMStudio (default)
         main_window.set_api_endpoint("http://localhost:1234/v1".into());
@@ -527,6 +646,7 @@ async fn main() -> Result<()> {
         main_window.set_model_index(idx as i32);
     }
 
+    main_window.set_thinking_level(configured_thinking_level(&config).into());
     main_window.set_system_prompt(get_system_prompt().into());
     main_window.set_interval(0.0);
     main_window.set_base_font_size(16.0);
@@ -539,10 +659,19 @@ async fn main() -> Result<()> {
             let endpoint = main.get_api_endpoint().to_string();
             let api_key = main.get_api_key().to_string();
             
-            if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") || endpoint.contains("ollama.com") {
+            if endpoint.contains("localhost") || endpoint.contains("127.0.0.1") || endpoint.contains("ollama.com") || endpoint.contains("opencode.ai") {
                 let saved_config = load_provider_config();
                 let provider = main.get_api_type().to_string();
-                let client = api::ApiClient::new(http_startup, endpoint, api_key, String::new(), String::new(), 0.0);
+                let client = api::ApiClient::new(
+                    http_startup,
+                    endpoint,
+                    api_key,
+                    String::new(),
+                    String::new(),
+                    0.0,
+                    "default".to_string(),
+                    provider.clone(),
+                );
                 if let Ok(models) = client.get_models().await {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
                     let current_model_str = main.get_model_name().as_str().to_string();
@@ -595,6 +724,8 @@ async fn main() -> Result<()> {
         overlay_text_color: main_window.get_overlay_text_color(),
         overlay_bg_opacity: main_window.get_overlay_bg_opacity(),
         temperature: main_window.get_temperature(),
+        thinking_level: main_window.get_thinking_level().to_string(),
+        provider: main_window.get_api_type().to_string(),
         use_textbox: main_window.get_use_textbox(),
         ..Default::default()
     }));
@@ -731,6 +862,59 @@ async fn main() -> Result<()> {
             let idx = ollama_cloud_models.iter().position(|m| m == &current.ollama_cloud_model).unwrap_or(0);
             main.set_model_name(ollama_cloud_models_slint[idx].clone());
             main.set_model_index(idx as i32);
+        } else if api_type == PROVIDER_UNSLOTH {
+            main.set_api_endpoint("http://localhost:8888/v1".into());
+            main.set_api_key(get_unsloth_key().unwrap_or_default().into());
+
+            let mut unsloth_models = vec!["default".to_string()];
+            if !current.unsloth_model.is_empty() && !unsloth_models.contains(&current.unsloth_model) {
+                unsloth_models.push(current.unsloth_model.clone());
+            }
+            let unsloth_models_slint: Vec<slint::SharedString> = unsloth_models.iter().map(|s| s.into()).collect();
+            main.set_model_options(slint::ModelRc::from(unsloth_models_slint.as_slice()));
+
+            let idx = unsloth_models.iter().position(|m| m == &current.unsloth_model).unwrap_or(0);
+            main.set_model_name(unsloth_models_slint[idx].clone());
+            main.set_model_index(idx as i32);
+        } else if api_type == PROVIDER_OPENCODE_GO {
+            main.set_api_endpoint("https://opencode.ai/zen/go/v1".into());
+            main.set_api_key(get_opencode_go_key().unwrap_or_default().into());
+
+            let mut opencode_go_models = vec![
+                "kimi-k3".to_string(),
+                "glm-5.3".to_string(),
+                "deepseek-v4-flash".to_string(),
+                "mimo-v2.5".to_string(),
+                "gpt-5.6-luna".to_string(),
+            ];
+            if !current.opencode_go_model.is_empty() && !opencode_go_models.contains(&current.opencode_go_model) {
+                opencode_go_models.push(current.opencode_go_model.clone());
+            }
+            let opencode_go_models_slint: Vec<slint::SharedString> = opencode_go_models.iter().map(|s| s.into()).collect();
+            main.set_model_options(slint::ModelRc::from(opencode_go_models_slint.as_slice()));
+
+            let idx = opencode_go_models.iter().position(|m| m == &current.opencode_go_model).unwrap_or(0);
+            main.set_model_name(opencode_go_models_slint[idx].clone());
+            main.set_model_index(idx as i32);
+        } else if api_type == PROVIDER_OPENCODE_ZEN {
+            main.set_api_endpoint("https://opencode.ai/zen/v1".into());
+            main.set_api_key(get_opencode_zen_key().unwrap_or_default().into());
+
+            let mut opencode_zen_models = vec![
+                "glm-5".to_string(),
+                "kimi-k3".to_string(),
+                "deepseek-v4-flash".to_string(),
+                "minimax-m3".to_string(),
+            ];
+            if !current.opencode_zen_model.is_empty() && !opencode_zen_models.contains(&current.opencode_zen_model) {
+                opencode_zen_models.push(current.opencode_zen_model.clone());
+            }
+            let opencode_zen_models_slint: Vec<slint::SharedString> = opencode_zen_models.iter().map(|s| s.into()).collect();
+            main.set_model_options(slint::ModelRc::from(opencode_zen_models_slint.as_slice()));
+
+            let idx = opencode_zen_models.iter().position(|m| m == &current.opencode_zen_model).unwrap_or(0);
+            main.set_model_name(opencode_zen_models_slint[idx].clone());
+            main.set_model_index(idx as i32);
         } else {
             main.set_api_endpoint("http://localhost:1234/v1".into());
             main.set_api_key("lm-studio".into());
@@ -767,6 +951,7 @@ async fn main() -> Result<()> {
             ..current
         };
         set_saved_model_for_provider(&mut config, api_type.as_str(), config_main.get_model_name().to_string());
+        config.thinking_level = config_main.get_thinking_level().to_string();
         save_provider_config(&config);
     });
 
@@ -780,6 +965,12 @@ async fn main() -> Result<()> {
                 persist_cerebras_api_key(&api_key);
             } else if main.get_api_type().as_str() == PROVIDER_OLLAMA_CLOUD {
                 persist_ollama_cloud_api_key(&api_key);
+            } else if main.get_api_type().as_str() == PROVIDER_UNSLOTH {
+                persist_unsloth_api_key(&api_key);
+            } else if main.get_api_type().as_str() == PROVIDER_OPENCODE_GO {
+                persist_opencode_go_api_key(&api_key);
+            } else if main.get_api_type().as_str() == PROVIDER_OPENCODE_ZEN {
+                persist_opencode_zen_api_key(&api_key);
             }
 
             let mut s = state_api_key.lock().unwrap();
@@ -800,6 +991,21 @@ async fn main() -> Result<()> {
             save_provider_config(&config);
         }
     });
+
+    let main_weak_thinking = main_window.as_weak();
+    let state_thinking = state.clone();
+    main_window.on_thinking_level_changed(move |thinking_level| {
+        if let Some(main) = main_weak_thinking.upgrade() {
+            let mut config = load_provider_config();
+            config.provider = main.get_api_type().to_string();
+            config.thinking_level = thinking_level.to_string();
+            set_saved_model_for_provider(&mut config, main.get_api_type().as_str(), main.get_model_name().to_string());
+            save_provider_config(&config);
+            if let Ok(mut state) = state_thinking.lock() {
+                state.thinking_level = thinking_level.to_string();
+            }
+        }
+    });
     
     
     // Sync LMStudio Models helper (shared logic)
@@ -812,7 +1018,16 @@ async fn main() -> Result<()> {
             let api_key = main.get_api_key().to_string();
             let provider = main.get_api_type().to_string();
             let saved_config = load_provider_config();
-            let client = api::ApiClient::new(http, endpoint, api_key, String::new(), String::new(), 0.0);
+            let client = api::ApiClient::new(
+                http,
+                endpoint,
+                api_key,
+                String::new(),
+                String::new(),
+                0.0,
+                "default".to_string(),
+                provider.clone(),
+            );
             match client.get_models().await {
                 Ok(models) => {
                     let slint_models: Vec<slint::SharedString> = models.into_iter().map(|s| s.into()).collect();
@@ -885,6 +1100,12 @@ async fn main() -> Result<()> {
             persist_cerebras_api_key(&api_key);
         } else if main.get_api_type().as_str() == PROVIDER_OLLAMA_CLOUD {
             persist_ollama_cloud_api_key(&api_key);
+        } else if main.get_api_type().as_str() == PROVIDER_UNSLOTH {
+            persist_unsloth_api_key(&api_key);
+        } else if main.get_api_type().as_str() == PROVIDER_OPENCODE_GO {
+            persist_opencode_go_api_key(&api_key);
+        } else if main.get_api_type().as_str() == PROVIDER_OPENCODE_ZEN {
+            persist_opencode_zen_api_key(&api_key);
         }
         let http = http_refresh.clone();
         slint::spawn_local(make_sync_lm_future(http, main)).unwrap();
@@ -1076,6 +1297,8 @@ async fn main() -> Result<()> {
                     persist_cerebras_api_key(&main.get_api_key().to_string());
                 } else if main.get_api_type().as_str() == PROVIDER_OLLAMA_CLOUD {
                     persist_ollama_cloud_api_key(&main.get_api_key().to_string());
+                } else if main.get_api_type().as_str() == PROVIDER_UNSLOTH {
+                    persist_unsloth_api_key(&main.get_api_key().to_string());
                 }
                 
                 let mut s = state_clone.lock().unwrap();
@@ -1090,6 +1313,8 @@ async fn main() -> Result<()> {
                 s.interval_sec = main.get_interval();
                 s.system_prompt = main.get_system_prompt().to_string();
                 s.temperature = main.get_temperature();
+                s.thinking_level = main.get_thinking_level().to_string();
+                s.provider = main.get_api_type().to_string();
                 s.base_font_size = main.get_base_font_size();
                 s.overlay_bg_color = main.get_overlay_bg_color();
                 s.overlay_text_color = main.get_overlay_text_color();
@@ -1270,6 +1495,8 @@ async fn main() -> Result<()> {
                 persist_cerebras_api_key(&main.get_api_key().to_string());
             } else if main.get_api_type().as_str() == PROVIDER_OLLAMA_CLOUD {
                 persist_ollama_cloud_api_key(&main.get_api_key().to_string());
+            } else if main.get_api_type().as_str() == PROVIDER_UNSLOTH {
+                persist_unsloth_api_key(&main.get_api_key().to_string());
             }
 
             let mut s = state_for_selection.lock().unwrap();
@@ -1291,6 +1518,8 @@ async fn main() -> Result<()> {
             s.interval_sec = main.get_interval();
             s.system_prompt = main.get_system_prompt().to_string();
             s.temperature = main.get_temperature();
+            s.thinking_level = main.get_thinking_level().to_string();
+            s.provider = main.get_api_type().to_string();
             s.base_font_size = main.get_base_font_size();
             s.overlay_bg_color = main.get_overlay_bg_color();
             s.overlay_text_color = main.get_overlay_text_color();
@@ -1382,7 +1611,22 @@ async fn main() -> Result<()> {
         loop {
             let (is_running, rect, api_config, step_interval, _base_fs, _use_textbox) = {
                 let s = state_for_worker.lock().unwrap();
-                (s.is_running, s.capture_rect, (s.api_endpoint.clone(), s.api_key.clone(), s.model_name.clone(), s.system_prompt.clone(), s.temperature), s.interval_sec, s.base_font_size, s.use_textbox)
+                (
+                    s.is_running,
+                    s.capture_rect,
+                    (
+                        s.api_endpoint.clone(),
+                        s.api_key.clone(),
+                        s.model_name.clone(),
+                        s.system_prompt.clone(),
+                        s.temperature,
+                        s.thinking_level.clone(),
+                        s.provider.clone(),
+                    ),
+                    s.interval_sec,
+                    s.base_font_size,
+                    s.use_textbox,
+                )
             };
 
             if is_running && !was_running {
@@ -1447,7 +1691,16 @@ async fn main() -> Result<()> {
                             });
                         }
                         
-                        let client = api::ApiClient::new(http_worker.clone(), api_config.0, api_config.1, api_config.2, api_config.3, api_config.4);
+                        let client = api::ApiClient::new(
+                            http_worker.clone(),
+                            api_config.0,
+                            api_config.1,
+                            api_config.2,
+                            api_config.3,
+                            api_config.4,
+                            api_config.5,
+                            api_config.6,
+                        );
                         
                         // Use runtime handle to call async translation from sync thread
                         let api_result = runtime_handle.block_on(async {

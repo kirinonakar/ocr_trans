@@ -4,15 +4,15 @@ export component MainWindow inherits Window {
     title: "OCR Translator";
     icon: @image-url("../app.ico");
     width: 400px;
-    preferred-height: show_style_settings ? 895px : 780px;
-    max-height: show_style_settings ? 895px : 780px;
+    preferred-height: show_style_settings ? 935px : 820px;
+    max-height: show_style_settings ? 935px : 820px;
     background: @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
     default-font-family: "Yu Gothic UI";
 
     in-out property <bool> is_running: false;
     in-out property <string> api_type: "LMStudio";
     in-out property <int> api_type_index: 0;
-    in property <[string]> provider_options: ["LMStudio", "Google Gemini", "Cerebras", "Ollama", "Ollama Cloud"];
+    in property <[string]> provider_options: ["LMStudio", "Google Gemini", "Cerebras", "Ollama", "Ollama Cloud", "Unsloth Desktop", "OpenCode Go", "OpenCode Zen"];
     in-out property <string> api_endpoint: "http://localhost:1234/v1";
     in-out property <string> api_key: "";
     in-out property <string> model_name: "google/gemma-4-26b-a4b";
@@ -23,6 +23,8 @@ export component MainWindow inherits Window {
     in-out property <string> system_prompt: "naturally translate into korean. only show translated texts.";
     in-out property <float> base_font_size: 16;
     in-out property <float> temperature: 0.7;
+    in-out property <string> thinking_level: "default";
+    in property <[string]> thinking_level_options: ["default", "disable", "low", "medium", "high", "xhigh", "max"];
     in-out property <color> overlay_bg_color: #ffffff;
     in-out property <color> overlay_text_color: #1e293b;
     in-out property <float> overlay_bg_opacity: 0.9;
@@ -43,6 +45,7 @@ export component MainWindow inherits Window {
     callback style_changed();
 
     callback model_changed(string);
+    callback thinking_level_changed(string);
     VerticalLayout {
         alignment: start;
         padding: 14px;
@@ -77,7 +80,7 @@ export component MainWindow inherits Window {
                         current-index <=> api_type_index;
                         selected(value) => {
                             api_type_changed(value);
-                            if (value == "LMStudio" || value == "Ollama" || value == "Ollama Cloud") { sync_lmstudio_models(); }
+                            if (value == "LMStudio" || value == "Ollama" || value == "Ollama Cloud" || value == "Unsloth Desktop" || value == "OpenCode Go" || value == "OpenCode Zen") { sync_lmstudio_models(); }
                         }
                     }
                 }
@@ -134,6 +137,16 @@ export component MainWindow inherits Window {
                         minimum: 0.0;
                         maximum: 1.0;
                         value <=> temperature;
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "Thinking Level:"; color: #64748b; font-size: 12px; }
+                    ComboBox {
+                        model: thinking_level_options;
+                        current-value <=> thinking_level;
+                        selected(value) => { thinking_level_changed(value); }
                     }
                 }
 
@@ -347,7 +360,7 @@ export component MainWindow inherits Window {
 
 
         VerticalLayout {
-            spacing: 12px; // Space between Button and Idle text
+            spacing: 6px; // Keep the Idle marker clear of the bottom edge
             
             Button {
                 text: is_running ? "STOP (Win+Alt+P)" : "START (Win+Alt+P)";

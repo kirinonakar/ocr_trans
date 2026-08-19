@@ -19,8 +19,10 @@ struct GeminiGenerationConfig {
 
 #[derive(Serialize)]
 struct GeminiThinkingConfig {
-    #[serde(rename = "thinkingLevel")]
-    thinking_level: String,
+    #[serde(rename = "thinkingLevel", skip_serializing_if = "Option::is_none")]
+    thinking_level: Option<String>,
+    #[serde(rename = "thinkingBudget", skip_serializing_if = "Option::is_none")]
+    thinking_budget: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -48,10 +50,21 @@ pub struct ApiClient {
     model: String,
     system_prompt: String,
     temperature: f32,
+    thinking_level: String,
+    provider: String,
 }
 
 impl ApiClient {
-    pub fn new(client: Client, endpoint: String, api_key: String, model: String, system_prompt: String, temperature: f32) -> Self {
+    pub fn new(
+        client: Client,
+        endpoint: String,
+        api_key: String,
+        model: String,
+        system_prompt: String,
+        temperature: f32,
+        thinking_level: String,
+        provider: String,
+    ) -> Self {
         // Normalize endpoint: ensure it doesn't end with /v1 or /v1beta if it's the base
         let mut endpoint = endpoint.trim_end_matches('/').to_string();
         if endpoint.is_empty() {
@@ -64,6 +77,8 @@ impl ApiClient {
             model,
             system_prompt,
             temperature,
+            thinking_level,
+            provider,
         }
     }
 
@@ -75,6 +90,8 @@ impl ApiClient {
             self.call_gemini(base64_image).await
         } else if self.is_ollama_endpoint() {
             self.call_ollama(base64_image).await
+        } else if self.is_responses_model() {
+            self.call_openai_responses(base64_image).await
         } else {
             self.call_openai_compatible(base64_image).await
         }
@@ -89,6 +106,124 @@ impl ApiClient {
         endpoint.contains("ollama.com")
             || endpoint.contains(":11434")
             || endpoint.ends_with("/api")
+    }
+
+    fn normalized_thinking_level(&self) -> Option<String> {
+        let level = self.thinking_level.trim().to_lowercase();
+        match level.as_str() {
+            "disable" | "disabled" => Some("disable".to_string()),
+            "low" | "medium" | "high" | "xhigh" | "max" => Some(level),
+            _ => None,
+        }
+    }
+
+    fn gemini_thinking_config(&self) -> Option<GeminiThinkingConfig> {
+        let level = self.normalized_thinking_level()?;
+        if level == "disable" {
+            return Some(GeminiThinkingConfig {
+                thinking_level: None,
+                thinking_budget: Some(0),
+            });
+        }
+
+        let model = self.model.to_lowercase();
+        if model.contains("2.5") {
+            let budget = match level.as_str() {
+                "low" => 1024,
+                "medium" => 4096,
+                "high" | "xhigh" | "max" => 8192,
+                _ => return None,
+            };
+            Some(GeminiThinkingConfig {
+                thinking_level: None,
+                thinking_budget: Some(budget),
+            })
+        } else {
+            let thinking_level = match level.as_str() {
+                "low" => "LOW",
+                "medium" => "MEDIUM",
+                "high" | "xhigh" | "max" => "HIGH",
+                _ => return None,
+            };
+            Some(GeminiThinkingConfig {
+                thinking_level: Some(thinking_level.to_string()),
+                thinking_budget: None,
+            })
+        }
+    }
+
+    fn is_unsloth_endpoint(&self) -> bool {
+        self.provider == "Unsloth Desktop"
+    }
+
+    fn is_responses_model(&self) -> bool {
+        self.provider == "OpenCode Go" && self.model == "gpt-5.6-luna"
+    }
+
+    fn is_opencode_mimo_model(&self) -> bool {
+        self.provider == "OpenCode Go" && self.model.starts_with("mimo-v2.5")
+    }
+
+    fn is_opencode_provider(&self) -> bool {
+        self.provider == "OpenCode Go" || self.provider == "OpenCode Zen"
+    }
+
+    fn apply_openai_thinking(&self, payload: &mut serde_json::Value) {
+        let Some(level) = self.normalized_thinking_level() else {
+            return;
+        };
+
+        if self.is_unsloth_endpoint() {
+            payload["enable_thinking"] = serde_json::Value::Bool(level != "disable");
+            if level != "disable" {
+                payload["reasoning_effort"] = serde_json::Value::String(level);
+            }
+            return;
+        }
+
+        if self.is_opencode_mimo_model() {
+            if level == "disable" {
+                payload["thinking"] = serde_json::json!({ "type": "disabled" });
+            } else {
+                let effort = match level.as_str() {
+                    "xhigh" | "max" => "high",
+                    _ => level.as_str(),
+                };
+                payload["reasoning_effort"] = serde_json::Value::String(effort.to_string());
+            }
+            return;
+        }
+
+        if level == "disable" {
+            payload["reasoning_effort"] = serde_json::Value::String("none".to_string());
+        } else {
+            payload["reasoning_effort"] = serde_json::Value::String(level);
+        }
+    }
+
+    fn apply_ollama_thinking(&self, payload: &mut serde_json::Value) {
+        let Some(level) = self.normalized_thinking_level() else {
+            return;
+        };
+        payload["think"] = if level == "disable" {
+            serde_json::Value::Bool(false)
+        } else {
+            let level = if level == "xhigh" { "max" } else { level.as_str() };
+            serde_json::Value::String(level.to_string())
+        };
+    }
+
+    fn apply_responses_thinking(&self, payload: &mut serde_json::Value) {
+        let Some(level) = self.normalized_thinking_level() else {
+            return;
+        };
+
+        let effort = if level == "disable" {
+            "none".to_string()
+        } else {
+            level
+        };
+        payload["reasoning"] = serde_json::json!({ "effort": effort });
     }
 
     fn ollama_api_url(&self, path: &str) -> String {
@@ -135,12 +270,7 @@ impl ApiClient {
             self.endpoint, model
         );
 
-        let mut thinking_config = None;
-        if self.model.to_lowercase().contains("gemma") {
-            thinking_config = Some(GeminiThinkingConfig {
-                thinking_level: "MINIMAL".to_string(),
-            });
-        }
+        let thinking_config = self.gemini_thinking_config();
 
         let request = GeminiRequest {
             contents: vec![GeminiContent {
@@ -219,7 +349,7 @@ impl ApiClient {
             format!("{}/chat/completions", self.endpoint)
         };
         
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "model": self.model,
             "messages": [
                 {
@@ -229,9 +359,14 @@ impl ApiClient {
                         { "type": "image_url", "image_url": { "url": format!("data:image/jpeg;base64,{}", base64_image) } }
                     ]
                 }
-            ],
-            "temperature": self.temperature
+            ]
         });
+        // MiMo V2.5 does not support custom temperature values. Omitting the
+        // field avoids a 400 from the OpenCode Go MiMo adapter.
+        if !self.is_opencode_provider() {
+            payload["temperature"] = serde_json::json!(self.temperature);
+        }
+        self.apply_openai_thinking(&mut payload);
 
         let mut req = self.client.post(&url).json(&payload);
         if !self.api_key.is_empty() {
@@ -258,10 +393,80 @@ impl ApiClient {
         Ok(text.trim().to_string())
     }
 
+    async fn call_openai_responses(&self, base64_image: String) -> Result<String> {
+        let url = if self.endpoint.ends_with("/responses") {
+            self.endpoint.clone()
+        } else {
+            format!("{}/responses", self.endpoint)
+        };
+
+        // OpenCode Go's GPT 5.6 Luna is exposed through the Responses API.
+        // Responses uses input_text/input_image rather than chat-completion
+        // messages and image_url content parts.
+        let mut payload = serde_json::json!({
+            "model": self.model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": self.system_prompt.clone() },
+                        { "type": "input_image", "image_url": format!("data:image/jpeg;base64,{}", base64_image) }
+                    ]
+                }
+            ]
+        });
+        self.apply_responses_thinking(&mut payload);
+
+        let mut req = self.client.post(&url).json(&payload);
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+
+        log::info!("Sending OpenAI Responses request to: {}", url);
+        let response = req.send().await.context("HTTP request failed")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let err_body = response.text().await?;
+            log::error!("OpenAI Responses API Error ({}): {}", status, err_body);
+            anyhow::bail!("OpenAI Responses API Error ({}): {}", status, err_body);
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to decode OpenAI Responses JSON")?;
+
+        if let Some(text) = json["output_text"].as_str() {
+            return Ok(text.trim().to_string());
+        }
+
+        let mut text = String::new();
+        if let Some(output) = json["output"].as_array() {
+            for item in output {
+                if let Some(content) = item["content"].as_array() {
+                    for part in content {
+                        if part["type"].as_str() == Some("output_text") {
+                            if let Some(value) = part["text"].as_str() {
+                                text.push_str(value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if text.trim().is_empty() {
+            anyhow::bail!("Missing text in OpenAI Responses response. Check model compatibility.");
+        }
+
+        Ok(text.trim().to_string())
+    }
+
     async fn call_ollama(&self, base64_image: String) -> Result<String> {
         let url = self.ollama_api_url("chat");
 
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "model": self.model,
             "messages": [
                 {
@@ -275,6 +480,7 @@ impl ApiClient {
                 "temperature": self.temperature
             }
         });
+        self.apply_ollama_thinking(&mut payload);
 
         let mut req = self.client.post(&url).json(&payload);
         let api_key = self.api_key.trim();
