@@ -1013,9 +1013,18 @@ fn accept_audio_stream(listener: TcpListener, stop: &AtomicBool) -> Result<Optio
         }
         match listener.accept() {
             Ok((stream, _)) => {
+                // accept()한 소켓은 리스너의 non-blocking 모드를 상속받는다.
+                // PCM 실시간 전송은 WouldBlock 즉시 실패가 아니라 블로킹
+                // 백프레셔로 동작해야 한다. 그렇지 않으면 FFmpeg이 느리게
+                // 읽는 시작 구간에 TCP 버퍼가 차자마자 오디오 연결 전체가
+                // 끊기고 무음/짧은 오디오 트랙으로 남는다.
+                stream
+                    .set_nonblocking(false)
+                    .context("Failed to configure the Windows audio loopback stream")?;
                 stream
                     .set_write_timeout(Some(Duration::from_millis(250)))
                     .context("Failed to configure the Windows audio loopback stream")?;
+                let _ = stream.set_nodelay(true);
                 return Ok(Some(stream));
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -1027,15 +1036,41 @@ fn accept_audio_stream(listener: TcpListener, stop: &AtomicBool) -> Result<Optio
 }
 
 #[cfg(target_os = "windows")]
+fn write_audio_bytes(stream: &mut TcpStream, bytes: &[u8], stop: &AtomicBool) -> bool {
+    use std::io::Write;
+    let mut written = 0;
+    while written < bytes.len() {
+        if stop.load(Ordering::Relaxed) {
+            return false;
+        }
+        match stream.write(&bytes[written..]) {
+            Ok(0) => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Ok(n) => written += n,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::Interrupted
+                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+#[cfg(target_os = "windows")]
 fn write_paced_silence_packet(
     stream: &mut TcpStream,
     packet: &[u8],
     packet_duration: Duration,
     next_packet: &mut Instant,
+    stop: &AtomicBool,
 ) -> bool {
     let now = Instant::now();
     if now >= *next_packet {
-        if stream.write_all(packet).is_err() {
+        if !write_audio_bytes(stream, packet, stop) {
             return false;
         }
         *next_packet = now + packet_duration;
@@ -1063,6 +1098,7 @@ fn feed_silence_until_stop(
             &silent_packet,
             silent_duration,
             &mut next_silent_packet,
+            stop,
         ) {
             break;
         }
@@ -1197,6 +1233,7 @@ fn capture_wasapi_loopback_on_mta(
                             &silent_packet,
                             silent_duration,
                             &mut next_silent_packet,
+                            stop,
                         ) {
                             break;
                         }
@@ -1211,6 +1248,7 @@ fn capture_wasapi_loopback_on_mta(
                         &silent_packet,
                         silent_duration,
                         &mut next_silent_packet,
+                        stop,
                     ) {
                         break;
                     }
@@ -1237,6 +1275,7 @@ fn capture_wasapi_loopback_on_mta(
                         &silent_packet,
                         silent_duration,
                         &mut next_silent_packet,
+                        stop,
                     ) {
                         break;
                     }
@@ -1266,13 +1305,14 @@ fn capture_wasapi_loopback_on_mta(
                         &silent_packet,
                         silent_duration,
                         &mut next_silent_packet,
+                        stop,
                     ) {
                         break;
                     }
                     continue;
                 }
 
-                if stream.write_all(&bytes).is_err() {
+                if !write_audio_bytes(&mut stream, &bytes, stop) {
                     break;
                 }
                 next_silent_packet = Instant::now() +
