@@ -23,6 +23,10 @@ A real-time screen OCR and translation tool built with Rust and Slint powered by
 - **Global Hotkeys**: 
   - **Win + Alt + A**: Trigger area selection.
   - **Win + Alt + P**: Start or Stop the translation process.
+- **Capture Mode**: Compact always-on-top toolbar (`Capture` ↔ `OCR` toggle).
+  - Fullscreen / Window / Scrolling (Windows only) / Region (`Esc` to cancel).
+  - One-shot OCR, OCR+Translate, VLM, color picker.
+  - PNG/MP4 saved as `YYYY-MM-DD_001...` + clipboard copy; recording needs `ffmpeg`.
 
 ## Prerequisites
 - **Rust**: [Install Rust](https://www.rust-lang.org/tools/install)

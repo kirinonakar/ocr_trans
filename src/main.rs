@@ -852,7 +852,7 @@ fn sync_capture_toolbar_size(toolbar: &CaptureToolbarWindow) {
         .set_size(slint::LogicalSize::new(CAPTURE_TOOLBAR_WIDTH, height));
 }
 
-const CAPTURE_TOOLBAR_WIDTH: f32 = 560.0;
+const CAPTURE_TOOLBAR_WIDTH: f32 = 533.0;
 const OCR_WINDOW_WIDTH: f32 = 400.0;
 const OCR_WINDOW_CLOSED_HEIGHT: f32 = 880.0;
 const OCR_WINDOW_STYLE_HEIGHT: f32 = 1000.0;
@@ -951,6 +951,15 @@ fn show_capture_toolbar_at_top_center(toolbar: &CaptureToolbarWindow) -> bool {
     #[cfg(target_os = "windows")]
     configure_capture_toolbar_native_window(toolbar);
     position_capture_toolbar(toolbar);
+    // The first native placement can be supplied by the platform (often top-right) even when
+    // the logical position was set before show(). Re-apply the centered position after one
+    // event-loop turn so the initial visible location is also top-center.
+    let toolbar_weak = toolbar.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(32), move || {
+        if let Some(toolbar) = toolbar_weak.upgrade() {
+            position_capture_toolbar(&toolbar);
+        }
+    });
     true
 }
 
@@ -1201,9 +1210,9 @@ fn begin_fullscreen_toolbar_action_now(
     toolbar.set_active_tooltip(String::new().into());
     sync_capture_toolbar_size(toolbar);
 
-    // xcap's Windows monitor capture uses BitBlt, so explicitly hide the toolbar for a
-    // full-screen still image. The capture is performed synchronously while this callback is
-    // active, then the toolbar is restored before the event loop can observe a no-window state.
+    // xcap's Windows monitor capture uses BitBlt, so move the toolbar outside the virtual desktop
+    // for a full-screen still image. Keeping the window visible avoids a no-window event-loop
+    // shutdown while still guaranteeing that the toolbar is not present in the captured pixels.
     #[cfg(target_os = "windows")]
     configure_capture_toolbar_native_window(toolbar);
     let toolbar_weak = toolbar.as_weak();
@@ -1222,17 +1231,13 @@ fn begin_fullscreen_toolbar_action_now(
             }
         };
         let prefetched_image = if action == SelectionPurpose::Capture {
-            let hidden = toolbar.hide().is_ok();
-            if hidden {
-                // Give the desktop compositor a frame to remove the toolbar before BitBlt.
-                std::thread::sleep(Duration::from_millis(32));
-            } else {
-                log::warn!("Failed to hide capture toolbar before full-screen capture");
-            }
+            toolbar.window().set_position(slint::WindowPosition::Logical(
+                slint::LogicalPosition::new(-10000.0, -10000.0),
+            ));
+            // Give the native window manager a frame to apply the off-screen move before BitBlt.
+            std::thread::sleep(Duration::from_millis(32));
             let image = capture::capture_area(&rect, &None);
-            if hidden {
-                let _ = toolbar.show();
-            }
+            position_capture_toolbar(&toolbar);
             match image {
                 Ok(image) => Some(image),
                 Err(error) => {
@@ -3674,14 +3679,21 @@ async fn main() -> Result<()> {
                 let result = tokio::task::spawn_blocking(move || {
                     let color = capture::sample_pixel_at_point(screen_x, screen_y)?;
                     let hex = format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2]);
-                    capture::copy_text_to_clipboard(&hex)?;
-                    Ok::<String, anyhow::Error>(hex)
+                    let decimal = format!("({}, {}, {})", color[0], color[1], color[2]);
+                    let tooltip = format!("HEX: {hex} | DEC: {decimal}");
+                    let clipboard_text = format!("HEX: {hex}\nDEC: {decimal}");
+                    capture::copy_text_to_clipboard(&clipboard_text)?;
+                    Ok::<String, anyhow::Error>(tooltip)
                 })
                 .await
                 .context("Color picker worker stopped")
                 .and_then(|result| result);
                 match result {
-                    Ok(hex) => set_capture_toolbar_status(&toolbar, format!("Copied {hex}")),
+                    Ok(color_info) => {
+                        toolbar.set_color_picker_tooltip(color_info.clone().into());
+                        toolbar.set_active_tooltip(color_info.clone().into());
+                        set_capture_toolbar_status(&toolbar, format!("Copied {color_info}"));
+                    }
                     Err(error) => set_capture_toolbar_status(&toolbar, format!("Error: {error}")),
                 }
             });

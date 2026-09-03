@@ -316,7 +316,21 @@ pub fn window_target_at_point(_x: i32, _y: i32) -> Option<WindowTarget> {
 }
 
 pub fn capture_window(target: WindowTarget) -> Result<RgbaImage> {
-    capture_area(&target.bounds, &None)
+    let image = capture_area(&target.bounds, &None)?;
+    const WINDOW_CAPTURE_MARGIN: u32 = 2;
+    let crop_width = image.width().saturating_sub(WINDOW_CAPTURE_MARGIN * 2);
+    let crop_height = image.height().saturating_sub(WINDOW_CAPTURE_MARGIN * 2);
+    if crop_width == 0 || crop_height == 0 {
+        anyhow::bail!("The selected window is too small to crop");
+    }
+    Ok(image::imageops::crop_imm(
+        &image,
+        WINDOW_CAPTURE_MARGIN,
+        WINDOW_CAPTURE_MARGIN,
+        crop_width,
+        crop_height,
+    )
+    .to_image())
 }
 
 pub fn sample_pixel_at_point(x: i32, y: i32) -> Result<Rgba<u8>> {
@@ -492,17 +506,31 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
         anyhow::bail!("A valid window is required for scrolling capture");
     }
 
+    // The native window bounds include the 1-2px frame that stays fixed while the client area
+    // scrolls. Capturing that frame in every segment creates a visible horizontal seam at each
+    // join, so stitch only the inner client image.
+    const SCROLL_CAPTURE_MARGIN: i32 = 2;
+    let scroll_bounds = CaptureRect {
+        x: target.bounds.x + SCROLL_CAPTURE_MARGIN,
+        y: target.bounds.y + SCROLL_CAPTURE_MARGIN,
+        width: target.bounds.width - SCROLL_CAPTURE_MARGIN * 2,
+        height: target.bounds.height - SCROLL_CAPTURE_MARGIN * 2,
+    };
+    if !scroll_bounds.valid() {
+        anyhow::bail!("The selected window is too small for scrolling capture");
+    }
+
     let center_x = target.bounds.x + target.bounds.width / 2;
     let center_y = target.bounds.y + target.bounds.height / 2;
     let recipient = native_window_at_point(center_x, center_y).unwrap_or(target.handle);
     let point = make_point_parameter(center_x, center_y);
 
     scroll_to_top(target.handle, recipient, point);
-    let mut previous = stable_capture(target.bounds)?;
+    let mut previous = stable_capture(scroll_bounds)?;
     let mut segments = vec![previous.clone()];
-    let mut total_height = target.bounds.height as u32;
+    let mut total_height = scroll_bounds.height as u32;
     let maximum_height = (60_000u32)
-        .min((80_000_000u64 / target.bounds.width as u64) as u32)
+        .min((80_000_000u64 / scroll_bounds.width as u64) as u32)
         .max(total_height);
     let mut unchanged_steps = 0;
 
@@ -511,7 +539,7 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
             break;
         }
         send_wheel_step(recipient, point, -120);
-        let current = stable_capture(target.bounds)?;
+        let current = stable_capture(scroll_bounds)?;
         if equivalent(&previous, &current) {
             unchanged_steps += 1;
             if unchanged_steps >= 2 {
@@ -531,7 +559,7 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
     }
 
     scroll_to_top(target.handle, recipient, point);
-    let mut result = RgbaImage::new(target.bounds.width as u32, total_height);
+    let mut result = RgbaImage::new(scroll_bounds.width as u32, total_height);
     let mut y = 0u32;
     for segment in segments {
         for row in 0..segment.height() {
