@@ -67,9 +67,9 @@ export component MainWindow inherits Window {
     width: 400px;
     // Keep each OCR layout state fixed while giving the optional style panel its own height.
     // The closed state is shorter to avoid unused space; the open state has room for all controls.
-    preferred-height: show_style_settings ? 1000px : 880px;
-    min-height: show_style_settings ? 1000px : 880px;
-    max-height: show_style_settings ? 1000px : 880px;
+    preferred-height: show_style_settings ? 990px : 870px;
+    min-height: show_style_settings ? 990px : 870px;
+    max-height: show_style_settings ? 990px : 870px;
     background: dark_theme
         ? @linear-gradient(180deg, #0f172a 0%, #111827 100%)
         : @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
