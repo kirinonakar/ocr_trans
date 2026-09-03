@@ -774,6 +774,10 @@ fn color_selection_tooltip(color: &image::Rgba<u8>) -> String {
     format!("HEX: {hex}\nDEC: {decimal}")
 }
 
+fn color_preview(color: &image::Rgba<u8>) -> slint::Color {
+    slint::Color::from_rgb_u8(color[0], color[1], color[2])
+}
+
 fn selection_pixel_at(state: &AppState, x: f32, y: f32) -> Option<image::Rgba<u8>> {
     if state.pending_selection != Some(SelectionPurpose::ColorPicker) {
         return None;
@@ -938,32 +942,49 @@ fn configure_recording_border_native_window(border: &RecordingBorderWindow) {
         win_utils::set_layered(hwnd);
         win_utils::set_tool_window(hwnd, false);
         win_utils::set_click_through(hwnd, true);
+        win_utils::set_exclude_from_capture(hwnd);
         win_utils::disable_window_transitions(hwnd);
     });
 }
 
 fn display_recording_border(border: &RecordingBorderWindow, rect: capture::CaptureRect) {
-    let scale = border.window().scale_factor().max(1.0);
-    border.set_window_x(rect.x as f32 / scale);
-    border.set_window_y(rect.y as f32 / scale);
-    border.set_window_w(rect.width as f32 / scale);
-    border.set_window_h(rect.height as f32 / scale);
-    border
-        .window()
-        .set_position(slint::WindowPosition::Logical(slint::LogicalPosition::new(
-            rect.x as f32 / scale,
-            rect.y as f32 / scale,
-        )));
-    border
-        .window()
-        .set_size(slint::LogicalSize::new(
-            rect.width as f32 / scale,
-            rect.height as f32 / scale,
-        ));
+    let position = slint::WindowPosition::Physical(slint::PhysicalPosition::new(rect.x, rect.y));
+    let size = slint::WindowSize::Physical(slint::PhysicalSize::new(
+        rect.width.max(1) as u32,
+        rect.height.max(1) as u32,
+    ));
+    // CaptureRect is expressed in xcap/Win32 physical desktop pixels. Use the physical Slint
+    // APIs as well, otherwise a per-monitor DPI scale can move the border away from the pixels
+    // that FFmpeg records.
+    border.window().set_position(position.clone());
+    border.window().set_size(size.clone());
     if border.show().is_ok() {
+        // Winit may apply its default position/size while lazily creating this secondary window;
+        // re-apply the physical geometry after show() so the first frame is aligned too.
+        border.window().set_position(position);
+        border.window().set_size(size);
         #[cfg(target_os = "windows")]
         configure_recording_border_native_window(border);
     }
+}
+
+fn shutdown_and_exit(
+    recorder_slot: &Arc<Mutex<Option<capture::ScreenRecorder>>>,
+    recording_border: &slint::Weak<RecordingBorderWindow>,
+) -> ! {
+    if let Some(border) = recording_border.upgrade() {
+        let _ = border.hide();
+    }
+    let recorder = match recorder_slot.lock() {
+        Ok(mut slot) => slot.take(),
+        Err(poisoned) => poisoned.into_inner().take(),
+    };
+    if let Some(recorder) = recorder {
+        if let Err(error) = recorder.stop() {
+            log::warn!("Failed to stop recording during application exit: {error:?}");
+        }
+    }
+    std::process::exit(0);
 }
 
 fn set_capture_toolbar_status(toolbar: &CaptureToolbarWindow, status: String) {
@@ -1474,7 +1495,6 @@ async fn run_toolbar_action(
                     rect,
                     path.clone(),
                     30,
-                    show_recording_border,
                 ) {
                     Ok(recorder) => recorder,
                     Err(error) => {
@@ -2516,6 +2536,7 @@ async fn main() -> Result<()> {
             (path, was_recording)
         };
         if !was_recording {
+            let _ = recorder.stop();
             return;
         }
         if let Some(border) = recording_border_stop_recording.upgrade() {
@@ -2523,29 +2544,34 @@ async fn main() -> Result<()> {
         }
         toolbar.set_recording(false);
         toolbar.set_recording_paused(false);
-        let _ = slint::spawn_local(async move {
-            let result = tokio::task::spawn_blocking(move || recorder.stop())
-                .await
-                .context("Recording worker stopped")
-                .and_then(|result| result);
-            match result {
-                Ok(()) => {
-                    let message = path
-                        .map(|path| format!("Recording saved: {}", path.display()))
-                        .unwrap_or_else(|| "Recording saved".to_string());
-                    set_capture_toolbar_status(&toolbar, message);
-                }
-                Err(error) => set_capture_toolbar_status(&toolbar, format!("Error: {error}")),
+        let result = recorder.stop();
+        match result {
+            Ok(()) => {
+                let message = path
+                    .map(|path| format!("Recording saved: {}", path.display()))
+                    .unwrap_or_else(|| "Recording saved".to_string());
+                set_capture_toolbar_status(&toolbar, message);
             }
-            let _ = toolbar.show();
-        });
+            Err(error) => set_capture_toolbar_status(&toolbar, format!("Error: {error}")),
+        }
+        let _ = toolbar.show();
     });
 
+    let recorder_slot_toolbar_close = recorder_slot.clone();
+    let recording_border_toolbar_close = recording_border_window.as_weak();
     capture_toolbar.on_close_clicked(move || {
-        std::process::exit(0);
+        shutdown_and_exit(
+            &recorder_slot_toolbar_close,
+            &recording_border_toolbar_close,
+        );
     });
+    let recorder_slot_toolbar_window_close = recorder_slot.clone();
+    let recording_border_toolbar_window_close = recording_border_window.as_weak();
     capture_toolbar.window().on_close_requested(move || {
-        std::process::exit(0);
+        shutdown_and_exit(
+            &recorder_slot_toolbar_window_close,
+            &recording_border_toolbar_window_close,
+        );
     });
 
     // API Type Changed Callback
@@ -3290,8 +3316,10 @@ async fn main() -> Result<()> {
     });
 
     // Close Requested - Hard Exit
+    let recorder_slot_main_close = recorder_slot.clone();
+    let recording_border_main_close = recording_border_window.as_weak();
     main_window.window().on_close_requested(move || {
-        std::process::exit(0);
+        shutdown_and_exit(&recorder_slot_main_close, &recording_border_main_close);
     });
 
     let main_weak_for_selection = main_window.as_weak();
@@ -3672,7 +3700,10 @@ async fn main() -> Result<()> {
         };
 
         if let Some(selection) = selection_weak_color_hover.upgrade() {
-            selection.set_color_tooltip(color_selection_tooltip(&color).into());
+            let (hex, decimal) = format_color_values(&color);
+            selection.set_color_preview(color_preview(&color));
+            selection.set_color_hex(hex.into());
+            selection.set_color_decimal(decimal.into());
         }
         if let Some(toolbar) = toolbar_weak_color_hover.upgrade() {
             toolbar.set_color_picker_tooltip(color_toolbar_tooltip(&color).into());
@@ -4138,5 +4169,6 @@ async fn main() -> Result<()> {
     if let Err(error) = main_window.run() {
         log::error!("OCR Translator event loop stopped: {error:?}");
     }
-    Ok(())
+    let recording_border_exit = recording_border_window.as_weak();
+    shutdown_and_exit(&recorder_slot, &recording_border_exit);
 }

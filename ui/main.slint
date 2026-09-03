@@ -17,11 +17,11 @@ component ToolbarButton inherits Rectangle {
     horizontal-stretch: 0;
     vertical-stretch: 0;
     border-radius: 6px;
-    border-width: 1px;
-    border-color: active ? (dark_theme ? #60a5fa : #2563eb) : (dark_theme ? #475569 : #cbd5e1);
+    border-width: 0px;
+    border-color: transparent;
     background: active
-        ? (dark_theme ? #1d4ed8 : #dbeafe)
-        : (dark_theme ? (touch.has-hover ? #334155 : #1e293b) : (touch.has-hover ? #e2e8f0 : #ffffffcc));
+        ? (dark_theme ? #45b8ed : #dbeafe)
+        : (dark_theme ? (touch.has-hover ? #4a4a55 : #3a3a43) : (touch.has-hover ? #e2e8f0 : #ffffffcc));
     opacity: available ? 1.0 : 0.38;
 
     Image {
@@ -588,10 +588,13 @@ export component CaptureToolbarWindow inherits Window {
         Rectangle {
             width: 100%;
             height: 48px;
-            background: dark_theme ? #0f172aee : #f1f5f9ee;
+            background: dark_theme ? #2b2b31f5 : #f1f5f9f5;
             border-radius: 9px;
-            border-width: 1px;
-            border-color: dark_theme ? #475569 : #94a3b8;
+            border-width: 0px;
+            border-color: transparent;
+            drop-shadow-color: dark_theme ? #00000080 : #00000030;
+            drop-shadow-blur: 14px;
+            drop-shadow-offset-y: 4px;
 
         if (!recording) : HorizontalLayout {
             x: 0px;
@@ -652,10 +655,10 @@ export component CaptureToolbarWindow inherits Window {
             Rectangle {
                 width: 68px;
                 height: 34px;
-                background: dark_theme ? #1e293bee : #ffffffaa;
+                background: dark_theme ? #37373fff : #ffffffaa;
                 border-radius: 7px;
-                border-width: 1px;
-                border-color: dark_theme ? #475569 : #cbd5e1;
+                border-width: 0px;
+                border-color: transparent;
                 HorizontalLayout {
                     width: 100%;
                     height: 100%;
@@ -689,10 +692,10 @@ export component CaptureToolbarWindow inherits Window {
             Rectangle {
                 width: 134px;
                 height: 34px;
-                background: dark_theme ? #1e293bee : #ffffffaa;
+                background: dark_theme ? #37373fff : #ffffffaa;
                 border-radius: 7px;
-                border-width: 1px;
-                border-color: dark_theme ? #475569 : #cbd5e1;
+                border-width: 0px;
+                border-color: transparent;
                 HorizontalLayout {
                     width: 100%;
                     height: 100%;
@@ -745,10 +748,10 @@ export component CaptureToolbarWindow inherits Window {
             Rectangle {
                 width: 139px;
                 height: 34px;
-                background: dark_theme ? #1e293bee : #ffffffaa;
+                background: dark_theme ? #37373fff : #ffffffaa;
                 border-radius: 7px;
-                border-width: 1px;
-                border-color: dark_theme ? #475569 : #cbd5e1;
+                border-width: 0px;
+                border-color: transparent;
                 HorizontalLayout {
                     width: 100%;
                     height: 100%;
@@ -887,9 +890,12 @@ export component CaptureToolbarWindow inherits Window {
         if (!recording && active_tooltip != "") : Rectangle {
             width: 100%;
             height: 20px;
-            background: dark_theme ? #020617f2 : #ffffffee;
-            border-width: 1px;
-            border-color: dark_theme ? #475569 : #cbd5e1;
+            background: dark_theme ? #2b2b31f5 : #ffffffee;
+            border-width: 0px;
+            border-color: transparent;
+            drop-shadow-color: dark_theme ? #00000080 : #00000030;
+            drop-shadow-blur: 8px;
+            drop-shadow-offset-y: 2px;
             Text {
                 width: 100%;
                 height: 100%;
@@ -919,16 +925,7 @@ export component RecordingBorderWindow inherits Window {
     always-on-top: true;
     no-frame: true;
     background: transparent;
-    in-out property <length> window_x: 0px;
-    in-out property <length> window_y: 0px;
-    in-out property <length> window_w: 0px;
-    in-out property <length> window_h: 0px;
     in-out property <color> border_color: #ef4444;
-
-    x: window_x;
-    y: window_y;
-    width: window_w;
-    height: window_h;
 
     Rectangle {
         x: 0px;
@@ -1070,7 +1067,9 @@ export component SelectionWindow inherits Window {
     in-out property <length> hover_y: 0px;
     in-out property <length> hover_w: 0px;
     in-out property <length> hover_h: 0px;
-    in-out property <string> color_tooltip: "";
+    in-out property <color> color_preview: #000000;
+    in-out property <string> color_hex: "";
+    in-out property <string> color_decimal: "";
     property <length> color_cursor_x: 0px;
     property <length> color_cursor_y: 0px;
     property <bool> selecting: false;
@@ -1109,7 +1108,9 @@ export component SelectionWindow inherits Window {
         hover_y = 0px;
         hover_w = 0px;
         hover_h = 0px;
-        color_tooltip = "";
+        color_preview = #000000;
+        color_hex = "";
+        color_decimal = "";
         color_cursor_x = 0px;
         color_cursor_y = 0px;
         selecting = false;
@@ -1163,7 +1164,20 @@ export component SelectionWindow inherits Window {
 
     i_touch := TouchArea {
         pointer-event(event) => {
-            if (event.button == PointerEventButton.left) {
+            // TouchArea::moved is only emitted after a mouse grab. Handle move events here too
+            // so the color preview is available before the first click/press.
+            if (event.kind == PointerEventKind.move) {
+                if (window_mode) {
+                    window_hovered(i_touch.mouse-x, i_touch.mouse-y);
+                } else if (color_picker_mode) {
+                    color_cursor_x = i_touch.mouse-x;
+                    color_cursor_y = i_touch.mouse-y;
+                    color_hovered(color_cursor_x, color_cursor_y);
+                } else if (selecting) {
+                    current_x = i_touch.mouse-x;
+                    current_y = i_touch.mouse-y;
+                }
+            } else if (event.button == PointerEventButton.left) {
                 if (event.kind == PointerEventKind.down) {
                     selecting = true;
                     start_x = i_touch.mouse-x;
@@ -1196,37 +1210,54 @@ export component SelectionWindow inherits Window {
                 }
             }
         }
-        moved => {
-            if (window_mode) {
-                window_hovered(i_touch.mouse-x, i_touch.mouse-y);
-            } else if (color_picker_mode) {
+        changed has-hover => {
+            if (color_picker_mode && self.has-hover) {
                 color_cursor_x = i_touch.mouse-x;
                 color_cursor_y = i_touch.mouse-y;
                 color_hovered(color_cursor_x, color_cursor_y);
-            } else if (selecting) {
-                current_x = i_touch.mouse-x;
-                current_y = i_touch.mouse-y;
             }
         }
     }
 
-    if (color_picker_mode && color_tooltip != "") : Rectangle {
-        x: color_cursor_x + 18px + 232px > parent.width ? parent.width - 242px : color_cursor_x + 18px;
-        y: color_cursor_y + 18px + 42px > parent.height ? color_cursor_y - 50px : color_cursor_y + 18px;
-        width: 232px;
-        height: 42px;
+    if (color_picker_mode && color_hex != "") : Rectangle {
+        x: color_cursor_x + 18px + 244px > parent.width ? parent.width - 254px : color_cursor_x + 18px;
+        y: color_cursor_y + 18px + 58px > parent.height ? color_cursor_y - 66px : color_cursor_y + 18px;
+        width: 244px;
+        height: 58px;
         z: 20;
         background: #020617e8;
         border-radius: 6px;
-        border-width: 1px;
-        border-color: #64748b;
-        Text {
+        drop-shadow-color: #00000066;
+        drop-shadow-blur: 8px;
+        drop-shadow-offset-y: 2px;
+        Rectangle {
             x: 8px;
-            y: 4px;
-            width: parent.width - 16px;
-            height: parent.height - 8px;
-            text: color_tooltip;
+            y: 8px;
+            width: 42px;
+            height: 42px;
+            background: color_preview;
+            border-radius: 5px;
+            border-width: 1px;
+            border-color: #f8fafc;
+        }
+        Text {
+            x: 62px;
+            y: 7px;
+            width: parent.width - 70px;
+            height: 20px;
+            text: "HEX: " + color_hex;
             color: #f8fafc;
+            font-family: "Consolas";
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+        Text {
+            x: 62px;
+            y: 30px;
+            width: parent.width - 70px;
+            height: 20px;
+            text: "DEC: " + color_decimal;
+            color: #cbd5e1;
             font-family: "Consolas";
             font-size: 11px;
             vertical-alignment: center;

@@ -509,12 +509,17 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
     // The native window bounds include the 1-2px frame that stays fixed while the client area
     // scrolls. Capturing that frame in every segment creates a visible horizontal seam at each
     // join, so stitch only the inner client image.
-    const SCROLL_CAPTURE_MARGIN: i32 = 2;
+    const SCROLL_CAPTURE_SIDE_MARGIN: i32 = 2;
+    const SCROLL_CAPTURE_TOP_MARGIN: i32 = 2;
+    // The bottom of a browser window often contains a thin horizontal scrollbar/resize edge.
+    // It is fixed while the page scrolls, so leaving it in each segment creates a repeated line
+    // at every stitch. Keep the side/top crop small, but remove that fixed bottom band entirely.
+    const SCROLL_CAPTURE_BOTTOM_MARGIN: i32 = 6;
     let scroll_bounds = CaptureRect {
-        x: target.bounds.x + SCROLL_CAPTURE_MARGIN,
-        y: target.bounds.y + SCROLL_CAPTURE_MARGIN,
-        width: target.bounds.width - SCROLL_CAPTURE_MARGIN * 2,
-        height: target.bounds.height - SCROLL_CAPTURE_MARGIN * 2,
+        x: target.bounds.x + SCROLL_CAPTURE_SIDE_MARGIN,
+        y: target.bounds.y + SCROLL_CAPTURE_TOP_MARGIN,
+        width: target.bounds.width - SCROLL_CAPTURE_SIDE_MARGIN * 2,
+        height: target.bounds.height - SCROLL_CAPTURE_TOP_MARGIN - SCROLL_CAPTURE_BOTTOM_MARGIN,
     };
     if !scroll_bounds.valid() {
         anyhow::bail!("The selected window is too small for scrolling capture");
@@ -864,7 +869,7 @@ fn find_dshow_audio_device() -> Option<String> {
 }
 
 impl ScreenRecorder {
-    pub fn start(rect: CaptureRect, path: PathBuf, fps: u32, show_border: bool) -> Result<Self> {
+    pub fn start(rect: CaptureRect, path: PathBuf, fps: u32) -> Result<Self> {
         if !rect.valid() {
             anyhow::bail!("The recording area is too small");
         }
@@ -957,14 +962,7 @@ impl ScreenRecorder {
         let worker_paused = paused.clone();
         let interval = Duration::from_secs_f64(1.0 / fps as f64);
         let worker = thread::spawn(move || {
-            record_frames(
-                &mut stdin,
-                rect,
-                interval,
-                worker_stop,
-                worker_paused,
-                show_border,
-            )
+            record_frames(&mut stdin, rect, interval, worker_stop, worker_paused)
         });
 
         Ok(Self {
@@ -1000,16 +998,12 @@ fn record_frames(
     interval: Duration,
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
-    show_border: bool,
 ) {
     while !stop.load(Ordering::Relaxed) {
         let frame_started = Instant::now();
         if !paused.load(Ordering::Relaxed) {
             match capture_area(&rect, &None) {
-                Ok(mut image) => {
-                    if show_border {
-                        draw_recording_border(&mut image);
-                    }
+                Ok(image) => {
                     if stdin.write_all(image.as_raw()).is_err() {
                         stop.store(true, Ordering::Relaxed);
                         break;
@@ -1023,24 +1017,6 @@ fn record_frames(
         let elapsed = frame_started.elapsed();
         if elapsed < interval {
             thread::sleep(interval - elapsed);
-        }
-    }
-}
-
-fn draw_recording_border(image: &mut RgbaImage) {
-    const BORDER_WIDTH: u32 = 2;
-    const BORDER_COLOR: Rgba<u8> = Rgba([239, 68, 68, 255]);
-    let width = image.width();
-    let height = image.height();
-    for y in 0..height {
-        for x in 0..width {
-            if x < BORDER_WIDTH
-                || y < BORDER_WIDTH
-                || x >= width.saturating_sub(BORDER_WIDTH)
-                || y >= height.saturating_sub(BORDER_WIDTH)
-            {
-                image.put_pixel(x, y, BORDER_COLOR);
-            }
         }
     }
 }
