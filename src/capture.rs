@@ -1023,25 +1023,80 @@ fn accept_audio_stream(listener: TcpListener, stop: &AtomicBool) -> Result<Optio
 }
 
 #[cfg(target_os = "windows")]
+fn write_paced_silence_packet(
+    stream: &mut TcpStream,
+    packet: &[u8],
+    packet_duration: Duration,
+    next_packet: &mut Instant,
+) -> bool {
+    let now = Instant::now();
+    if now >= *next_packet {
+        if stream.write_all(packet).is_err() {
+            return false;
+        }
+        *next_packet = now + packet_duration;
+    } else {
+        thread::sleep((*next_packet - now).min(Duration::from_millis(5)));
+    }
+    true
+}
+
+#[cfg(target_os = "windows")]
+fn feed_silence_until_stop(
+    mut stream: TcpStream,
+    format: WasapiAudioFormat,
+    stop: &AtomicBool,
+) {
+    let silent_frames = (format.sample_rate as usize / 100).max(1);
+    let silent_packet = silent_audio_bytes(silent_frames, format);
+    let silent_duration = Duration::from_secs_f64(
+        silent_frames as f64 / format.sample_rate as f64,
+    );
+    let mut next_silent_packet = Instant::now();
+    while !stop.load(Ordering::Relaxed) {
+        if !write_paced_silence_packet(
+            &mut stream,
+            &silent_packet,
+            silent_duration,
+            &mut next_silent_packet,
+        ) {
+            break;
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn capture_wasapi_loopback(
     listener: TcpListener,
     expected_format: WasapiAudioFormat,
     stop: Arc<AtomicBool>,
     error_slot: Arc<Mutex<Option<String>>>,
 ) {
-    let result = capture_wasapi_loopback_on_mta(listener, expected_format, &stop);
+    let stream = match accept_audio_stream(listener, &stop) {
+        Ok(Some(stream)) => stream,
+        Ok(None) => return,
+        Err(error) => {
+            log::warn!("Windows audio loopback could not accept FFmpeg: {error:?}");
+            if let Ok(mut error_slot) = error_slot.lock() {
+                *error_slot = Some(format!("{error:#}"));
+            }
+            // Do not set the shared stop flag here. A temporary audio setup failure must not
+            // turn into a few-frame video recording; the video worker owns the recording stop.
+            return;
+        }
+    };
+    let result = capture_wasapi_loopback_on_mta(stream, expected_format, &stop);
     if let Err(error) = result {
         log::warn!("Windows audio loopback stopped: {error:?}");
         if let Ok(mut error_slot) = error_slot.lock() {
             *error_slot = Some(format!("{error:#}"));
         }
-        stop.store(true, Ordering::Relaxed);
     }
 }
 
 #[cfg(target_os = "windows")]
 fn capture_wasapi_loopback_on_mta(
-    listener: TcpListener,
+    mut stream: TcpStream,
     expected_format: WasapiAudioFormat,
     stop: &AtomicBool,
 ) -> Result<()> {
@@ -1056,7 +1111,11 @@ fn capture_wasapi_loopback_on_mta(
 
     let init_result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     if init_result.is_err() {
-        anyhow::bail!("Failed to initialize COM for Windows audio capture: {init_result:?}");
+        let error = anyhow::anyhow!(
+            "Failed to initialize COM for Windows audio capture: {init_result:?}"
+        );
+        feed_silence_until_stop(stream, expected_format, stop);
+        return Err(error);
     }
 
     let result = (|| {
@@ -1102,9 +1161,6 @@ fn capture_wasapi_loopback_on_mta(
         }
         initialize_result.context("Failed to initialize Windows audio loopback")?;
 
-        let Some(mut stream) = accept_audio_stream(listener, stop)? else {
-            return Ok(());
-        };
         let capture_client: IAudioCaptureClient = unsafe { client.GetService() }
             .context("Failed to access the Windows audio capture buffer")?;
         unsafe { client.Start() }.context("Failed to start Windows audio loopback")?;
@@ -1116,35 +1172,72 @@ fn capture_wasapi_loopback_on_mta(
                 silent_frames as f64 / expected_format.sample_rate as f64,
             );
             let mut next_silent_packet = Instant::now();
+            let mut consecutive_read_errors = 0u32;
             while !stop.load(Ordering::Relaxed) {
-                let packet_frames = unsafe { capture_client.GetNextPacketSize() }
-                    .context("Failed to read the Windows audio packet size")?;
-                if packet_frames == 0 {
-                    // Some Windows output devices expose no loopback packet while silent. Keep
-                    // the raw audio input alive with real-time paced silence; otherwise FFmpeg's
-                    // `-shortest` sees an empty audio stream and discards the video as well.
-                    let now = Instant::now();
-                    if now >= next_silent_packet {
-                        if stream.write_all(&silent_packet).is_err() {
+                let packet_frames = match unsafe { capture_client.GetNextPacketSize() } {
+                    Ok(packet_frames) => {
+                        consecutive_read_errors = 0;
+                        packet_frames
+                    }
+                    Err(error) => {
+                        consecutive_read_errors = consecutive_read_errors.saturating_add(1);
+                        if consecutive_read_errors <= 3
+                            || consecutive_read_errors.is_power_of_two()
+                        {
+                            log::warn!(
+                                "Windows audio packet read failed (attempt {consecutive_read_errors}): {error:?}"
+                            );
+                        }
+                        if !write_paced_silence_packet(
+                            &mut stream,
+                            &silent_packet,
+                            silent_duration,
+                            &mut next_silent_packet,
+                        ) {
                             break;
                         }
-                        next_silent_packet = now + silent_duration;
-                    } else {
-                        thread::sleep(
-                            (next_silent_packet - now).min(Duration::from_millis(5)),
-                        );
+                        continue;
+                    }
+                };
+                if packet_frames == 0 {
+                    // Some Windows output devices expose no loopback packet while silent. Keep
+                    // the raw audio input alive with real-time paced silence.
+                    if !write_paced_silence_packet(
+                        &mut stream,
+                        &silent_packet,
+                        silent_duration,
+                        &mut next_silent_packet,
+                    ) {
+                        break;
                     }
                     continue;
                 }
 
-                let mut data_ptr = std::ptr::null_mut();
+                let mut data_ptr: *mut u8 = std::ptr::null_mut();
                 let mut frames = 0u32;
                 let mut flags = 0u32;
-                unsafe {
+                let buffer_result = unsafe {
                     capture_client
                         .GetBuffer(&mut data_ptr, &mut frames, &mut flags, None, None)
                 }
-                .context("Failed to read the Windows audio capture buffer")?;
+                .context("Failed to read the Windows audio capture buffer");
+                if let Err(error) = buffer_result {
+                    consecutive_read_errors = consecutive_read_errors.saturating_add(1);
+                    if consecutive_read_errors <= 3 || consecutive_read_errors.is_power_of_two() {
+                        log::warn!(
+                            "Windows audio buffer read failed (attempt {consecutive_read_errors}): {error:?}"
+                        );
+                    }
+                    if !write_paced_silence_packet(
+                        &mut stream,
+                        &silent_packet,
+                        silent_duration,
+                        &mut next_silent_packet,
+                    ) {
+                        break;
+                    }
+                    continue;
+                }
 
                 let byte_len = frames as usize * expected_format.block_align;
                 let bytes = if flags & 2 != 0 || data_ptr.is_null() {
@@ -1155,8 +1248,25 @@ fn capture_wasapi_loopback_on_mta(
                     unsafe { std::slice::from_raw_parts(data_ptr as *const u8, byte_len) }
                         .to_vec()
                 };
-                unsafe { capture_client.ReleaseBuffer(frames) }
-                    .context("Failed to release the Windows audio capture buffer")?;
+                if let Err(error) = unsafe { capture_client.ReleaseBuffer(frames) }
+                    .context("Failed to release the Windows audio capture buffer")
+                {
+                    consecutive_read_errors = consecutive_read_errors.saturating_add(1);
+                    if consecutive_read_errors <= 3 || consecutive_read_errors.is_power_of_two() {
+                        log::warn!(
+                            "Windows audio buffer release failed (attempt {consecutive_read_errors}): {error:?}"
+                        );
+                    }
+                    if !write_paced_silence_packet(
+                        &mut stream,
+                        &silent_packet,
+                        silent_duration,
+                        &mut next_silent_packet,
+                    ) {
+                        break;
+                    }
+                    continue;
+                }
 
                 if stream.write_all(&bytes).is_err() {
                     break;
@@ -1173,7 +1283,12 @@ fn capture_wasapi_loopback_on_mta(
     })();
 
     unsafe { CoUninitialize() };
-    result
+    if let Err(error) = result {
+        log::warn!("Windows audio setup failed; continuing with silence: {error:?}");
+        feed_silence_until_stop(stream, expected_format, stop);
+        return Err(error);
+    }
+    Ok(())
 }
 
 impl ScreenRecorder {
@@ -1276,7 +1391,8 @@ impl ScreenRecorder {
                 "aac_low",
                 "-b:a",
                 "192k",
-                "-shortest",
+                // Both live inputs are closed by ScreenRecorder::stop. Do not let an early
+                // audio EOF truncate the video when a Windows playback device briefly resets.
                 "-pix_fmt",
                 "yuv420p",
             ]);
