@@ -197,8 +197,8 @@ impl ApiClient {
         self.provider == "OpenCode Go" || self.provider == "OpenCode Zen"
     }
 
-    fn with_opencode_go_headers(&self, request: RequestBuilder) -> RequestBuilder {
-        if self.provider == "OpenCode Go" {
+    fn with_opencode_headers(&self, request: RequestBuilder) -> RequestBuilder {
+        if self.is_opencode_provider() {
             request.header("x-opencode-session", opencode_session_id())
         } else {
             request
@@ -461,7 +461,7 @@ impl ApiClient {
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }
-        req = self.with_opencode_go_headers(req);
+        req = self.with_opencode_headers(req);
 
         log::info!("Sending AI request to: {}", url);
         let response = req.send().await.context("HTTP request failed")?;
@@ -504,7 +504,7 @@ impl ApiClient {
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }
-        req = self.with_opencode_go_headers(req);
+        req = self.with_opencode_headers(req);
         let response = req.send().await.context("HTTP request failed")?;
         if !response.status().is_success() {
             let status = response.status();
@@ -546,7 +546,7 @@ impl ApiClient {
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }
-        req = self.with_opencode_go_headers(req);
+        req = self.with_opencode_headers(req);
 
         log::info!("Sending OpenAI Responses request to: {}", url);
         let response = req.send().await.context("HTTP request failed")?;
@@ -610,7 +610,7 @@ impl ApiClient {
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }
-        req = self.with_opencode_go_headers(req);
+        req = self.with_opencode_headers(req);
         let response = req.send().await.context("HTTP request failed")?;
         if !response.status().is_success() {
             let status = response.status();
@@ -742,7 +742,7 @@ impl ApiClient {
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }
-        req = self.with_opencode_go_headers(req);
+        req = self.with_opencode_headers(req);
 
         let response = req.send().await.context("Failed to fetch models")?;
         if !response.status().is_success() {
@@ -852,22 +852,31 @@ mod tests {
     }
 
     #[test]
-    fn session_header_is_only_added_for_opencode_go() {
+    fn session_header_is_added_for_both_opencode_providers() {
         let http = Client::new();
         let opencode_go_request = test_client("OpenCode Go")
-            .with_opencode_go_headers(http.get("https://example.com"))
+            .with_opencode_headers(http.get("https://example.com"))
             .build()
             .expect("OpenCode Go request should build");
         let zen_request = test_client("OpenCode Zen")
-            .with_opencode_go_headers(http.get("https://example.com"))
+            .with_opencode_headers(http.get("https://example.com"))
             .build()
             .expect("OpenCode Zen request should build");
+        let other_request = test_client("LMStudio")
+            .with_opencode_headers(http.get("https://example.com"))
+            .build()
+            .expect("Other provider request should build");
 
-        let session_header = opencode_go_request
+        let go_session_header = opencode_go_request
             .headers()
             .get("x-opencode-session")
             .and_then(|value| value.to_str().ok());
-        assert_eq!(session_header, Some(opencode_session_id()));
-        assert!(zen_request.headers().get("x-opencode-session").is_none());
+        let zen_session_header = zen_request
+            .headers()
+            .get("x-opencode-session")
+            .and_then(|value| value.to_str().ok());
+        assert_eq!(go_session_header, Some(opencode_session_id()));
+        assert_eq!(zen_session_header, Some(opencode_session_id()));
+        assert!(other_request.headers().get("x-opencode-session").is_none());
     }
 }

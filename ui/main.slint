@@ -51,7 +51,10 @@ component ToolbarButton inherits Rectangle {
         width: 100%;
         height: 100%;
         z: 10;
-        enabled: available;
+        // A press-on-down control starts a native drag loop. That loop consumes the native
+        // mouse-up event, so let Slint cancel and release its TouchArea grab immediately after
+        // the press. Otherwise the move button keeps intercepting every later toolbar click.
+        enabled: available && !(press_on_down && touch.pressed);
         pointer-event(event) => {
             if (press_on_down && event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                 pressed();
@@ -146,6 +149,12 @@ export component MainWindow inherits Window {
         HorizontalLayout {
             height: 30px;
             spacing: 8px;
+
+            Image {
+                source: @image-url("../app.ico");
+                width: 26px;
+                height: 26px;
+            }
 
             Text {
                 text: "OCR Translator";
@@ -590,14 +599,15 @@ export component CaptureToolbarWindow inherits Window {
             height: 48px;
             padding-left: 7px;
             padding-right: 7px;
-            padding-top: 6px;
-            padding-bottom: 6px;
+            padding-top: 7px;
+            padding-bottom: 7px;
             spacing: 5px;
 
             ToolbarButton {
                 icon: @image-url("icons/drag.svg");
                 dark_theme: dark_theme;
                 width: 24px;
+                height: 34px;
                 tooltip: "Move toolbar";
                 hovered_tooltip_changed(value) => {
                     active_tooltip = value;
@@ -612,6 +622,7 @@ export component CaptureToolbarWindow inherits Window {
                 dark_theme: dark_theme;
                 active: dark_theme;
                 width: 30px;
+                height: 34px;
                 icon_size: 16px;
                 tooltip: "Toggle dark mode";
                 hovered_tooltip_changed(value) => {
@@ -626,6 +637,7 @@ export component CaptureToolbarWindow inherits Window {
                 icon: @image-url("icons/ui.svg");
                 dark_theme: dark_theme;
                 width: 64px;
+                height: 34px;
                 icon_size: 14px;
                 label: "OCR";
                 tooltip: "Return to OCR settings";
@@ -791,6 +803,7 @@ export component CaptureToolbarWindow inherits Window {
             ToolbarButton {
                 icon: @image-url("icons/close.svg");
                 dark_theme: dark_theme;
+                height: 34px;
                 icon_size: 16px;
                 tooltip: "Exit application";
                 hovered_tooltip_changed(value) => {
@@ -1045,7 +1058,7 @@ export component SelectionWindow inherits Window {
 
     callback area_selected(length, length, length, length);
     callback window_hovered(length, length);
-    callback window_selected();
+    callback window_selected(length, length);
     callback color_picked(length, length);
     callback closed();
 
@@ -1121,7 +1134,7 @@ export component SelectionWindow inherits Window {
                     if (color_picker_mode) {
                         color_picked(i_touch.mouse-x, i_touch.mouse-y);
                     } else if (window_mode) {
-                        window_selected();
+                        window_selected(i_touch.mouse-x, i_touch.mouse-y);
                     } else {
                         // Provide the calculated rect.
                         area_selected(
