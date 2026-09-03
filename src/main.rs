@@ -654,26 +654,10 @@ enum SelectionPurpose {
 }
 
 fn clean_text(text: &str) -> String {
-    let mut cleaned = String::new();
-    let mut prev_empty = false;
-
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            prev_empty = true;
-        } else {
-            if !cleaned.is_empty() {
-                if prev_empty {
-                    cleaned.push_str("\n\n");
-                } else {
-                    cleaned.push('\n');
-                }
-            }
-            cleaned.push_str(trimmed);
-            prev_empty = false;
-        }
-    }
-    cleaned
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim()
+        .to_string()
 }
 
 fn calculate_font_size(text: &str, width: f32, height: f32, max_size: f32) -> f32 {
@@ -771,6 +755,41 @@ fn rgba_to_slint_image(rgba: image::RgbaImage) -> slint::Image {
         height,
     );
     slint::Image::from_rgba8(buffer)
+}
+
+fn format_color_values(color: &image::Rgba<u8>) -> (String, String) {
+    (
+        format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2]),
+        format!("({}, {}, {})", color[0], color[1], color[2]),
+    )
+}
+
+fn color_toolbar_tooltip(color: &image::Rgba<u8>) -> String {
+    let (hex, decimal) = format_color_values(color);
+    format!("HEX: {hex} | DEC: {decimal}")
+}
+
+fn color_selection_tooltip(color: &image::Rgba<u8>) -> String {
+    let (hex, decimal) = format_color_values(color);
+    format!("HEX: {hex}\nDEC: {decimal}")
+}
+
+fn selection_pixel_at(state: &AppState, x: f32, y: f32) -> Option<image::Rgba<u8>> {
+    if state.pending_selection != Some(SelectionPurpose::ColorPicker) {
+        return None;
+    }
+    let screenshot = state.selection_screenshot.as_ref()?;
+    let scale = state.selection_scale.max(1.0);
+    let local_x = (x * scale).round() as i32;
+    let local_y = (y * scale).round() as i32;
+    if local_x < 0
+        || local_y < 0
+        || local_x >= screenshot.width() as i32
+        || local_y >= screenshot.height() as i32
+    {
+        return None;
+    }
+    Some(*screenshot.get_pixel(local_x as u32, local_y as u32))
 }
 
 fn sync_capture_state(state: &mut AppState, main: &MainWindow) {
@@ -904,6 +923,49 @@ fn configure_capture_toolbar_native_window(toolbar: &CaptureToolbarWindow) {
     });
 }
 
+#[cfg(target_os = "windows")]
+fn configure_recording_border_native_window(border: &RecordingBorderWindow) {
+    let _ = border.window().with_winit_window(|winit_window| {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Ok(handle) = winit_window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = windows::Win32::Foundation::HWND(handle.hwnd.get() as _);
+        win_utils::set_layered(hwnd);
+        win_utils::set_tool_window(hwnd, false);
+        win_utils::set_click_through(hwnd, true);
+        win_utils::disable_window_transitions(hwnd);
+    });
+}
+
+fn display_recording_border(border: &RecordingBorderWindow, rect: capture::CaptureRect) {
+    let scale = border.window().scale_factor().max(1.0);
+    border.set_window_x(rect.x as f32 / scale);
+    border.set_window_y(rect.y as f32 / scale);
+    border.set_window_w(rect.width as f32 / scale);
+    border.set_window_h(rect.height as f32 / scale);
+    border
+        .window()
+        .set_position(slint::WindowPosition::Logical(slint::LogicalPosition::new(
+            rect.x as f32 / scale,
+            rect.y as f32 / scale,
+        )));
+    border
+        .window()
+        .set_size(slint::LogicalSize::new(
+            rect.width as f32 / scale,
+            rect.height as f32 / scale,
+        ));
+    if border.show().is_ok() {
+        #[cfg(target_os = "windows")]
+        configure_recording_border_native_window(border);
+    }
+}
+
 fn set_capture_toolbar_status(toolbar: &CaptureToolbarWindow, status: String) {
     toolbar.set_status_text(status.into());
     sync_capture_toolbar_size(toolbar);
@@ -1004,12 +1066,14 @@ fn prepare_selection_window(
 
     let (width, height) = screenshot.dimensions();
     let scale = selection.window().scale_factor().max(1.0);
+    let selection_screenshot = color_picker_mode.then(|| Arc::new(screenshot.clone()));
     {
         let mut state = state.lock().unwrap();
         state.pending_selection = Some(purpose);
         state.selection_origin_x = monitor_rect.x;
         state.selection_origin_y = monitor_rect.y;
         state.selection_scale = scale;
+        state.selection_screenshot = selection_screenshot;
     }
     selection.set_screenshot(rgba_to_slint_image(screenshot));
     selection.window().set_size(slint::LogicalSize::new(
@@ -1176,6 +1240,7 @@ fn begin_fullscreen_toolbar_action(
     state: Arc<Mutex<AppState>>,
     recorder_slot: Arc<Mutex<Option<capture::ScreenRecorder>>>,
     http: reqwest::Client,
+    recording_border: slint::Weak<RecordingBorderWindow>,
 ) {
     if toolbar.get_recording() {
         return;
@@ -1189,7 +1254,14 @@ fn begin_fullscreen_toolbar_action(
         let (Some(toolbar), Some(main)) = (toolbar_weak.upgrade(), main_weak.upgrade()) else {
             return;
         };
-        begin_fullscreen_toolbar_action_now(&toolbar, &main, state, recorder_slot, http);
+        begin_fullscreen_toolbar_action_now(
+            &toolbar,
+            &main,
+            state,
+            recorder_slot,
+            http,
+            recording_border,
+        );
     });
 }
 
@@ -1199,6 +1271,7 @@ fn begin_fullscreen_toolbar_action_now(
     state: Arc<Mutex<AppState>>,
     recorder_slot: Arc<Mutex<Option<capture::ScreenRecorder>>>,
     http: reqwest::Client,
+    recording_border: slint::Weak<RecordingBorderWindow>,
 ) {
     if toolbar.get_recording() {
         return;
@@ -1254,6 +1327,8 @@ fn begin_fullscreen_toolbar_action_now(
             rect,
             None,
             prefetched_image,
+            false,
+            recording_border,
             main.as_weak(),
             toolbar.as_weak(),
             state,
@@ -1277,8 +1352,11 @@ fn rgba_to_bgra_bytes(image: &image::RgbaImage) -> Vec<u8> {
 }
 
 fn compose_ocr_clipboard(original: &str, translated: Option<&str>) -> String {
-    let original = original.trim();
-    match translated.map(str::trim).filter(|text| !text.is_empty()) {
+    let original = clean_text(original);
+    match translated
+        .map(clean_text)
+        .filter(|text| !text.is_empty())
+    {
         Some(translated) => format!("{original}\n\n{translated}"),
         None => original.to_string(),
     }
@@ -1309,6 +1387,8 @@ async fn run_toolbar_action(
     rect: capture::CaptureRect,
     target: Option<capture::WindowTarget>,
     prefetched_image: Option<image::RgbaImage>,
+    show_recording_border: bool,
+    recording_border: slint::Weak<RecordingBorderWindow>,
     main: slint::Weak<MainWindow>,
     toolbar: slint::Weak<CaptureToolbarWindow>,
     state: Arc<Mutex<AppState>>,
@@ -1321,6 +1401,7 @@ async fn run_toolbar_action(
     let Some(toolbar) = toolbar.upgrade() else {
         return;
     };
+    let recording_border_window = recording_border.upgrade();
     // Re-apply the native capture exclusion immediately before every toolbar action. This keeps
     // the toolbar out of full-screen captures and recordings even after Windows recreates or
     // changes the native window state.
@@ -1379,7 +1460,30 @@ async fn run_toolbar_action(
                     anyhow::bail!("A recording is already in progress");
                 }
                 let path = capture::unique_output_path_in("mp4", Some(configured_folder.as_str()))?;
-                let recorder = capture::ScreenRecorder::start(rect, path.clone(), 30)?;
+                let recording_rect = capture::CaptureRect {
+                    width: rect.width & !1,
+                    height: rect.height & !1,
+                    ..rect
+                };
+                if show_recording_border {
+                    if let Some(border) = recording_border_window.as_ref() {
+                        display_recording_border(border, recording_rect);
+                    }
+                }
+                let recorder = match capture::ScreenRecorder::start(
+                    rect,
+                    path.clone(),
+                    30,
+                    show_recording_border,
+                ) {
+                    Ok(recorder) => recorder,
+                    Err(error) => {
+                        if let Some(border) = recording_border_window.as_ref() {
+                            let _ = border.hide();
+                        }
+                        return Err(error);
+                    }
+                };
                 {
                     let mut slot = recorder_slot.lock().unwrap();
                     *slot = Some(recorder);
@@ -1452,6 +1556,14 @@ async fn run_toolbar_action(
     .await;
 
     if action == SelectionPurpose::Record {
+        if let Err(error) = result {
+            if let Some(border) = recording_border_window.as_ref() {
+                let _ = border.hide();
+            }
+            toolbar.set_recording(false);
+            set_capture_toolbar_status(&toolbar, format!("Error: {error}"));
+            let _ = toolbar.show();
+        }
         return;
     }
     match result {
@@ -1471,6 +1583,7 @@ async fn main() -> Result<()> {
     let selection_window = SelectionWindow::new()?;
     let textbox_window = TextboxWindow::new()?;
     let capture_toolbar = CaptureToolbarWindow::new()?;
+    let recording_border_window = RecordingBorderWindow::new()?;
 
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
@@ -2132,6 +2245,7 @@ async fn main() -> Result<()> {
     let state_fullscreen = state.clone();
     let recorder_fullscreen = recorder_slot.clone();
     let http_fullscreen = http_client.clone();
+    let recording_border_fullscreen = recording_border_window.as_weak();
     capture_toolbar.on_fullscreen_clicked(move || {
         if let (Some(toolbar), Some(main)) = (
             toolbar_weak_fullscreen.upgrade(),
@@ -2143,6 +2257,7 @@ async fn main() -> Result<()> {
                 state_fullscreen.clone(),
                 recorder_fullscreen.clone(),
                 http_fullscreen.clone(),
+                recording_border_fullscreen.clone(),
             );
         }
     });
@@ -2381,6 +2496,7 @@ async fn main() -> Result<()> {
     let toolbar_weak_stop_recording = capture_toolbar.as_weak();
     let state_stop_recording = state.clone();
     let recorder_stop_recording = recorder_slot.clone();
+    let recording_border_stop_recording = recording_border_window.as_weak();
     capture_toolbar.on_stop_recording_clicked(move || {
         let Some(toolbar) = toolbar_weak_stop_recording.upgrade() else {
             return;
@@ -2401,6 +2517,9 @@ async fn main() -> Result<()> {
         };
         if !was_recording {
             return;
+        }
+        if let Some(border) = recording_border_stop_recording.upgrade() {
+            let _ = border.hide();
         }
         toolbar.set_recording(false);
         toolbar.set_recording_paused(false);
@@ -3235,6 +3354,7 @@ async fn main() -> Result<()> {
     let toolbar_weak_for_selection_actions = capture_toolbar.as_weak();
     let recorder_slot_for_selection_actions = recorder_slot.clone();
     let http_for_selection_actions = http_client.clone();
+    let recording_border_for_selection_actions = recording_border_window.as_weak();
     selection_window.on_area_selected(move |x, y, w, h| {
         let textbox_weak = textbox_weak_for_area.clone();
         let Some(selection) = selection_weak.upgrade() else {
@@ -3282,6 +3402,7 @@ async fn main() -> Result<()> {
             let state = state_for_selection.clone();
             let recorder_slot = recorder_slot_for_selection_actions.clone();
             let http = http_for_selection_actions.clone();
+            let recording_border = recording_border_for_selection_actions.clone();
             let hotkey_manager = hotkey_manager_area.clone();
             slint::Timer::single_shot(Duration::from_millis(1), move || {
                 // Showing the toolbar first prevents hiding the selector from shutting down the
@@ -3313,6 +3434,8 @@ async fn main() -> Result<()> {
                         rect,
                         None,
                         None,
+                        purpose == SelectionPurpose::Record,
+                        recording_border,
                         main.as_weak(),
                         toolbar.as_weak(),
                         state,
@@ -3536,6 +3659,26 @@ async fn main() -> Result<()> {
         }
     });
 
+    let selection_weak_color_hover = selection_window.as_weak();
+    let toolbar_weak_color_hover = capture_toolbar.as_weak();
+    let state_color_hover = state.clone();
+    selection_window.on_color_hovered(move |x, y| {
+        let color = {
+            let state = state_color_hover.lock().unwrap();
+            selection_pixel_at(&state, x, y)
+        };
+        let Some(color) = color else {
+            return;
+        };
+
+        if let Some(selection) = selection_weak_color_hover.upgrade() {
+            selection.set_color_tooltip(color_selection_tooltip(&color).into());
+        }
+        if let Some(toolbar) = toolbar_weak_color_hover.upgrade() {
+            toolbar.set_color_picker_tooltip(color_toolbar_tooltip(&color).into());
+        }
+    });
+
     let selection_weak_window_selected = selection_window.as_weak();
     let state_window_selected = state.clone();
     let hotkey_manager_window_selected = hotkey_manager.clone();
@@ -3544,6 +3687,7 @@ async fn main() -> Result<()> {
     let toolbar_weak_window_selected = capture_toolbar.as_weak();
     let recorder_slot_window_selected = recorder_slot.clone();
     let http_window_selected = http_client.clone();
+    let recording_border_window_selected = recording_border_window.as_weak();
     selection_window.on_window_selected(move |click_x, click_y| {
         let Some(selection) = selection_weak_window_selected.upgrade() else {
             return;
@@ -3598,6 +3742,7 @@ async fn main() -> Result<()> {
         let state = state_window_selected.clone();
         let recorder_slot = recorder_slot_window_selected.clone();
         let http = http_window_selected.clone();
+        let recording_border = recording_border_window_selected.clone();
         slint::Timer::single_shot(Duration::from_millis(1), move || {
             // Keep a visible window while closing the selector; otherwise capture mode's
             // selection window would be the last registered window and stop the event loop.
@@ -3618,6 +3763,8 @@ async fn main() -> Result<()> {
                     target.bounds,
                     Some(target),
                     None,
+                    purpose == SelectionPurpose::Record,
+                    recording_border,
                     main.as_weak(),
                     toolbar.as_weak(),
                     state,
@@ -3679,10 +3826,8 @@ async fn main() -> Result<()> {
             let _ = slint::spawn_local(async move {
                 let result = tokio::task::spawn_blocking(move || {
                     let color = capture::sample_pixel_at_point(screen_x, screen_y)?;
-                    let hex = format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2]);
-                    let decimal = format!("({}, {}, {})", color[0], color[1], color[2]);
-                    let tooltip = format!("HEX: {hex} | DEC: {decimal}");
-                    let clipboard_text = format!("HEX: {hex}\nDEC: {decimal}");
+                    let tooltip = color_toolbar_tooltip(&color);
+                    let clipboard_text = color_selection_tooltip(&color);
                     capture::copy_text_to_clipboard(&clipboard_text)?;
                     Ok::<String, anyhow::Error>(tooltip)
                 })

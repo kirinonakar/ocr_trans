@@ -527,7 +527,7 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
 
     scroll_to_top(target.handle, recipient, point);
     let mut previous = stable_capture(scroll_bounds)?;
-    let mut segments = vec![previous.clone()];
+    let mut segments = vec![(previous.clone(), 0u32)];
     let mut total_height = scroll_bounds.height as u32;
     let maximum_height = (60_000u32)
         .min((80_000_000u64 / scroll_bounds.width as u64) as u32)
@@ -553,7 +553,15 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
             break;
         }
         shift = shift.min(maximum_height - total_height);
-        segments.push(copy_bottom_rows(&current, shift));
+        // Keep a small overlap at every join. With an exact shift this is a no-op, while a
+        // one-pixel timing/scroll difference is blended instead of becoming a visible seam.
+        let overlap = 8u32
+            .min(shift)
+            .min(previous.height().saturating_sub(shift));
+        segments.push((
+            copy_bottom_rows(&current, shift + overlap),
+            overlap,
+        ));
         total_height += shift;
         previous = current;
     }
@@ -561,17 +569,47 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
     scroll_to_top(target.handle, recipient, point);
     let mut result = RgbaImage::new(scroll_bounds.width as u32, total_height);
     let mut y = 0u32;
-    for segment in segments {
+    for (segment_index, (segment, overlap)) in segments.into_iter().enumerate() {
+        let start_y = if segment_index == 0 {
+            0
+        } else {
+            y.saturating_sub(overlap)
+        };
         for row in 0..segment.height() {
-            let dst_y = y + row;
+            let dst_y = start_y + row;
             if dst_y >= result.height() {
                 break;
             }
             for x in 0..segment.width() {
-                result.put_pixel(x, dst_y, *segment.get_pixel(x, row));
+                let next = *segment.get_pixel(x, row);
+                if segment_index > 0 && row < overlap {
+                    let previous = *result.get_pixel(x, dst_y);
+                    let current_weight = row + 1;
+                    let previous_weight = overlap + 1 - current_weight;
+                    result.put_pixel(
+                        x,
+                        dst_y,
+                        Rgba([
+                            ((previous[0] as u32 * previous_weight
+                                + next[0] as u32 * current_weight)
+                                / (overlap + 1)) as u8,
+                            ((previous[1] as u32 * previous_weight
+                                + next[1] as u32 * current_weight)
+                                / (overlap + 1)) as u8,
+                            ((previous[2] as u32 * previous_weight
+                                + next[2] as u32 * current_weight)
+                                / (overlap + 1)) as u8,
+                            ((previous[3] as u32 * previous_weight
+                                + next[3] as u32 * current_weight)
+                                / (overlap + 1)) as u8,
+                        ]),
+                    );
+                } else {
+                    result.put_pixel(x, dst_y, next);
+                }
             }
         }
-        y += segment.height();
+        y = start_y + segment.height();
         if y >= result.height() {
             break;
         }
@@ -770,8 +808,63 @@ pub struct ScreenRecorder {
     child: Option<Child>,
 }
 
+#[cfg(target_os = "windows")]
+fn find_dshow_audio_device() -> Option<String> {
+    use std::os::windows::process::CommandExt;
+
+    let mut probe = Command::new("ffmpeg");
+    probe.creation_flags(0x0800_0000);
+    let output = probe
+        .args([
+            "-hide_banner",
+            "-list_devices",
+            "true",
+            "-f",
+            "dshow",
+            "-i",
+            "dummy",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .ok()?;
+
+    let mut devices = String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .filter_map(|line| {
+            if !line.contains("(audio)") {
+                return None;
+            }
+            let start = line.find('"')? + 1;
+            let end = line[start..].find('"')? + start;
+            let name = line[start..end].trim();
+            (!name.is_empty()).then(|| name.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    devices.sort_by_key(|name| {
+        let name = name.to_ascii_lowercase();
+        if [
+            "stereo mix",
+            "what u hear",
+            "wave out mix",
+            "loopback",
+            "cable output",
+            "virtual audio",
+        ]
+        .iter()
+        .any(|preferred| name.contains(preferred))
+        {
+            0
+        } else {
+            1
+        }
+    });
+    devices.into_iter().next()
+}
+
 impl ScreenRecorder {
-    pub fn start(rect: CaptureRect, path: PathBuf, fps: u32) -> Result<Self> {
+    pub fn start(rect: CaptureRect, path: PathBuf, fps: u32, show_border: bool) -> Result<Self> {
         if !rect.valid() {
             anyhow::bail!("The recording area is too small");
         }
@@ -788,6 +881,10 @@ impl ScreenRecorder {
         let fps = fps.clamp(1, 60);
 
         let video_size = format!("{}x{}", width, height);
+        #[cfg(target_os = "windows")]
+        let audio_device = find_dshow_audio_device();
+        #[cfg(not(target_os = "windows"))]
+        let audio_device: Option<String> = None;
         let framerate = fps.to_string();
         let mut ffmpeg = Command::new("ffmpeg");
         #[cfg(target_os = "windows")]
@@ -798,21 +895,45 @@ impl ScreenRecorder {
             // terminal window while recording from the toolbar.
             ffmpeg.creation_flags(0x0800_0000);
         }
-        let mut child = ffmpeg
-            .args([
-                "-y",
-                "-loglevel",
-                "error",
-                "-f",
-                "rawvideo",
-                "-pixel_format",
-                "rgba",
-                "-video_size",
-                video_size.as_str(),
-                "-framerate",
-                framerate.as_str(),
-                "-i",
-                "-",
+        ffmpeg.args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pixel_format",
+            "rgba",
+            "-video_size",
+            video_size.as_str(),
+            "-framerate",
+            framerate.as_str(),
+            "-i",
+            "-",
+        ]);
+        if let Some(audio_device) = audio_device.as_deref() {
+            let audio_input = format!("audio={audio_device}");
+            ffmpeg.args(["-f", "dshow", "-i"]);
+            ffmpeg.arg(audio_input);
+            ffmpeg.args([
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "160k",
+                "-shortest",
+                "-pix_fmt",
+                "yuv420p",
+            ]);
+        } else {
+            log::warn!("No DirectShow audio device found; recording video without audio");
+            ffmpeg.args([
                 "-an",
                 "-c:v",
                 "libx264",
@@ -820,7 +941,9 @@ impl ScreenRecorder {
                 "ultrafast",
                 "-pix_fmt",
                 "yuv420p",
-            ])
+            ]);
+        }
+        let mut child = ffmpeg
             .arg(path)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -834,7 +957,14 @@ impl ScreenRecorder {
         let worker_paused = paused.clone();
         let interval = Duration::from_secs_f64(1.0 / fps as f64);
         let worker = thread::spawn(move || {
-            record_frames(&mut stdin, rect, interval, worker_stop, worker_paused)
+            record_frames(
+                &mut stdin,
+                rect,
+                interval,
+                worker_stop,
+                worker_paused,
+                show_border,
+            )
         });
 
         Ok(Self {
@@ -870,12 +1000,16 @@ fn record_frames(
     interval: Duration,
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
+    show_border: bool,
 ) {
     while !stop.load(Ordering::Relaxed) {
         let frame_started = Instant::now();
         if !paused.load(Ordering::Relaxed) {
             match capture_area(&rect, &None) {
-                Ok(image) => {
+                Ok(mut image) => {
+                    if show_border {
+                        draw_recording_border(&mut image);
+                    }
                     if stdin.write_all(image.as_raw()).is_err() {
                         stop.store(true, Ordering::Relaxed);
                         break;
@@ -889,6 +1023,24 @@ fn record_frames(
         let elapsed = frame_started.elapsed();
         if elapsed < interval {
             thread::sleep(interval - elapsed);
+        }
+    }
+}
+
+fn draw_recording_border(image: &mut RgbaImage) {
+    const BORDER_WIDTH: u32 = 2;
+    const BORDER_COLOR: Rgba<u8> = Rgba([239, 68, 68, 255]);
+    let width = image.width();
+    let height = image.height();
+    for y in 0..height {
+        for x in 0..width {
+            if x < BORDER_WIDTH
+                || y < BORDER_WIDTH
+                || x >= width.saturating_sub(BORDER_WIDTH)
+                || y >= height.saturating_sub(BORDER_WIDTH)
+            {
+                image.put_pixel(x, y, BORDER_COLOR);
+            }
         }
     }
 }
