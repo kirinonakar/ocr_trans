@@ -12,6 +12,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use xcap::Monitor;
 
+#[cfg(target_os = "windows")]
+use std::net::{TcpListener, TcpStream};
+
 static OUTPUT_PATH_STATE: Mutex<Option<(String, u64)>> = Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -514,7 +517,10 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
     // The bottom of a browser window often contains a thin horizontal scrollbar/resize edge.
     // It is fixed while the page scrolls, so leaving it in each segment creates a repeated line
     // at every stitch. Keep the side/top crop small, but remove that fixed bottom band entirely.
-    const SCROLL_CAPTURE_BOTTOM_MARGIN: i32 = 6;
+    // The browser's fixed bottom frame can sit several pixels above the native window edge; keep
+    // enough distance to exclude the whole band from every segment instead of stitching it into
+    // the long image repeatedly.
+    const SCROLL_CAPTURE_BOTTOM_MARGIN: i32 = 14;
     let scroll_bounds = CaptureRect {
         x: target.bounds.x + SCROLL_CAPTURE_SIDE_MARGIN,
         y: target.bounds.y + SCROLL_CAPTURE_TOP_MARGIN,
@@ -810,62 +816,324 @@ pub struct ScreenRecorder {
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    audio_worker: Option<JoinHandle<()>>,
     child: Option<Child>,
 }
 
 #[cfg(target_os = "windows")]
-fn find_dshow_audio_device() -> Option<String> {
-    use std::os::windows::process::CommandExt;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WasapiRawAudioFormat {
+    Unsigned8,
+    Signed16Le,
+    Signed24Le,
+    Signed32Le,
+    Float32Le,
+}
 
-    let mut probe = Command::new("ffmpeg");
-    probe.creation_flags(0x0800_0000);
-    let output = probe
-        .args([
-            "-hide_banner",
-            "-list_devices",
-            "true",
-            "-f",
-            "dshow",
-            "-i",
-            "dummy",
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .ok()?;
-
-    let mut devices = String::from_utf8_lossy(&output.stderr)
-        .lines()
-        .filter_map(|line| {
-            if !line.contains("(audio)") {
-                return None;
-            }
-            let start = line.find('"')? + 1;
-            let end = line[start..].find('"')? + start;
-            let name = line[start..end].trim();
-            (!name.is_empty()).then(|| name.to_string())
-        })
-        .collect::<Vec<_>>();
-
-    devices.sort_by_key(|name| {
-        let name = name.to_ascii_lowercase();
-        if [
-            "stereo mix",
-            "what u hear",
-            "wave out mix",
-            "loopback",
-            "cable output",
-            "virtual audio",
-        ]
-        .iter()
-        .any(|preferred| name.contains(preferred))
-        {
-            0
-        } else {
-            1
+#[cfg(target_os = "windows")]
+impl WasapiRawAudioFormat {
+    fn ffmpeg_name(self) -> &'static str {
+        match self {
+            Self::Unsigned8 => "u8",
+            Self::Signed16Le => "s16le",
+            Self::Signed24Le => "s24le",
+            Self::Signed32Le => "s32le",
+            Self::Float32Le => "f32le",
         }
-    });
-    devices.into_iter().next()
+    }
+
+    fn bytes_per_sample(self) -> usize {
+        match self {
+            Self::Unsigned8 => 1,
+            Self::Signed16Le => 2,
+            Self::Signed24Le => 3,
+            Self::Signed32Le | Self::Float32Le => 4,
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WasapiAudioFormat {
+    sample_rate: u32,
+    channels: u16,
+    block_align: usize,
+    raw_format: WasapiRawAudioFormat,
+}
+
+#[cfg(target_os = "windows")]
+fn parse_wasapi_audio_format(
+    format_ptr: *const windows::Win32::Media::Audio::WAVEFORMATEX,
+) -> Result<WasapiAudioFormat> {
+    use windows::Win32::Media::Audio::WAVEFORMATEXTENSIBLE;
+
+    if format_ptr.is_null() {
+        anyhow::bail!("Windows returned an empty WASAPI mix format");
+    }
+
+    let format = unsafe { std::ptr::read_unaligned(format_ptr) };
+    let format_tag = format.wFormatTag;
+    let bits_per_sample = format.wBitsPerSample;
+    let (is_pcm, is_float) = match format_tag {
+        1 => (true, false),     // WAVE_FORMAT_PCM
+        3 => (false, true),     // WAVE_FORMAT_IEEE_FLOAT
+        0xfffe => {
+            // WAVE_FORMAT_EXTENSIBLE stores the real PCM/float tag in SubFormat.Data1.
+            if format.cbSize < 22 {
+                (false, false)
+            } else {
+                let extensible = unsafe {
+                    std::ptr::read_unaligned(format_ptr as *const WAVEFORMATEXTENSIBLE)
+                };
+                match extensible.SubFormat.data1 {
+                    1 => (true, false),
+                    3 => (false, true),
+                    _ => (false, false),
+                }
+            }
+        }
+        _ => (false, false),
+    };
+    if !is_pcm && !is_float {
+        anyhow::bail!(
+            "Unsupported Windows audio format tag: {}",
+            format_tag
+        );
+    }
+    if format.nChannels == 0 || format.nSamplesPerSec == 0 {
+        anyhow::bail!("Windows returned an invalid WASAPI channel or sample rate");
+    }
+
+    let raw_format = if is_float {
+        if bits_per_sample != 32 {
+            anyhow::bail!(
+                "Unsupported WASAPI float depth: {} bits",
+                bits_per_sample
+            );
+        }
+        WasapiRawAudioFormat::Float32Le
+    } else {
+        match bits_per_sample {
+            8 => WasapiRawAudioFormat::Unsigned8,
+            16 => WasapiRawAudioFormat::Signed16Le,
+            24 => WasapiRawAudioFormat::Signed24Le,
+            32 => WasapiRawAudioFormat::Signed32Le,
+            bits => anyhow::bail!("Unsupported WASAPI PCM depth: {bits} bits"),
+        }
+    };
+    let expected_block_align = format.nChannels as usize * raw_format.bytes_per_sample();
+    let block_align = format.nBlockAlign as usize;
+    if block_align != expected_block_align {
+        anyhow::bail!(
+            "Unsupported WASAPI block alignment: {block_align} (expected {expected_block_align})"
+        );
+    }
+
+    Ok(WasapiAudioFormat {
+        sample_rate: format.nSamplesPerSec,
+        channels: format.nChannels,
+        block_align,
+        raw_format,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn probe_wasapi_loopback_format() -> Result<WasapiAudioFormat> {
+    // COM apartment state belongs to the calling thread. Probe on a short-lived MTA so this
+    // remains safe even when Slint/Winit has initialized the UI thread differently.
+    thread::spawn(probe_wasapi_loopback_format_on_mta)
+        .join()
+        .map_err(|_| anyhow::anyhow!("WASAPI format probe thread panicked"))?
+}
+
+#[cfg(target_os = "windows")]
+fn probe_wasapi_loopback_format_on_mta() -> Result<WasapiAudioFormat> {
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_MULTITHREADED,
+        CLSCTX_ALL,
+    };
+
+    let init_result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    if init_result.is_err() {
+        anyhow::bail!("Failed to initialize COM for WASAPI: {init_result:?}");
+    }
+
+    let result = (|| {
+        let enumerator: IMMDeviceEnumerator = unsafe {
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+        }
+        .context("Failed to create the Windows audio device enumerator")?;
+        let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
+            .context("Failed to find the default Windows playback device")?;
+        let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None) }
+            .context("Failed to activate the default Windows playback device")?;
+        let format_ptr = unsafe { client.GetMixFormat() }
+            .context("Failed to read the Windows playback mix format")?;
+        let result = parse_wasapi_audio_format(format_ptr);
+        unsafe {
+            CoTaskMemFree(Some(format_ptr as *const std::ffi::c_void));
+        }
+        result
+    })();
+
+    unsafe { CoUninitialize() };
+    result
+}
+
+#[cfg(target_os = "windows")]
+fn accept_audio_stream(listener: TcpListener, stop: &AtomicBool) -> Result<Option<TcpStream>> {
+    listener
+        .set_nonblocking(true)
+        .context("Failed to configure the Windows audio loopback pipe")?;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream
+                    .set_write_timeout(Some(Duration::from_millis(250)))
+                    .context("Failed to configure the Windows audio loopback stream")?;
+                return Ok(Some(stream));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => return Err(error).context("Failed to accept the Windows audio stream"),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn capture_wasapi_loopback(
+    listener: TcpListener,
+    expected_format: WasapiAudioFormat,
+    stop: Arc<AtomicBool>,
+) {
+    let result = capture_wasapi_loopback_on_mta(listener, expected_format, &stop);
+    if let Err(error) = result {
+        log::warn!("Windows audio loopback stopped: {error:?}");
+        stop.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn capture_wasapi_loopback_on_mta(
+    listener: TcpListener,
+    expected_format: WasapiAudioFormat,
+    stop: &AtomicBool,
+) -> Result<()> {
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
+        MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_MULTITHREADED,
+        CLSCTX_ALL,
+    };
+
+    let init_result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    if init_result.is_err() {
+        anyhow::bail!("Failed to initialize COM for Windows audio capture: {init_result:?}");
+    }
+
+    let result = (|| {
+        let enumerator: IMMDeviceEnumerator = unsafe {
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+        }
+        .context("Failed to create the Windows audio device enumerator")?;
+        let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
+            .context("Failed to open the default Windows playback device")?;
+        let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None) }
+            .context("Failed to activate Windows audio loopback")?;
+        let format_ptr = unsafe { client.GetMixFormat() }
+            .context("Failed to read the Windows playback mix format")?;
+        let actual_format = parse_wasapi_audio_format(format_ptr);
+        let actual_format = match actual_format {
+            Ok(format) => format,
+            Err(error) => {
+                unsafe {
+                    CoTaskMemFree(Some(format_ptr as *const std::ffi::c_void));
+                }
+                return Err(error);
+            }
+        };
+        if actual_format != expected_format {
+            unsafe {
+                CoTaskMemFree(Some(format_ptr as *const std::ffi::c_void));
+            }
+            anyhow::bail!("The default Windows playback format changed while recording started");
+        }
+
+        let initialize_result = unsafe {
+            client.Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK,
+                10_000_000,
+                0,
+                format_ptr,
+                None,
+            )
+        };
+        unsafe {
+            CoTaskMemFree(Some(format_ptr as *const std::ffi::c_void));
+        }
+        initialize_result.context("Failed to initialize Windows audio loopback")?;
+
+        let Some(mut stream) = accept_audio_stream(listener, stop)? else {
+            return Ok(());
+        };
+        let capture_client: IAudioCaptureClient = unsafe { client.GetService() }
+            .context("Failed to access the Windows audio capture buffer")?;
+        unsafe { client.Start() }.context("Failed to start Windows audio loopback")?;
+
+        let capture_result = (|| {
+            while !stop.load(Ordering::Relaxed) {
+                let packet_frames = unsafe { capture_client.GetNextPacketSize() }
+                    .context("Failed to read the Windows audio packet size")?;
+                if packet_frames == 0 {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+
+                let mut data_ptr = std::ptr::null_mut();
+                let mut frames = 0u32;
+                let mut flags = 0u32;
+                unsafe {
+                    capture_client
+                        .GetBuffer(&mut data_ptr, &mut frames, &mut flags, None, None)
+                }
+                .context("Failed to read the Windows audio capture buffer")?;
+
+                let byte_len = frames as usize * expected_format.block_align;
+                let bytes = if flags & 2 != 0 || data_ptr.is_null() {
+                    // AUDCLNT_BUFFERFLAGS_SILENT: the loopback engine still advances the
+                    // timeline, so write an equally sized silent packet instead of dropping it.
+                    vec![0u8; byte_len]
+                } else {
+                    unsafe { std::slice::from_raw_parts(data_ptr as *const u8, byte_len) }
+                        .to_vec()
+                };
+                unsafe { capture_client.ReleaseBuffer(frames) }
+                    .context("Failed to release the Windows audio capture buffer")?;
+
+                if stream.write_all(&bytes).is_err() {
+                    break;
+                }
+            }
+            Ok::<(), anyhow::Error>(())
+        })();
+
+        let stop_result = unsafe { client.Stop() };
+        stop_result.context("Failed to stop Windows audio loopback")?;
+        capture_result
+    })();
+
+    unsafe { CoUninitialize() };
+    result
 }
 
 impl ScreenRecorder {
@@ -887,9 +1155,18 @@ impl ScreenRecorder {
 
         let video_size = format!("{}x{}", width, height);
         #[cfg(target_os = "windows")]
-        let audio_device = find_dshow_audio_device();
-        #[cfg(not(target_os = "windows"))]
-        let audio_device: Option<String> = None;
+        let audio_format = probe_wasapi_loopback_format()?;
+        #[cfg(target_os = "windows")]
+        let audio_listener = TcpListener::bind(("127.0.0.1", 0))
+            .context("Failed to create the Windows audio loopback stream")?;
+        #[cfg(target_os = "windows")]
+        let audio_url = format!(
+            "tcp://127.0.0.1:{}",
+            audio_listener
+                .local_addr()
+                .context("Failed to get the Windows audio loopback address")?
+                .port()
+        );
         let framerate = fps.to_string();
         let mut ffmpeg = Command::new("ffmpeg");
         #[cfg(target_os = "windows")]
@@ -915,10 +1192,25 @@ impl ScreenRecorder {
             "-i",
             "-",
         ]);
-        if let Some(audio_device) = audio_device.as_deref() {
-            let audio_input = format!("audio={audio_device}");
-            ffmpeg.args(["-f", "dshow", "-i"]);
-            ffmpeg.arg(audio_input);
+        #[cfg(target_os = "windows")]
+        {
+            // FFmpeg builds without a WASAPI demuxer are still common on Windows. Feed it the
+            // native default-render loopback through localhost, so the recording contains
+            // Windows playback audio instead of whichever webcam microphone DirectShow lists.
+            let audio_sample_rate = audio_format.sample_rate.to_string();
+            let audio_channels = audio_format.channels.to_string();
+            ffmpeg.args([
+                "-thread_queue_size",
+                "512",
+                "-f",
+                audio_format.raw_format.ffmpeg_name(),
+                "-ar",
+                audio_sample_rate.as_str(),
+                "-ac",
+                audio_channels.as_str(),
+                "-i",
+            ]);
+            ffmpeg.arg(audio_url);
             ffmpeg.args([
                 "-map",
                 "0:v:0",
@@ -928,26 +1220,37 @@ impl ScreenRecorder {
                 "libx264",
                 "-preset",
                 "ultrafast",
+                // Downmix multichannel output cleanly and always write a standard stereo AAC
+                // track at a stable rate. The resampler also keeps the two inputs synchronized.
+                "-af",
+                "aresample=async=1:first_pts=0",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-channel_layout",
+                "stereo",
                 "-c:a",
                 "aac",
+                "-profile:a",
+                "aac_low",
                 "-b:a",
-                "160k",
+                "192k",
                 "-shortest",
                 "-pix_fmt",
                 "yuv420p",
             ]);
-        } else {
-            log::warn!("No DirectShow audio device found; recording video without audio");
-            ffmpeg.args([
-                "-an",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast",
-                "-pix_fmt",
-                "yuv420p",
-            ]);
         }
+        #[cfg(not(target_os = "windows"))]
+        ffmpeg.args([
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ]);
         let mut child = ffmpeg
             .arg(path)
             .stdin(Stdio::piped())
@@ -958,6 +1261,17 @@ impl ScreenRecorder {
         let mut stdin = child.stdin.take().context("Failed to open FFmpeg input")?;
         let stop = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
+
+        #[cfg(target_os = "windows")]
+        let audio_worker = {
+            let audio_stop = stop.clone();
+            Some(thread::spawn(move || {
+                capture_wasapi_loopback(audio_listener, audio_format, audio_stop)
+            }))
+        };
+        #[cfg(not(target_os = "windows"))]
+        let audio_worker = None;
+
         let worker_stop = stop.clone();
         let worker_paused = paused.clone();
         let interval = Duration::from_secs_f64(1.0 / fps as f64);
@@ -969,6 +1283,7 @@ impl ScreenRecorder {
             stop,
             paused,
             worker: Some(worker),
+            audio_worker,
             child: Some(child),
         })
     }
@@ -981,6 +1296,9 @@ impl ScreenRecorder {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
+        }
+        if let Some(audio_worker) = self.audio_worker.take() {
+            let _ = audio_worker.join();
         }
         if let Some(mut child) = self.child.take() {
             let status = child.wait().context("Failed to close FFmpeg")?;

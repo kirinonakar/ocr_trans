@@ -654,10 +654,92 @@ enum SelectionPurpose {
 }
 
 fn clean_text(text: &str) -> String {
-    text.replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .trim()
-        .to_string()
+    normalize_japanese_spacing(
+        &text
+            .replace("\r\n", "\n")
+            .replace('\r', "\n"),
+    )
+    .trim()
+    .to_string()
+}
+
+fn normalize_japanese_spacing(text: &str) -> String {
+    text.split('\n')
+        .map(normalize_japanese_line_spacing)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn normalize_japanese_line_spacing(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut normalized = String::with_capacity(line.len());
+    let mut previous_non_space = None;
+    let mut index = 0;
+
+    while index < chars.len() {
+        if is_inline_space(chars[index]) {
+            let start = index;
+            while index < chars.len() && is_inline_space(chars[index]) {
+                index += 1;
+            }
+
+            let next_non_space = chars.get(index).copied();
+            if !previous_non_space
+                .zip(next_non_space)
+                .is_some_and(|(previous, next)| {
+                    is_japanese_spacing_char(previous) && is_japanese_spacing_char(next)
+                })
+            {
+                normalized.extend(chars[start..index].iter().copied());
+            }
+            continue;
+        }
+
+        normalized.push(chars[index]);
+        previous_non_space = Some(chars[index]);
+        index += 1;
+    }
+
+    normalized
+}
+
+fn is_inline_space(character: char) -> bool {
+    matches!(character, ' ' | '\t' | '\u{3000}')
+}
+
+fn is_japanese_spacing_char(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x3000..=0x303f // Japanese punctuation and iteration marks
+            | 0x3040..=0x30ff // Hiragana and Katakana
+            | 0x31f0..=0x31ff // Katakana extensions
+            | 0x3400..=0x4dbf // CJK extension A
+            | 0x4e00..=0x9fff // CJK unified ideographs
+            | 0xf900..=0xfaff // CJK compatibility ideographs
+            | 0xff01..=0xff65 // Full-width Japanese punctuation/forms
+            | 0xff66..=0xff9f // Half-width Katakana
+    )
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::clean_text;
+
+    #[test]
+    fn removes_spaces_inserted_between_japanese_characters() {
+        assert_eq!(
+            clean_text("コ ミ ュ ニ テ ィ 活 動 の 理 解 獲 得"),
+            "コミュニティ活動の理解獲得"
+        );
+    }
+
+    #[test]
+    fn preserves_line_breaks_and_latin_word_spacing() {
+        assert_eq!(
+            clean_text("日 本 AI  tool\r\n次 の 行"),
+            "日本 AI  tool\n次の行"
+        );
+    }
 }
 
 fn calculate_font_size(text: &str, width: f32, height: f32, max_size: f32) -> f32 {
@@ -1422,6 +1504,14 @@ async fn run_toolbar_action(
     let Some(toolbar) = toolbar.upgrade() else {
         return;
     };
+    let show_progress_tooltip = matches!(
+        action,
+        SelectionPurpose::OcrTranslate | SelectionPurpose::Vlm
+    );
+    if show_progress_tooltip {
+        toolbar.set_active_tooltip("thinking...".into());
+        sync_capture_toolbar_size(&toolbar);
+    }
     let recording_border_window = recording_border.upgrade();
     // Re-apply the native capture exclusion immediately before every toolbar action. This keeps
     // the toolbar out of full-screen captures and recordings even after Windows recreates or
@@ -1544,11 +1634,12 @@ async fn run_toolbar_action(
                 let width = image.width();
                 let height = image.height();
                 let pixels = rgba_to_bgra_bytes(&image);
-                let text = tokio::task::spawn_blocking(move || {
+                let recognized_text = tokio::task::spawn_blocking(move || {
                     ocr::recognize_text(&pixels, width, height)
                 })
                 .await
                 .context("OCR worker stopped")??;
+                let text = clean_text(&recognized_text);
                 if text.trim().is_empty() {
                     return Ok("No text was recognized".to_string());
                 }
@@ -1589,6 +1680,10 @@ async fn run_toolbar_action(
     match result {
         Ok(message) => set_capture_toolbar_status(&toolbar, message),
         Err(error) => set_capture_toolbar_status(&toolbar, format!("Error: {error}")),
+    }
+    if show_progress_tooltip {
+        toolbar.set_active_tooltip("done".into());
+        sync_capture_toolbar_size(&toolbar);
     }
     toolbar.set_recording(false);
     let _ = toolbar.show();
@@ -2178,6 +2273,18 @@ async fn main() -> Result<()> {
     let main_weak_toolbar_ui = main_window.as_weak();
     let toolbar_weak_toolbar_ui = capture_toolbar.as_weak();
     main_window.set_app_mode(initial_app_mode.clone().into());
+
+    // The initial title-bar attributes can be applied before Winit has shown the OCR window,
+    // after which Windows may restore its default light non-client colors. Apply the saved theme
+    // again on the first event-loop turn so the OCR UI opens with a matching dark title bar.
+    let main_weak_initial_theme = main_window.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(0), move || {
+        if let Some(main) = main_weak_initial_theme.upgrade() {
+            #[cfg(target_os = "windows")]
+            configure_main_window_native_theme(&main, main.get_dark_theme());
+        }
+    });
+
     capture_toolbar.on_ui_toggle_clicked(move || {
         // A toolbar button is part of the window currently dispatching the pointer event.
         // Deferring the native show/hide pair avoids changing that window set re-entrantly,
