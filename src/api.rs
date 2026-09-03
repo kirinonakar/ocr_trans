@@ -1,7 +1,20 @@
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use reqwest::Client;
+use reqwest::{Client, RequestBuilder};
 use serde::Serialize;
+use std::sync::OnceLock;
+use uuid::Uuid;
+
+/// One session ID is shared by every API client created during this app run.
+///
+/// `ApiClient` instances are intentionally short-lived in a few request paths, so the ID must
+/// live outside the client itself to remain stable for the whole conversation.
+fn opencode_session_id() -> &'static str {
+    static SESSION_ID: OnceLock<String> = OnceLock::new();
+    SESSION_ID
+        .get_or_init(|| Uuid::new_v4().to_string())
+        .as_str()
+}
 
 #[derive(Serialize)]
 struct GeminiRequest {
@@ -182,6 +195,14 @@ impl ApiClient {
 
     fn is_opencode_provider(&self) -> bool {
         self.provider == "OpenCode Go" || self.provider == "OpenCode Zen"
+    }
+
+    fn with_opencode_go_headers(&self, request: RequestBuilder) -> RequestBuilder {
+        if self.provider == "OpenCode Go" {
+            request.header("x-opencode-session", opencode_session_id())
+        } else {
+            request
+        }
     }
 
     fn apply_openai_thinking(&self, payload: &mut serde_json::Value) {
@@ -440,6 +461,7 @@ impl ApiClient {
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }
+        req = self.with_opencode_go_headers(req);
 
         log::info!("Sending AI request to: {}", url);
         let response = req.send().await.context("HTTP request failed")?;
@@ -482,6 +504,7 @@ impl ApiClient {
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }
+        req = self.with_opencode_go_headers(req);
         let response = req.send().await.context("HTTP request failed")?;
         if !response.status().is_success() {
             let status = response.status();
@@ -523,6 +546,7 @@ impl ApiClient {
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }
+        req = self.with_opencode_go_headers(req);
 
         log::info!("Sending OpenAI Responses request to: {}", url);
         let response = req.send().await.context("HTTP request failed")?;
@@ -586,6 +610,7 @@ impl ApiClient {
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }
+        req = self.with_opencode_go_headers(req);
         let response = req.send().await.context("HTTP request failed")?;
         if !response.status().is_success() {
             let status = response.status();
@@ -717,6 +742,7 @@ impl ApiClient {
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }
+        req = self.with_opencode_go_headers(req);
 
         let response = req.send().await.context("Failed to fetch models")?;
         if !response.status().is_success() {
@@ -796,5 +822,52 @@ impl ApiClient {
         }
 
         Ok(models)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_client(provider: &str) -> ApiClient {
+        ApiClient::new(
+            Client::new(),
+            "https://example.com/v1".to_string(),
+            String::new(),
+            "test-model".to_string(),
+            String::new(),
+            0.0,
+            "default".to_string(),
+            provider.to_string(),
+        )
+    }
+
+    #[test]
+    fn opencode_session_id_is_a_stable_uuid() {
+        let first = opencode_session_id().to_string();
+        let second = opencode_session_id();
+
+        assert_eq!(first, second);
+        assert!(Uuid::parse_str(first.as_str()).is_ok());
+    }
+
+    #[test]
+    fn session_header_is_only_added_for_opencode_go() {
+        let http = Client::new();
+        let opencode_go_request = test_client("OpenCode Go")
+            .with_opencode_go_headers(http.get("https://example.com"))
+            .build()
+            .expect("OpenCode Go request should build");
+        let zen_request = test_client("OpenCode Zen")
+            .with_opencode_go_headers(http.get("https://example.com"))
+            .build()
+            .expect("OpenCode Zen request should build");
+
+        let session_header = opencode_go_request
+            .headers()
+            .get("x-opencode-session")
+            .and_then(|value| value.to_str().ok());
+        assert_eq!(session_header, Some(opencode_session_id()));
+        assert!(zen_request.headers().get("x-opencode-session").is_none());
     }
 }

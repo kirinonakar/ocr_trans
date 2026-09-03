@@ -840,7 +840,9 @@ fn current_recording_elapsed(state: &AppState) -> Duration {
 }
 
 fn sync_capture_toolbar_size(toolbar: &CaptureToolbarWindow) {
-    let height = if toolbar.get_recording() || toolbar.get_status_text().is_empty() {
+    let height = if toolbar.get_recording()
+        || (toolbar.get_status_text().is_empty() && toolbar.get_active_tooltip().is_empty())
+    {
         48.0
     } else {
         68.0
@@ -863,6 +865,42 @@ fn sync_ocr_window_size(main: &MainWindow) {
     };
     main.window()
         .set_size(slint::LogicalSize::new(OCR_WINDOW_WIDTH, height));
+}
+
+#[cfg(target_os = "windows")]
+fn configure_main_window_native_theme(main: &MainWindow, dark_theme: bool) {
+    let _ = main.window().with_winit_window(|winit_window| {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Ok(handle) = winit_window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = windows::Win32::Foundation::HWND(handle.hwnd.get() as _);
+        win_utils::set_mica_backdrop(hwnd);
+        win_utils::set_title_bar_theme(hwnd, dark_theme);
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn configure_capture_toolbar_native_window(toolbar: &CaptureToolbarWindow) {
+    let _ = toolbar.window().with_winit_window(|winit_window| {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Ok(handle) = winit_window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = windows::Win32::Foundation::HWND(handle.hwnd.get() as _);
+        win_utils::set_layered(hwnd);
+        win_utils::set_tool_window(hwnd, true);
+        win_utils::set_exclude_from_capture(hwnd);
+        win_utils::disable_window_transitions(hwnd);
+    });
 }
 
 fn set_capture_toolbar_status(toolbar: &CaptureToolbarWindow, status: String) {
@@ -905,10 +943,13 @@ fn position_capture_toolbar(toolbar: &CaptureToolbarWindow) {
 fn show_capture_toolbar_at_top_center(toolbar: &CaptureToolbarWindow) -> bool {
     // Position before showing to avoid a visible jump, then repeat once the native window has
     // a monitor scale so the final location is exactly centered on the top edge.
+    toolbar.set_active_tooltip(String::new().into());
     position_capture_toolbar(toolbar);
     if toolbar.show().is_err() {
         return false;
     }
+    #[cfg(target_os = "windows")]
+    configure_capture_toolbar_native_window(toolbar);
     position_capture_toolbar(toolbar);
     true
 }
@@ -981,6 +1022,9 @@ fn prepare_selection_window(
             true
         }
     };
+    let _ = selection.show();
+    // Configure the native selection window only after show(). Winit creates secondary windows
+    // lazily, so doing this before show() can leave the first capture action unconfigured.
     #[cfg(target_os = "windows")]
     if should_initialize {
         selection.window().with_winit_window(move |winit_window| {
@@ -1001,8 +1045,6 @@ fn prepare_selection_window(
             }
         });
     }
-
-    let _ = selection.show();
     if let Some(manager) = hotkey_manager {
         let _ = manager.register(esc_hotkey);
     }
@@ -1024,27 +1066,112 @@ fn begin_toolbar_selection(
     if toolbar.get_recording() {
         return;
     }
-    let _ = toolbar.hide();
+
+    // Do not hide the toolbar or create/show another native window while Winit is dispatching
+    // the toolbar's pointer event. On Windows that re-entrant window change can crash the app.
+    let toolbar_weak = toolbar.as_weak();
+    let selection_weak = selection_weak.clone();
+    let state = state.clone();
+    let selection_initialized = selection_initialized.clone();
+    let hotkey_manager = hotkey_manager.clone();
+    slint::Timer::single_shot(Duration::from_millis(1), move || {
+        let Some(toolbar) = toolbar_weak.upgrade() else {
+            return;
+        };
+        begin_toolbar_selection_now(
+            &toolbar,
+            &selection_weak,
+            &state,
+            purpose,
+            window_mode,
+            color_picker_mode,
+            &selection_initialized,
+            &hotkey_manager,
+            esc_hotkey,
+            owner,
+        );
+    });
+}
+
+fn begin_toolbar_selection_now(
+    toolbar: &CaptureToolbarWindow,
+    selection_weak: &slint::Weak<SelectionWindow>,
+    state: &Arc<Mutex<AppState>>,
+    purpose: SelectionPurpose,
+    window_mode: bool,
+    color_picker_mode: bool,
+    selection_initialized: &Arc<Mutex<bool>>,
+    hotkey_manager: &Option<Arc<GlobalHotKeyManager>>,
+    esc_hotkey: HotKey,
+    owner: Option<isize>,
+) {
+    if toolbar.get_recording() {
+        return;
+    }
     let Some(selection) = selection_weak.upgrade() else {
-        let _ = toolbar.show();
         return;
     };
-    if !prepare_selection_window(
-        &selection,
-        state,
-        purpose,
-        window_mode,
-        color_picker_mode,
-        selection_initialized,
-        hotkey_manager,
-        esc_hotkey,
-        owner,
-    ) {
-        let _ = toolbar.show();
+    toolbar.set_active_tooltip(String::new().into());
+    if toolbar.hide().is_err() {
+        return;
     }
+
+    // Let the hide request reach the native window before xcap captures the monitor. This also
+    // prevents a second Winit window mutation from occurring in the toolbar's event turn.
+    let toolbar_weak = toolbar.as_weak();
+    let selection_weak = selection.as_weak();
+    let state = state.clone();
+    let selection_initialized = selection_initialized.clone();
+    let hotkey_manager = hotkey_manager.clone();
+    slint::Timer::single_shot(Duration::from_millis(16), move || {
+        let (Some(toolbar), Some(selection)) = (toolbar_weak.upgrade(), selection_weak.upgrade())
+        else {
+            return;
+        };
+        if toolbar.get_recording() {
+            let _ = toolbar.show();
+            return;
+        }
+        if !prepare_selection_window(
+            &selection,
+            &state,
+            purpose,
+            window_mode,
+            color_picker_mode,
+            &selection_initialized,
+            &hotkey_manager,
+            esc_hotkey,
+            owner,
+        ) {
+            let _ = toolbar.show();
+        }
+    });
 }
 
 fn begin_fullscreen_toolbar_action(
+    toolbar: &CaptureToolbarWindow,
+    main: &MainWindow,
+    state: Arc<Mutex<AppState>>,
+    recorder_slot: Arc<Mutex<Option<capture::ScreenRecorder>>>,
+    http: reqwest::Client,
+) {
+    if toolbar.get_recording() {
+        return;
+    }
+
+    // Match the selection actions above: native window changes must happen after the pointer
+    // callback returns, not while the capture toolbar is still handling the click.
+    let toolbar_weak = toolbar.as_weak();
+    let main_weak = main.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(1), move || {
+        let (Some(toolbar), Some(main)) = (toolbar_weak.upgrade(), main_weak.upgrade()) else {
+            return;
+        };
+        begin_fullscreen_toolbar_action_now(&toolbar, &main, state, recorder_slot, http);
+    });
+}
+
+fn begin_fullscreen_toolbar_action_now(
     toolbar: &CaptureToolbarWindow,
     main: &MainWindow,
     state: Arc<Mutex<AppState>>,
@@ -1059,26 +1186,44 @@ fn begin_fullscreen_toolbar_action(
     } else {
         SelectionPurpose::Capture
     };
-    let _ = toolbar.hide();
-    let (cursor_x, cursor_y) = capture::cursor_position();
-    let rect = match capture::monitor_rect_at_point(cursor_x, cursor_y) {
-        Ok(rect) => rect,
-        Err(error) => {
-            set_capture_toolbar_status(toolbar, format!("Error: {error}"));
-            let _ = toolbar.show();
+    toolbar.set_active_tooltip(String::new().into());
+    if toolbar.hide().is_err() {
+        return;
+    }
+
+    // Give the native hide request a chance to complete before asking xcap for the monitor
+    // image. In particular, this keeps the toolbar out of a full-screen capture on Windows.
+    let toolbar_weak = toolbar.as_weak();
+    let main_weak = main.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(16), move || {
+        let (Some(toolbar), Some(main)) = (toolbar_weak.upgrade(), main_weak.upgrade()) else {
             return;
+        };
+        let (cursor_x, cursor_y) = capture::cursor_position();
+        let rect = match capture::monitor_rect_at_point(cursor_x, cursor_y) {
+            Ok(rect) => rect,
+            Err(error) => {
+                set_capture_toolbar_status(&toolbar, format!("Error: {error}"));
+                let _ = toolbar.show();
+                return;
+            }
+        };
+        let spawn_result = slint::spawn_local(run_toolbar_action(
+            action,
+            rect,
+            None,
+            main.as_weak(),
+            toolbar.as_weak(),
+            state,
+            recorder_slot,
+            http,
+        ));
+        if let Err(error) = spawn_result {
+            log::error!("Failed to start capture action: {error:?}");
+            set_capture_toolbar_status(&toolbar, format!("Error: {error:?}"));
+            let _ = toolbar.show();
         }
-    };
-    let _ = slint::spawn_local(run_toolbar_action(
-        action,
-        rect,
-        None,
-        main.as_weak(),
-        toolbar.as_weak(),
-        state,
-        recorder_slot,
-        http,
-    ));
+    });
 }
 
 fn rgba_to_bgra_bytes(image: &image::RgbaImage) -> Vec<u8> {
@@ -1676,6 +1821,7 @@ async fn main() -> Result<()> {
                 if let RawWindowHandle::Win32(h) = handle.as_raw() {
                     let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
                     win_utils::set_mica_backdrop(hwnd);
+                    win_utils::set_title_bar_theme(hwnd, initial_dark_theme);
                     hwnd_out = Some(hwnd);
                 }
             }
@@ -1683,21 +1829,8 @@ async fn main() -> Result<()> {
         hwnd_out
     };
 
-    // Compact capture toolbar: frameless, layered, excluded from screenshots, and hidden from
-    // the taskbar while it is acting as the AIMediaWorker-style capture surface.
-    #[cfg(target_os = "windows")]
-    capture_toolbar.window().with_winit_window(|winit_window| {
-        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        if let Ok(handle) = winit_window.window_handle() {
-            if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
-                win_utils::set_layered(hwnd);
-                win_utils::set_tool_window(hwnd, true);
-                win_utils::set_exclude_from_capture(hwnd);
-                win_utils::disable_window_transitions(hwnd);
-            }
-        }
-    });
+    // The capture toolbar's native handle is configured after its first show. Winit creates
+    // native windows lazily, so an accessor call here (before the event loop starts) is a no-op.
 
     #[cfg(target_os = "windows")]
     let folder_owner = main_hwnd.map(|hwnd| hwnd.0 as isize);
@@ -1753,6 +1886,38 @@ async fn main() -> Result<()> {
     // Initial Selection Window Styles Setup
     let selection_initialized = Arc::new(Mutex::new(false));
 
+    // Keep the OCR window's theme switch in sync with the compact capture toolbar. The native
+    // title bar is updated here as well because changing Slint's client-area colors alone does
+    // not update Windows' non-client area.
+    let main_weak_main_theme = main_window.as_weak();
+    let toolbar_weak_main_theme = capture_toolbar.as_weak();
+    main_window.on_theme_toggle_clicked(move || {
+        let Some(main) = main_weak_main_theme.upgrade() else {
+            return;
+        };
+        let dark_theme = !main.get_dark_theme();
+        main.set_dark_theme(dark_theme);
+        if let Some(toolbar) = toolbar_weak_main_theme.upgrade() {
+            toolbar.set_dark_theme(dark_theme);
+        }
+        #[cfg(target_os = "windows")]
+        configure_main_window_native_theme(&main, dark_theme);
+        save_dark_theme(dark_theme);
+    });
+
+    // Apply the persisted title-bar theme once Winit has created the native OCR window. This
+    // timer is necessary for a dark theme restored on startup; the initial pre-run accessor may
+    // not have a native handle yet.
+    #[cfg(target_os = "windows")]
+    {
+        let main_weak_native_theme = main_window.as_weak();
+        slint::Timer::single_shot(Duration::from_millis(0), move || {
+            if let Some(main) = main_weak_native_theme.upgrade() {
+                configure_main_window_native_theme(&main, initial_dark_theme);
+            }
+        });
+    }
+
     // Main window <-> compact capture toolbar mode switch. OCR mode keeps the original
     // settings UI; Capture mode hides it and reveals the AIMediaWorker-style toolbar.
     let main_weak_mode = main_window.as_weak();
@@ -1802,6 +1967,8 @@ async fn main() -> Result<()> {
             slint::Timer::single_shot(Duration::from_millis(1), move || {
                 if let Some(main) = main_weak_switch.upgrade() {
                     let _ = main.show();
+                    #[cfg(target_os = "windows")]
+                    configure_main_window_native_theme(&main, main.get_dark_theme());
                 }
                 if let Some(toolbar) = toolbar_weak_switch.upgrade() {
                     let _ = toolbar.hide();
@@ -1822,6 +1989,8 @@ async fn main() -> Result<()> {
         toolbar.set_dark_theme(dark_theme);
         if let Some(main) = main_weak_toolbar_theme.upgrade() {
             main.set_dark_theme(dark_theme);
+            #[cfg(target_os = "windows")]
+            configure_main_window_native_theme(&main, dark_theme);
         }
         save_dark_theme(dark_theme);
     });
@@ -1831,19 +2000,31 @@ async fn main() -> Result<()> {
     let toolbar_weak_toolbar_ui = capture_toolbar.as_weak();
     main_window.set_app_mode(initial_app_mode.clone().into());
     capture_toolbar.on_ui_toggle_clicked(move || {
-        if let Some(toolbar) = toolbar_weak_toolbar_ui.upgrade() {
-            if toolbar.get_recording() {
+        // A toolbar button is part of the window currently dispatching the pointer event.
+        // Deferring the native show/hide pair avoids changing that window set re-entrantly,
+        // which can terminate the Winit event loop on Windows.
+        let main_weak = main_weak_toolbar_ui.clone();
+        let toolbar_weak = toolbar_weak_toolbar_ui.clone();
+        slint::Timer::single_shot(Duration::from_millis(1), move || {
+            if let Some(toolbar) = toolbar_weak.upgrade() {
+                if toolbar.get_recording() {
+                    return;
+                }
+            }
+            let Some(main) = main_weak.upgrade() else {
+                return;
+            };
+            main.set_app_mode("ocr".into());
+            if main.show().is_err() {
                 return;
             }
-        }
-        if let Some(main) = main_weak_toolbar_ui.upgrade() {
-            main.set_app_mode("ocr".into());
-            let _ = main.show();
-        }
-        save_app_mode("ocr");
-        if let Some(toolbar) = toolbar_weak_toolbar_ui.upgrade() {
-            let _ = toolbar.hide();
-        }
+            #[cfg(target_os = "windows")]
+            configure_main_window_native_theme(&main, main.get_dark_theme());
+            save_app_mode("ocr");
+            if let Some(toolbar) = toolbar_weak.upgrade() {
+                let _ = toolbar.hide();
+            }
+        });
     });
 
     // Restore the last selected mode after the event loop has created the native windows.
@@ -1864,20 +2045,40 @@ async fn main() -> Result<()> {
 
     let recorder_slot: Arc<Mutex<Option<capture::ScreenRecorder>>> = Arc::new(Mutex::new(None));
 
+    // Tooltips occupy the compact status row. Resize only after the hover event has returned;
+    // changing a native window while Winit is dispatching pointer input can crash on Windows.
+    let toolbar_weak_tooltip = capture_toolbar.as_weak();
+    capture_toolbar.on_tooltip_visibility_changed(move |_tooltip| {
+        let toolbar_weak = toolbar_weak_tooltip.clone();
+        slint::Timer::single_shot(Duration::from_millis(16), move || {
+            if let Some(toolbar) = toolbar_weak.upgrade() {
+                sync_capture_toolbar_size(&toolbar);
+            }
+        });
+    });
+
     let toolbar_weak_capture_mode = capture_toolbar.as_weak();
     capture_toolbar.on_capture_mode_clicked(move || {
-        if let Some(toolbar) = toolbar_weak_capture_mode.upgrade() {
-            toolbar.set_record_mode(false);
-            set_capture_toolbar_status(&toolbar, String::new());
-        }
+        let toolbar_weak = toolbar_weak_capture_mode.clone();
+        slint::Timer::single_shot(Duration::from_millis(16), move || {
+            if let Some(toolbar) = toolbar_weak.upgrade() {
+                toolbar.set_record_mode(false);
+                toolbar.set_status_text(String::new().into());
+                sync_capture_toolbar_size(&toolbar);
+            }
+        });
     });
 
     let toolbar_weak_record_mode = capture_toolbar.as_weak();
     capture_toolbar.on_record_mode_clicked(move || {
-        if let Some(toolbar) = toolbar_weak_record_mode.upgrade() {
-            toolbar.set_record_mode(true);
-            set_capture_toolbar_status(&toolbar, String::new());
-        }
+        let toolbar_weak = toolbar_weak_record_mode.clone();
+        slint::Timer::single_shot(Duration::from_millis(16), move || {
+            if let Some(toolbar) = toolbar_weak.upgrade() {
+                toolbar.set_record_mode(true);
+                toolbar.set_status_text(String::new().into());
+                sync_capture_toolbar_size(&toolbar);
+            }
+        });
     });
 
     let toolbar_weak_fullscreen = capture_toolbar.as_weak();
@@ -2998,7 +3199,12 @@ async fn main() -> Result<()> {
     let http_for_selection_actions = http_client.clone();
     selection_window.on_area_selected(move |x, y, w, h| {
         let textbox_weak = textbox_weak_for_area.clone();
-        let selection = selection_weak.unwrap();
+        let Some(selection) = selection_weak.upgrade() else {
+            if let Some(toolbar) = toolbar_weak_for_selection_actions.upgrade() {
+                let _ = toolbar.show();
+            }
+            return;
+        };
 
         let pending = state_for_selection.lock().unwrap().pending_selection;
         if let Some(purpose) = pending.filter(|purpose| *purpose != SelectionPurpose::ContinuousOcr)
@@ -3065,9 +3271,22 @@ async fn main() -> Result<()> {
         let hotkey_manager_async = hotkey_manager_area.clone();
         let esc_hotkey_async = esc_hotkey_area.clone();
         let textbox_weak_async = textbox_weak.clone();
-        slint::spawn_local(async move {
+        let selection_weak_async = selection.as_weak();
+        let spawn_result = slint::spawn_local(async move {
             let textbox_weak = textbox_weak_async;
-            let main = main_weak_for_sync.unwrap();
+            let Some(selection) = selection_weak_async.upgrade() else {
+                if let Some(ref mgr) = hotkey_manager_async {
+                    let _ = mgr.unregister(esc_hotkey_async);
+                }
+                return;
+            };
+            let Some(main) = main_weak_for_sync.upgrade() else {
+                let _ = selection.hide();
+                if let Some(ref mgr) = hotkey_manager_async {
+                    let _ = mgr.unregister(esc_hotkey_async);
+                }
+                return;
+            };
 
             // Sync with LM Studio if applicable
             // (Removed automatic sync on area selected to prevent model reverting bug)
@@ -3145,7 +3364,9 @@ async fn main() -> Result<()> {
                 }
 
                 overlay.set_show_text(true);
-                overlay.show().unwrap();
+                if let Err(error) = overlay.show() {
+                    log::warn!("Failed to show OCR overlay: {error:?}");
+                }
 
                 // Set overlay to click-through and hide from taskbar
                 #[cfg(target_os = "windows")]
@@ -3170,12 +3391,21 @@ async fn main() -> Result<()> {
                 }
             }
 
-            selection.hide().unwrap();
+            let _ = selection.hide();
             if let Some(ref mgr) = hotkey_manager_async {
                 let _ = mgr.unregister(esc_hotkey_async);
             }
-        })
-        .unwrap();
+        });
+        if let Err(error) = spawn_result {
+            log::error!("Failed to start OCR selection action: {error:?}");
+            let _ = selection.hide();
+            if let Some(ref mgr) = hotkey_manager_area {
+                let _ = mgr.unregister(esc_hotkey_area);
+            }
+            if let Some(toolbar) = toolbar_weak_for_selection_actions.upgrade() {
+                let _ = toolbar.show();
+            }
+        }
     });
 
     let selection_weak_window_hover = selection_window.as_weak();
@@ -3619,6 +3849,8 @@ async fn main() -> Result<()> {
         }
     });
 
-    main_window.run().unwrap();
+    if let Err(error) = main_window.run() {
+        log::error!("OCR Translator event loop stopped: {error:?}");
+    }
     Ok(())
 }

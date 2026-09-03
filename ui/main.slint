@@ -1,4 +1,4 @@
-import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox, TextEdit, ScrollView } from "std-widgets.slint";
+import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox, TextEdit, ScrollView, Palette } from "std-widgets.slint";
 
 component ToolbarButton inherits Rectangle {
     in property <image> icon;
@@ -7,8 +7,10 @@ component ToolbarButton inherits Rectangle {
     in property <bool> dark_theme: false;
     in property <bool> press_on_down: false;
     in property <string> label: "";
+    in property <string> tooltip: "";
     in property <length> icon_size: 17px;
     callback pressed();
+    callback hovered_tooltip_changed(string);
 
     width: 30px;
     height: 30px;
@@ -55,6 +57,11 @@ component ToolbarButton inherits Rectangle {
                 pressed();
             }
         }
+        changed has-hover => {
+            if (tooltip != "") {
+                hovered_tooltip_changed(self.has-hover ? tooltip : "");
+            }
+        }
         clicked => {
             if (!press_on_down) { pressed(); }
         }
@@ -74,6 +81,16 @@ export component MainWindow inherits Window {
         ? @linear-gradient(180deg, #0f172a 0%, #111827 100%)
         : @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
     default-font-family: "Yu Gothic UI";
+
+    // Keep std-widgets (LineEdit, TextEdit, ComboBox, etc.) on the same palette as the
+    // application theme. Without this, the widgets follow the OS palette independently and
+    // can remain light while the OCR window is dark.
+    init => {
+        Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light;
+    }
+    changed dark_theme => {
+        Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light;
+    }
 
     in-out property <bool> is_running: false;
     in-out property <string> api_type: "LMStudio";
@@ -118,6 +135,7 @@ export component MainWindow inherits Window {
 
     callback model_changed(string);
     callback thinking_level_changed(string);
+    callback theme_toggle_clicked();
     callback mode_toggle_clicked(string);
     VerticalLayout {
         alignment: start;
@@ -139,41 +157,26 @@ export component MainWindow inherits Window {
 
             Rectangle { }
 
-            // Compact OCR/Capture switch aligned with the title.
-            Rectangle {
+            // Keep the theme action immediately to the left of the mode switch.
+            ToolbarButton {
+                icon: @image-url("icons/theme.svg");
+                dark_theme: dark_theme;
+                active: dark_theme;
+                width: 30px;
+                icon_size: 16px;
+                pressed => { theme_toggle_clicked(); }
+            }
+
+            // OCR mode exposes a plain Capture button; the old switch's white knob is not needed.
+            ToolbarButton {
+                icon: @image-url("icons/ui.svg");
+                dark_theme: dark_theme;
+                active: app_mode == "capture";
                 width: 78px;
-                height: 26px;
-                y: 2px;
-                background: app_mode == "capture" ? #2563eb : (dark_theme ? #334155 : #cbd5e1);
-                border-radius: 13px;
-                border-width: 1px;
-                border-color: app_mode == "capture" ? #1d4ed8 : (dark_theme ? #64748b : #94a3b8);
-
-                Text {
-                    text: app_mode == "capture" ? "CAP" : "OCR";
-                    x: app_mode == "capture" ? 6px : 31px;
-                    width: 41px;
-                    height: 26px;
-                    color: app_mode == "capture" ? #ffffff : (dark_theme ? #e2e8f0 : #334155);
-                    font-size: 10px;
-                    font-weight: 800;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                Rectangle {
-                    x: app_mode == "capture" ? 54px : 4px;
-                    y: 3px;
-                    width: 18px;
-                    height: 18px;
-                    background: #ffffff;
-                    border-radius: 9px;
-                }
-
-                TouchArea {
-                    clicked => {
-                        mode_toggle_clicked(app_mode == "capture" ? "ocr" : "capture");
-                    }
+                icon_size: 15px;
+                label: app_mode == "capture" ? "OCR" : "Capture";
+                pressed => {
+                    mode_toggle_clicked(app_mode == "capture" ? "ocr" : "capture");
                 }
             }
         }
@@ -534,7 +537,7 @@ export component CaptureToolbarWindow inherits Window {
     background: transparent;
     default-font-family: "Yu Gothic UI";
     preferred-width: 560px;
-    preferred-height: recording ? 48px : (status_text == "" ? 48px : 68px);
+    preferred-height: recording ? 48px : ((status_text == "" && active_tooltip == "") ? 48px : 68px);
     min-width: 540px;
 
     in-out property <bool> record_mode: false;
@@ -543,6 +546,7 @@ export component CaptureToolbarWindow inherits Window {
     in-out property <bool> dark_theme: false;
     in-out property <string> recording_elapsed: "00:00";
     in-out property <string> status_text: "";
+    in-out property <string> active_tooltip: "";
 
     callback drag_requested();
     callback theme_toggle_clicked();
@@ -560,6 +564,11 @@ export component CaptureToolbarWindow inherits Window {
     callback close_clicked();
     callback pause_recording_clicked();
     callback stop_recording_clicked();
+    callback tooltip_visibility_changed(string);
+
+    changed recording => {
+        active_tooltip = "";
+    }
 
     VerticalLayout {
         width: 100%;
@@ -589,6 +598,11 @@ export component CaptureToolbarWindow inherits Window {
                 icon: @image-url("icons/drag.svg");
                 dark_theme: dark_theme;
                 width: 24px;
+                tooltip: "Move toolbar";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
                 press_on_down: true;
                 pressed => { drag_requested(); }
             }
@@ -597,9 +611,13 @@ export component CaptureToolbarWindow inherits Window {
                 icon: @image-url("icons/theme.svg");
                 dark_theme: dark_theme;
                 active: dark_theme;
-                press_on_down: true;
                 width: 30px;
                 icon_size: 16px;
+                tooltip: "Toggle dark mode";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
                 pressed => { theme_toggle_clicked(); }
             }
 
@@ -609,8 +627,12 @@ export component CaptureToolbarWindow inherits Window {
                 dark_theme: dark_theme;
                 width: 64px;
                 icon_size: 14px;
-                label: "Capture";
-                press_on_down: true;
+                label: "OCR";
+                tooltip: "Return to OCR settings";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
                 pressed => { ui_toggle_clicked(); }
             }
 
@@ -629,15 +651,23 @@ export component CaptureToolbarWindow inherits Window {
                     ToolbarButton {
                         icon: @image-url("icons/capture.svg");
                         dark_theme: dark_theme;
-                        press_on_down: true;
                         active: !record_mode;
+                        tooltip: "Capture mode";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
                         pressed => { capture_mode_clicked(); }
                     }
                     ToolbarButton {
                         icon: @image-url("icons/record.svg");
                         dark_theme: dark_theme;
-                        press_on_down: true;
                         active: record_mode;
+                        tooltip: "Record mode";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
                         pressed => { record_mode_clicked(); }
                     }
                 }
@@ -658,26 +688,42 @@ export component CaptureToolbarWindow inherits Window {
                     ToolbarButton {
                         icon: @image-url("icons/fullscreen.svg");
                         dark_theme: dark_theme;
-                        press_on_down: true;
+                        tooltip: "Capture full screen";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
                         pressed => { fullscreen_clicked(); }
                     }
                     ToolbarButton {
                         icon: @image-url("icons/window.svg");
                         dark_theme: dark_theme;
-                        press_on_down: true;
+                        tooltip: "Capture window";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
                         pressed => { window_clicked(); }
                     }
                     ToolbarButton {
                         icon: @image-url("icons/scroll.svg");
                         dark_theme: dark_theme;
-                        press_on_down: true;
                         available: !record_mode;
+                        tooltip: "Scrolling capture";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
                         pressed => { scroll_clicked(); }
                     }
                     ToolbarButton {
                         icon: @image-url("icons/region.svg");
                         dark_theme: dark_theme;
-                        press_on_down: true;
+                        tooltip: "Capture region";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
                         pressed => { region_clicked(); }
                     }
                 }
@@ -698,29 +744,45 @@ export component CaptureToolbarWindow inherits Window {
                     ToolbarButton {
                         icon: @image-url("icons/ocr.svg");
                         dark_theme: dark_theme;
-                        press_on_down: true;
                         width: 30px;
+                        tooltip: "OCR selected area";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
                         pressed => { ocr_clicked(); }
                     }
                     ToolbarButton {
                         icon: @image-url("icons/translate.svg");
                         dark_theme: dark_theme;
-                        press_on_down: true;
                         width: 34px;
+                        tooltip: "OCR and translate";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
                         pressed => { translate_clicked(); }
                     }
                     ToolbarButton {
                         icon: @image-url("icons/vlm.svg");
                         dark_theme: dark_theme;
-                        press_on_down: true;
                         width: 30px;
+                        tooltip: "Vision model capture";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
                         pressed => { vlm_clicked(); }
                     }
                     // The reference voice-input slot is intentionally a color picker here.
                     ToolbarButton {
                         icon: @image-url("icons/color.svg");
                         dark_theme: dark_theme;
-                        press_on_down: true;
+                        tooltip: "Pick color";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
                         pressed => { color_picker_clicked(); }
                     }
                 }
@@ -730,7 +792,11 @@ export component CaptureToolbarWindow inherits Window {
                 icon: @image-url("icons/close.svg");
                 dark_theme: dark_theme;
                 icon_size: 16px;
-                press_on_down: true;
+                tooltip: "Exit application";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
                 pressed => { close_clicked(); }
             }
         }
@@ -749,6 +815,11 @@ export component CaptureToolbarWindow inherits Window {
                 icon: @image-url("icons/drag.svg");
                 dark_theme: dark_theme;
                 width: 24px;
+                tooltip: "Move toolbar";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
                 press_on_down: true;
                 pressed => { drag_requested(); }
             }
@@ -769,22 +840,48 @@ export component CaptureToolbarWindow inherits Window {
             ToolbarButton {
                 icon: recording_paused ? @image-url("icons/play.svg") : @image-url("icons/pause.svg");
                 dark_theme: dark_theme;
-                press_on_down: true;
                 width: 34px;
+                tooltip: recording_paused ? "Resume recording" : "Pause recording";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
                 pressed => { pause_recording_clicked(); }
             }
             ToolbarButton {
                 icon: @image-url("icons/stop.svg");
                 dark_theme: dark_theme;
-                press_on_down: true;
                 active: true;
                 width: 38px;
+                tooltip: "Stop recording";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
                 pressed => { stop_recording_clicked(); }
             }
             }
         }
 
-        if (!recording && status_text != "") : Text {
+        if (!recording && active_tooltip != "") : Rectangle {
+            width: 100%;
+            height: 20px;
+            background: dark_theme ? #020617f2 : #ffffffee;
+            border-width: 1px;
+            border-color: dark_theme ? #475569 : #cbd5e1;
+            Text {
+                width: 100%;
+                height: 100%;
+                text: active_tooltip;
+                color: dark_theme ? #e2e8f0 : #334155;
+                font-size: 11px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        if (!recording && active_tooltip == "" && status_text != "") : Text {
             width: 100%;
             height: 20px;
             text: status_text;

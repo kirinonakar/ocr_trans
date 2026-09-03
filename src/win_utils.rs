@@ -1,7 +1,7 @@
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Dwm::{
-    DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
-    DWMWA_TRANSITIONS_FORCEDISABLED,
+    DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMWA_CAPTION_COLOR, DWMWA_SYSTEMBACKDROP_TYPE,
+    DWMWA_TEXT_COLOR, DWMWA_TRANSITIONS_FORCEDISABLED, DWMWA_USE_IMMERSIVE_DARK_MODE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -88,6 +88,39 @@ pub fn set_mica_backdrop(hwnd: HWND) {
             DWMWA_SYSTEMBACKDROP_TYPE,
             &value as *const _ as *const _,
             std::mem::size_of::<i32>() as u32,
+        );
+    }
+}
+
+/// Applies the requested theme to the native title bar of the OCR settings window.
+///
+/// Slint's `dark_theme` property only changes the client area. The non-client title bar is
+/// owned by Windows, so it needs the DWM attributes as well to avoid a light title bar above a
+/// dark OCR UI (and vice versa).
+pub fn set_title_bar_theme(hwnd: HWND, dark: bool) {
+    unsafe {
+        let dark_mode = if dark { 1i32 } else { 0i32 };
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &dark_mode as *const _ as *const _,
+            std::mem::size_of::<i32>() as u32,
+        );
+
+        // COLORREF stores RGB values in Windows' 0x00BBGGRR layout.
+        let caption_color = COLORREF(if dark { 0x002a170f } else { 0x00fcfaf8 });
+        let text_color = COLORREF(if dark { 0x00fcfaf8 } else { 0x001b1811 });
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CAPTION_COLOR,
+            &caption_color as *const _ as *const _,
+            std::mem::size_of::<COLORREF>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TEXT_COLOR,
+            &text_color as *const _ as *const _,
+            std::mem::size_of::<COLORREF>() as u32,
         );
     }
 }
