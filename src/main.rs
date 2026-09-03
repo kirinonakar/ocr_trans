@@ -974,7 +974,8 @@ fn sync_ocr_window_size(main: &MainWindow) {
 }
 
 #[cfg(target_os = "windows")]
-fn configure_main_window_native_theme(main: &MainWindow, dark_theme: bool) {
+fn configure_main_window_native_theme(main: &MainWindow, dark_theme: bool) -> bool {
+    let mut configured = false;
     let _ = main.window().with_winit_window(|winit_window| {
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -987,6 +988,31 @@ fn configure_main_window_native_theme(main: &MainWindow, dark_theme: bool) {
         let hwnd = windows::Win32::Foundation::HWND(handle.hwnd.get() as _);
         win_utils::set_mica_backdrop(hwnd);
         win_utils::set_title_bar_theme(hwnd, dark_theme);
+        configured = true;
+    });
+    configured
+}
+
+#[cfg(target_os = "windows")]
+fn schedule_main_window_native_theme(
+    main: slint::Weak<MainWindow>,
+    dark_theme: bool,
+    attempt: usize,
+) {
+    // Winit can create the native HWND just after Slint's show callback returns. Reapply the
+    // DWM attributes over the short creation/activation window so startup and mode switches do
+    // not leave a light non-client title bar above the dark OCR UI.
+    const RETRY_DELAYS_MS: [u64; 6] = [0, 16, 50, 150, 350, 700];
+    let Some(delay) = RETRY_DELAYS_MS.get(attempt).copied() else {
+        return;
+    };
+
+    slint::Timer::single_shot(Duration::from_millis(delay), move || {
+        let Some(main) = main.upgrade() else {
+            return;
+        };
+        let _ = configure_main_window_native_theme(&main, dark_theme);
+        schedule_main_window_native_theme(main.as_weak(), dark_theme, attempt + 1);
     });
 }
 
@@ -2175,22 +2201,17 @@ async fn main() -> Result<()> {
             toolbar.set_dark_theme(dark_theme);
         }
         #[cfg(target_os = "windows")]
-        configure_main_window_native_theme(&main, dark_theme);
+        {
+            configure_main_window_native_theme(&main, dark_theme);
+            schedule_main_window_native_theme(main.as_weak(), dark_theme, 0);
+        }
         save_dark_theme(dark_theme);
     });
 
-    // Apply the persisted title-bar theme once Winit has created the native OCR window. This
-    // timer is necessary for a dark theme restored on startup; the initial pre-run accessor may
-    // not have a native handle yet.
+    // Apply the persisted title-bar theme repeatedly while Winit creates and activates the native
+    // OCR window. The HWND may not exist during the initial setup phase.
     #[cfg(target_os = "windows")]
-    {
-        let main_weak_native_theme = main_window.as_weak();
-        slint::Timer::single_shot(Duration::from_millis(0), move || {
-            if let Some(main) = main_weak_native_theme.upgrade() {
-                configure_main_window_native_theme(&main, initial_dark_theme);
-            }
-        });
-    }
+    schedule_main_window_native_theme(main_window.as_weak(), initial_dark_theme, 0);
 
     // Main window <-> compact capture toolbar mode switch. OCR mode keeps the original
     // settings UI; Capture mode hides it and reveals the AIMediaWorker-style toolbar.
@@ -2242,7 +2263,11 @@ async fn main() -> Result<()> {
                 if let Some(main) = main_weak_switch.upgrade() {
                     let _ = main.show();
                     #[cfg(target_os = "windows")]
-                    configure_main_window_native_theme(&main, main.get_dark_theme());
+                    {
+                        let dark_theme = main.get_dark_theme();
+                        configure_main_window_native_theme(&main, dark_theme);
+                        schedule_main_window_native_theme(main.as_weak(), dark_theme, 0);
+                    }
                 }
                 if let Some(toolbar) = toolbar_weak_switch.upgrade() {
                     let _ = toolbar.hide();
@@ -2264,7 +2289,10 @@ async fn main() -> Result<()> {
         if let Some(main) = main_weak_toolbar_theme.upgrade() {
             main.set_dark_theme(dark_theme);
             #[cfg(target_os = "windows")]
-            configure_main_window_native_theme(&main, dark_theme);
+            {
+                configure_main_window_native_theme(&main, dark_theme);
+                schedule_main_window_native_theme(main.as_weak(), dark_theme, 0);
+            }
         }
         save_dark_theme(dark_theme);
     });
@@ -2273,17 +2301,6 @@ async fn main() -> Result<()> {
     let main_weak_toolbar_ui = main_window.as_weak();
     let toolbar_weak_toolbar_ui = capture_toolbar.as_weak();
     main_window.set_app_mode(initial_app_mode.clone().into());
-
-    // The initial title-bar attributes can be applied before Winit has shown the OCR window,
-    // after which Windows may restore its default light non-client colors. Apply the saved theme
-    // again on the first event-loop turn so the OCR UI opens with a matching dark title bar.
-    let main_weak_initial_theme = main_window.as_weak();
-    slint::Timer::single_shot(Duration::from_millis(0), move || {
-        if let Some(main) = main_weak_initial_theme.upgrade() {
-            #[cfg(target_os = "windows")]
-            configure_main_window_native_theme(&main, main.get_dark_theme());
-        }
-    });
 
     capture_toolbar.on_ui_toggle_clicked(move || {
         // A toolbar button is part of the window currently dispatching the pointer event.
@@ -2305,7 +2322,11 @@ async fn main() -> Result<()> {
                 return;
             }
             #[cfg(target_os = "windows")]
-            configure_main_window_native_theme(&main, main.get_dark_theme());
+            {
+                let dark_theme = main.get_dark_theme();
+                configure_main_window_native_theme(&main, dark_theme);
+                schedule_main_window_native_theme(main.as_weak(), dark_theme, 0);
+            }
             save_app_mode("ocr");
             if let Some(toolbar) = toolbar_weak.upgrade() {
                 let _ = toolbar.hide();
@@ -2327,6 +2348,13 @@ async fn main() -> Result<()> {
                 }
             }
         });
+    } else {
+        // Explicitly materialize the OCR window before entering the event loop. This gives the
+        // native title-bar attributes a real HWND on the very first launch as well as on mode
+        // switches from the compact toolbar.
+        let _ = main_window.show();
+        #[cfg(target_os = "windows")]
+        schedule_main_window_native_theme(main_window.as_weak(), initial_dark_theme, 0);
     }
 
     let recorder_slot: Arc<Mutex<Option<capture::ScreenRecorder>>> = Arc::new(Mutex::new(None));

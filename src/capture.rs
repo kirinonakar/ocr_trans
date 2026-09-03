@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use image::{GenericImageView, Rgba, RgbaImage};
 use std::borrow::Cow;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{
@@ -817,7 +817,9 @@ pub struct ScreenRecorder {
     paused: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     audio_worker: Option<JoinHandle<()>>,
-    child: Option<Child>,
+    audio_error: Arc<Mutex<Option<String>>>,
+    ffmpeg_stderr: Option<JoinHandle<String>>,
+    child: Option<Arc<Mutex<Child>>>,
 }
 
 #[cfg(target_os = "windows")]
@@ -850,6 +852,19 @@ impl WasapiRawAudioFormat {
             Self::Signed32Le | Self::Float32Le => 4,
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn silent_audio_bytes(frames: usize, format: WasapiAudioFormat) -> Vec<u8> {
+    let silence_sample = match format.raw_format {
+        // Windows PCM 8-bit samples are unsigned, so the zero-amplitude midpoint is 128.
+        WasapiRawAudioFormat::Unsigned8 => 0x80,
+        WasapiRawAudioFormat::Signed16Le
+        | WasapiRawAudioFormat::Signed24Le
+        | WasapiRawAudioFormat::Signed32Le
+        | WasapiRawAudioFormat::Float32Le => 0,
+    };
+    vec![silence_sample; frames.saturating_mul(format.block_align)]
 }
 
 #[cfg(target_os = "windows")]
@@ -1012,10 +1027,14 @@ fn capture_wasapi_loopback(
     listener: TcpListener,
     expected_format: WasapiAudioFormat,
     stop: Arc<AtomicBool>,
+    error_slot: Arc<Mutex<Option<String>>>,
 ) {
     let result = capture_wasapi_loopback_on_mta(listener, expected_format, &stop);
     if let Err(error) = result {
         log::warn!("Windows audio loopback stopped: {error:?}");
+        if let Ok(mut error_slot) = error_slot.lock() {
+            *error_slot = Some(format!("{error:#}"));
+        }
         stop.store(true, Ordering::Relaxed);
     }
 }
@@ -1091,11 +1110,30 @@ fn capture_wasapi_loopback_on_mta(
         unsafe { client.Start() }.context("Failed to start Windows audio loopback")?;
 
         let capture_result = (|| {
+            let silent_frames = (expected_format.sample_rate as usize / 100).max(1);
+            let silent_packet = silent_audio_bytes(silent_frames, expected_format);
+            let silent_duration = Duration::from_secs_f64(
+                silent_frames as f64 / expected_format.sample_rate as f64,
+            );
+            let mut next_silent_packet = Instant::now();
             while !stop.load(Ordering::Relaxed) {
                 let packet_frames = unsafe { capture_client.GetNextPacketSize() }
                     .context("Failed to read the Windows audio packet size")?;
                 if packet_frames == 0 {
-                    thread::sleep(Duration::from_millis(5));
+                    // Some Windows output devices expose no loopback packet while silent. Keep
+                    // the raw audio input alive with real-time paced silence; otherwise FFmpeg's
+                    // `-shortest` sees an empty audio stream and discards the video as well.
+                    let now = Instant::now();
+                    if now >= next_silent_packet {
+                        if stream.write_all(&silent_packet).is_err() {
+                            break;
+                        }
+                        next_silent_packet = now + silent_duration;
+                    } else {
+                        thread::sleep(
+                            (next_silent_packet - now).min(Duration::from_millis(5)),
+                        );
+                    }
                     continue;
                 }
 
@@ -1112,7 +1150,7 @@ fn capture_wasapi_loopback_on_mta(
                 let bytes = if flags & 2 != 0 || data_ptr.is_null() {
                     // AUDCLNT_BUFFERFLAGS_SILENT: the loopback engine still advances the
                     // timeline, so write an equally sized silent packet instead of dropping it.
-                    vec![0u8; byte_len]
+                    silent_audio_bytes(frames as usize, expected_format)
                 } else {
                     unsafe { std::slice::from_raw_parts(data_ptr as *const u8, byte_len) }
                         .to_vec()
@@ -1123,6 +1161,8 @@ fn capture_wasapi_loopback_on_mta(
                 if stream.write_all(&bytes).is_err() {
                     break;
                 }
+                next_silent_packet = Instant::now() +
+                    Duration::from_secs_f64(frames as f64 / expected_format.sample_rate as f64);
             }
             Ok::<(), anyhow::Error>(())
         })();
@@ -1255,18 +1295,35 @@ impl ScreenRecorder {
             .arg(path)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .context("FFmpeg was not found. Install ffmpeg and make sure it is on PATH.")?;
-        let mut stdin = child.stdin.take().context("Failed to open FFmpeg input")?;
+        let ffmpeg_stderr = child.stderr.take().map(|mut stderr| {
+            thread::spawn(move || {
+                let mut output = Vec::new();
+                let _ = stderr.read_to_end(&mut output);
+                String::from_utf8_lossy(&output).trim().to_string()
+            })
+        });
+        let mut stdin = match child.stdin.take() {
+            Some(stdin) => stdin,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::bail!("Failed to open FFmpeg input");
+            }
+        };
+        let child = Arc::new(Mutex::new(child));
         let stop = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
+        let audio_error = Arc::new(Mutex::new(None));
 
         #[cfg(target_os = "windows")]
         let audio_worker = {
             let audio_stop = stop.clone();
+            let audio_error = audio_error.clone();
             Some(thread::spawn(move || {
-                capture_wasapi_loopback(audio_listener, audio_format, audio_stop)
+                capture_wasapi_loopback(audio_listener, audio_format, audio_stop, audio_error)
             }))
         };
         #[cfg(not(target_os = "windows"))]
@@ -1284,6 +1341,8 @@ impl ScreenRecorder {
             paused,
             worker: Some(worker),
             audio_worker,
+            audio_error,
+            ffmpeg_stderr,
             child: Some(child),
         })
     }
@@ -1294,19 +1353,84 @@ impl ScreenRecorder {
 
     pub fn stop(mut self) -> Result<()> {
         self.stop.store(true, Ordering::Relaxed);
+
+        // A blocked pipe write can otherwise keep a worker alive forever if FFmpeg exited early
+        // (for example after an audio-device change). Give the normal graceful close a short
+        // window, then terminate only the recorder child as a last resort so closing the app
+        // cannot leave an orphaned FFmpeg process behind.
+        let child = self.child.take();
+        let stop_watchdog = Arc::new(AtomicBool::new(false));
+        let watchdog = child.as_ref().map(|child| {
+            let child = child.clone();
+            let stop_watchdog = stop_watchdog.clone();
+            thread::spawn(move || {
+                for _ in 0..20 {
+                    if stop_watchdog.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+                if !stop_watchdog.load(Ordering::Relaxed) {
+                    if let Ok(mut child) = child.lock() {
+                        let _ = child.kill();
+                    }
+                }
+            })
+        });
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
         if let Some(audio_worker) = self.audio_worker.take() {
             let _ = audio_worker.join();
         }
-        if let Some(mut child) = self.child.take() {
-            let status = child.wait().context("Failed to close FFmpeg")?;
+        stop_watchdog.store(true, Ordering::Relaxed);
+        if let Some(watchdog) = watchdog {
+            let _ = watchdog.join();
+        }
+        let audio_error = self
+            .audio_error
+            .lock()
+            .ok()
+            .and_then(|mut error| error.take());
+        let mut ffmpeg_error = None;
+        if let Some(child) = child {
+            let status = child
+                .lock()
+                .map_err(|_| anyhow::anyhow!("FFmpeg process state was poisoned"))?
+                .wait()
+                .context("Failed to close FFmpeg")?;
+            ffmpeg_error = self
+                .ffmpeg_stderr
+                .take()
+                .and_then(|worker| worker.join().ok())
+                .filter(|error| !error.is_empty());
             if !status.success() {
+                if let Some(error) = ffmpeg_error {
+                    anyhow::bail!("FFmpeg could not finish the recording: {error}");
+                }
                 anyhow::bail!("FFmpeg could not finish the recording");
             }
         }
+        if let Some(error) = ffmpeg_error {
+            log::warn!("FFmpeg reported a recorder diagnostic: {error}");
+        }
+        if let Some(error) = audio_error {
+            anyhow::bail!("Windows playback audio could not be recorded: {error}");
+        }
         Ok(())
+    }
+}
+
+impl Drop for ScreenRecorder {
+    fn drop(&mut self) {
+        // Keep an unexpected drop from orphaning FFmpeg. The normal UI stop path still performs
+        // the graceful flush in `stop`; this is only the emergency cleanup path.
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(child) = self.child.as_ref() {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+            }
+        }
     }
 }
 
