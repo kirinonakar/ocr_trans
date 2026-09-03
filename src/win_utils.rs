@@ -108,7 +108,8 @@ pub fn set_title_bar_theme(hwnd: HWND, dark: bool) {
         );
 
         // COLORREF stores RGB values in Windows' 0x00BBGGRR layout.
-        let caption_color = COLORREF(if dark { 0x002a170f } else { 0x00fcfaf8 });
+        // Dark caption matches the capture toolbar (#2b2b31), not the old navy client theme.
+        let caption_color = COLORREF(if dark { 0x00312b2b } else { 0x00fcfaf8 });
         let text_color = COLORREF(if dark { 0x00fcfaf8 } else { 0x001b1811 });
         let _ = DwmSetWindowAttribute(
             hwnd,

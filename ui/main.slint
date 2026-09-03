@@ -81,7 +81,7 @@ export component MainWindow inherits Window {
     min-height: show_style_settings ? 990px : 870px;
     max-height: show_style_settings ? 990px : 870px;
     background: dark_theme
-        ? @linear-gradient(180deg, #0f172a 0%, #111827 100%)
+        ? #2b2b31
         : @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
     default-font-family: "Yu Gothic UI";
 
@@ -159,7 +159,7 @@ export component MainWindow inherits Window {
             Text {
                 text: "OCR Translator";
                 font-size: 18px;
-                color: dark_theme ? #60a5fa : #2563eb;
+                color: dark_theme ? #45b8ed : #2563eb;
                 vertical-alignment: center;
                 font-weight: 800;
             }
@@ -191,19 +191,19 @@ export component MainWindow inherits Window {
         }
 
         Rectangle {
-            background: dark_theme ? #1e293b : #ffffff;
+            background: dark_theme ? #37373f : #ffffff;
             border-radius: 12px;
             border-width: 1px;
-            border-color: dark_theme ? #334155 : #e2e8f0;
+            border-color: dark_theme ? transparent : #e2e8f0;
             
             VerticalLayout {
                 spacing: 8px;
                 padding: 10px;
-                Text { text: "API SETTINGS"; font-weight: 700; color: dark_theme ? #60a5fa : #2563eb; font-size: 14px; }
+                Text { text: "API SETTINGS"; font-weight: 700; color: dark_theme ? #45b8ed : #2563eb; font-size: 14px; }
                 
                 VerticalLayout {
                     spacing: 6px;
-                    Text { text: "Provider:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
+                    Text { text: "Provider:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                     ComboBox {
                         model: provider_options;
                         current-value <=> api_type;
@@ -217,7 +217,7 @@ export component MainWindow inherits Window {
 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "Endpoint:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
+                    Text { text: "Endpoint:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                     LineEdit {
                         text <=> api_endpoint;
                         placeholder-text: "http://localhost:1234/v1";
@@ -226,7 +226,7 @@ export component MainWindow inherits Window {
                 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "API Key:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
+                    Text { text: "API Key:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                     LineEdit {
                         text <=> api_key;
                         input-type: password;
@@ -238,7 +238,7 @@ export component MainWindow inherits Window {
                 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "Model Name:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
+                    Text { text: "Model Name:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                     HorizontalLayout {
                         spacing: 6px;
                         ComboBox {
@@ -262,7 +262,7 @@ export component MainWindow inherits Window {
                     spacing: 4px;
                     HorizontalLayout {
                         spacing: 4px;
-                        Text { text: "Temperature:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
+                        Text { text: "Temperature:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                         Text { text: round(temperature * 10) / 10; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; font-weight: 700; }
                         Rectangle { } // Flexible spacer to push content left
                     }
@@ -275,7 +275,7 @@ export component MainWindow inherits Window {
 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "Thinking Level:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
+                    Text { text: "Thinking Level:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                     ComboBox {
                         model: thinking_level_options;
                         current-value <=> thinking_level;
@@ -285,12 +285,12 @@ export component MainWindow inherits Window {
 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "System Prompt:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
+                    Text { text: "System Prompt:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                     Rectangle {
-                        background: dark_theme ? #0f172a : #f8fafc;
+                        background: dark_theme ? #2b2b31 : #f8fafc;
                         border-radius: 4px;
                         border-width: 1px;
-                        border-color: dark_theme ? #475569 : #e2e8f0;
+                        border-color: dark_theme ? transparent : #e2e8f0;
                         height: 80px;
                         TextEdit {
                             text <=> system_prompt;
@@ -305,19 +305,19 @@ export component MainWindow inherits Window {
         }
 
         Rectangle {
-            background: dark_theme ? #1e293b : #ffffff;
+            background: dark_theme ? #37373f : #ffffff;
             border-radius: 12px;
             border-width: 1px;
-            border-color: dark_theme ? #334155 : #e2e8f0;
+            border-color: dark_theme ? transparent : #e2e8f0;
             
             VerticalLayout {
                 spacing: 8px;
                 padding: 10px;
-                Text { text: "CAPTURE SETTINGS"; font-weight: 700; color: dark_theme ? #60a5fa : #2563eb; font-size: 14px; }
+                Text { text: "CAPTURE SETTINGS"; font-weight: 700; color: dark_theme ? #45b8ed : #2563eb; font-size: 14px; }
                 
                 HorizontalLayout {
                     spacing: 4px;
-                    Text { text: "Interval (s): "; vertical-alignment: center; color: dark_theme ? #94a3b8 : #64748b; }
+                    Text { text: "Interval (s): "; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; }
                     Text { text: interval == 0 ? "Once" : (round(interval * 10) / 10); vertical-alignment: center; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; }
                     Rectangle { } // Flexible spacer to push content left
                 }
@@ -340,7 +340,7 @@ export component MainWindow inherits Window {
                         text: "Save folder:";
                         width: 74px;
                         vertical-alignment: center;
-                        color: dark_theme ? #94a3b8 : #64748b;
+                        color: dark_theme ? #cbd5e1 : #64748b;
                         font-size: 12px;
                     }
                     LineEdit {
@@ -358,14 +358,14 @@ export component MainWindow inherits Window {
                     }
                 }
                 HorizontalLayout {
-                    Text { text: "Font Size: "; vertical-alignment: center; color: dark_theme ? #94a3b8 : #64748b; }
+                    Text { text: "Font Size: "; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; }
                     Text { text: round(base_font_size); vertical-alignment: center; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; }
                     
                     Rectangle { } // Flexible spacer
                     
                     HorizontalLayout {
                         spacing: 4px;
-                        Text { text: "Textbox"; vertical-alignment: center; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
+                        Text { text: "Textbox"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                         CheckBox { 
                             checked <=> use_textbox;
                             toggled => { style_changed(); }
@@ -400,7 +400,7 @@ export component MainWindow inherits Window {
                         spacing: 12px;
                         VerticalLayout {
                             spacing: 4px;
-                            Text { text: "Background:"; font-size: 11px; color: dark_theme ? #94a3b8 : #64748b; }
+                            Text { text: "Background:"; font-size: 11px; color: dark_theme ? #cbd5e1 : #64748b; }
                             HorizontalLayout {
                                 spacing: 6px;
                                 Rectangle { 
@@ -443,7 +443,7 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             spacing: 4px;
                             HorizontalLayout {
-                                Text { text: "Text Color:"; font-size: 11px; color: dark_theme ? #94a3b8 : #64748b; vertical-alignment: center; }
+                                Text { text: "Text Color:"; font-size: 11px; color: dark_theme ? #cbd5e1 : #64748b; vertical-alignment: center; }
                                 Rectangle { } // Flexible spacer
                             }
                             HorizontalLayout {
@@ -480,7 +480,7 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    Text { text: "Background Opacity:"; font-size: 11px; color: dark_theme ? #94a3b8 : #64748b; }
+                    Text { text: "Background Opacity:"; font-size: 11px; color: dark_theme ? #cbd5e1 : #64748b; }
                     Slider {
                         minimum: 0.1;
                         maximum: 1.0;
@@ -496,16 +496,16 @@ export component MainWindow inherits Window {
                         clicked => { select_area_clicked(); }
                     }
                     Rectangle {
-                        background: dark_theme ? #0f172a : #f8fafc;
+                        background: dark_theme ? #2b2b31 : #f8fafc;
                         border-radius: 8px;
                         border-width: 1px;
-                        border-color: dark_theme ? #475569 : #e2e8f0;
+                        border-color: dark_theme ? transparent : #e2e8f0;
                         height: 32px;
                         HorizontalLayout {
                             padding-left: 8px;
                             padding-right: 8px;
                             spacing: 4px;
-                            Text { text: "Overlay"; vertical-alignment: center; font-size: 12px; color: dark_theme ? #94a3b8 : #64748b; }
+                            Text { text: "Overlay"; vertical-alignment: center; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b; }
                             CheckBox {
                                 checked <=> overlay_visible;
                                 toggled => { overlay_toggle_clicked(self.checked); }
