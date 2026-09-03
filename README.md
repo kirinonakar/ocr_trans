@@ -5,6 +5,7 @@ A real-time screen OCR and translation tool built with Rust and Slint powered by
 <img src="screenshot1.png" alt="screenshot1" width="50%">
 
 Capture toolbar (dark theme)
+
 <img src="screenshot2.png" alt="screenshot2" width="70%">
 
 ## Features
