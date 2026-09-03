@@ -1022,7 +1022,7 @@ fn accept_audio_stream(listener: TcpListener, stop: &AtomicBool) -> Result<Optio
                     .set_nonblocking(false)
                     .context("Failed to configure the Windows audio loopback stream")?;
                 stream
-                    .set_write_timeout(Some(Duration::from_millis(250)))
+                    .set_write_timeout(Some(Duration::from_millis(2000)))
                     .context("Failed to configure the Windows audio loopback stream")?;
                 let _ = stream.set_nodelay(true);
                 return Ok(Some(stream));
@@ -1050,8 +1050,13 @@ fn write_audio_bytes(stream: &mut TcpStream, bytes: &[u8], stop: &AtomicBool) ->
             Ok(n) => written += n,
             Err(error)
                 if error.kind() == std::io::ErrorKind::Interrupted
-                    || error.kind() == std::io::ErrorKind::WouldBlock =>
+                    || error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut =>
             {
+                // FFmpeg이 비디오 인코딩에 밀려 오디오 소비가 늦어지면
+                // write_timeout(2000ms)이 만료될 수 있다. 이때 오디오
+                // 스트림을 끊으면(EOF) 이후 구간이 무음/짧은 트랙으로
+                // 남는다. 잠시 쉬고 재시도해서 PCM을 계속 공급한다.
                 thread::sleep(Duration::from_millis(1));
             }
             Err(_) => return false,
@@ -1380,6 +1385,15 @@ impl ScreenRecorder {
             "-y",
             "-loglevel",
             "error",
+            // 라이브 파이프 입력 초기 연결 지연으로 앞부분이 잘리는 것을 방지
+            "-probesize",
+            "32k",
+            "-analyzeduration",
+            "0",
+            "-fflags",
+            "+genpts",
+            "-thread_queue_size",
+            "1024",
             "-f",
             "rawvideo",
             "-pixel_format",
@@ -1400,7 +1414,7 @@ impl ScreenRecorder {
             let audio_channels = audio_format.channels.to_string();
             ffmpeg.args([
                 "-thread_queue_size",
-                "512",
+                "1024",
                 "-f",
                 audio_format.raw_format.ffmpeg_name(),
                 "-ar",
@@ -1419,10 +1433,16 @@ impl ScreenRecorder {
                 "libx264",
                 "-preset",
                 "ultrafast",
+                // 입력 캡처가 30fps를 못 지켜도(느린 캡처/일시정지) 출력은
+                // 30fps CFR로 고정해 빨리감기 재생을 방지한다.
+                "-vsync",
+                "cfr",
+                "-r",
+                framerate.as_str(),
                 // Downmix multichannel output cleanly and always write a standard stereo AAC
                 // track at a stable rate. The resampler also keeps the two inputs synchronized.
                 "-af",
-                "aresample=async=1:first_pts=0",
+                "aresample=async=1:min_hard_comp=0.100:first_pts=0",
                 "-ar",
                 "48000",
                 "-ac",
@@ -1601,24 +1621,54 @@ fn record_frames(
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
 ) {
+    // 매 프레임 Monitor::all()을 호출하면 열거 비용으로 30fps를 못 지켜
+    // 입력보다 짧은 영상이 되며 빨리감기처럼 보인다. 미리 한 번만 조회해 재사용한다.
+    let cached_monitors: Option<Vec<xcap::Monitor>> =
+        xcap::Monitor::all().ok().filter(|m| !m.is_empty());
+    let mut last_frame: Option<Vec<u8>> = None;
+    let mut next_frame = Instant::now();
     while !stop.load(Ordering::Relaxed) {
-        let frame_started = Instant::now();
-        if !paused.load(Ordering::Relaxed) {
-            match capture_area(&rect, &None) {
+        let is_paused = paused.load(Ordering::Relaxed);
+        if !is_paused {
+            match capture_area(&rect, &cached_monitors) {
                 Ok(image) => {
-                    if stdin.write_all(image.as_raw()).is_err() {
+                    let bytes = image.as_raw().to_vec();
+                    if stdin.write_all(&bytes).is_err() {
                         stop.store(true, Ordering::Relaxed);
                         break;
                     }
+                    last_frame = Some(bytes);
                 }
                 Err(error) => {
                     log::warn!("Recording frame capture failed: {error:?}");
+                    // 캡처가 느리거나 실패해도 프레임 슬롯을 비우면
+                    // 실제보다 짧은 영상이 되어 빨리감기 재생이 된다.
+                    // 직전 프레임을 복제해 초당 fps를 일정하게 유지한다.
+                    if let Some(prev) = last_frame.as_ref() {
+                        if stdin.write_all(prev).is_err() {
+                            stop.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                    }
                 }
             }
+        } else if let Some(prev) = last_frame.as_ref() {
+            // 일시정지 중에도 비디오 타임라인은 멈추면 안 된다.
+            // 오디오(무음)는 계속 흐르는데 영상만 멈추면 A/V 길이가 어긋나
+            // aresample 보정으로 소리가 끊기게 되므로 마지막 프레임을 반복한다.
+            if stdin.write_all(prev).is_err() {
+                stop.store(true, Ordering::Relaxed);
+                break;
+            }
         }
-        let elapsed = frame_started.elapsed();
-        if elapsed < interval {
-            thread::sleep(interval - elapsed);
+        // 절대 시각 기준으로 다음 프레임까지 대기해 드리프트를 막는다.
+        // 캡처가 interval을 초과하면 밀린 만큼 따라잡지 않고 현재 시각으로 리셋한다.
+        next_frame += interval;
+        let now = Instant::now();
+        if next_frame > now {
+            thread::sleep(next_frame - now);
+        } else if now.duration_since(next_frame) > interval * 5 {
+            next_frame = Instant::now();
         }
     }
 }
