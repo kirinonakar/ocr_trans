@@ -2,7 +2,10 @@
 
 A real-time screen OCR and translation tool built with Rust and Slint powered by VLM (Vision-Language Model).
 
-<img src="screenshot.png" alt="screenshot1" width="50%">
+<img src="screenshot1.png" alt="screenshot1" width="50%">
+
+Capture toolbar (dark theme)
+<img src="screenshot2.png" alt="screenshot2" width="70%">
 
 ## Features
 - **Modern UI**: Dark mode, glassmorphism, and Windows 11 Mica backdrop for the main control window.
