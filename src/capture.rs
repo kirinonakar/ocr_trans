@@ -512,7 +512,11 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
     // The native window bounds include the 1-2px frame that stays fixed while the client area
     // scrolls. Capturing that frame in every segment creates a visible horizontal seam at each
     // join, so stitch only the inner client image.
-    const SCROLL_CAPTURE_SIDE_MARGIN: i32 = 2;
+    // 좌/우를 다르게 잘라야 한다. 우측 수직 스크롤바(약 12~15px)는 스크롤 중
+    // 썸 위치가 바뀌어 매 조각에 다르게 찍히고, 이어붙이면 계단/이중선으로 보인다.
+    // 스크롤바를 최종 이미지에 포함하지 않도록 우측을 넓게 제외한다.
+    const SCROLL_CAPTURE_LEFT_MARGIN: i32 = 2;
+    const SCROLL_CAPTURE_RIGHT_MARGIN: i32 = 16;
     const SCROLL_CAPTURE_TOP_MARGIN: i32 = 2;
     // The bottom of a browser window often contains a thin horizontal scrollbar/resize edge.
     // It is fixed while the page scrolls, so leaving it in each segment creates a repeated line
@@ -522,9 +526,9 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
     // the long image repeatedly.
     const SCROLL_CAPTURE_BOTTOM_MARGIN: i32 = 14;
     let scroll_bounds = CaptureRect {
-        x: target.bounds.x + SCROLL_CAPTURE_SIDE_MARGIN,
+        x: target.bounds.x + SCROLL_CAPTURE_LEFT_MARGIN,
         y: target.bounds.y + SCROLL_CAPTURE_TOP_MARGIN,
-        width: target.bounds.width - SCROLL_CAPTURE_SIDE_MARGIN * 2,
+        width: target.bounds.width - SCROLL_CAPTURE_LEFT_MARGIN - SCROLL_CAPTURE_RIGHT_MARGIN,
         height: target.bounds.height - SCROLL_CAPTURE_TOP_MARGIN - SCROLL_CAPTURE_BOTTOM_MARGIN,
     };
     if !scroll_bounds.valid() {
@@ -550,6 +554,9 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
             break;
         }
         send_wheel_step(recipient, point, -120);
+        // Smooth-scroll 잔상이 shift 계산을 어긋나게 하므로 애니메이션이
+        // 끝난 뒤 안정 프레임을 잡는다.
+        thread::sleep(Duration::from_millis(160));
         let current = stable_capture(scroll_bounds)?;
         if equivalent(&previous, &current) {
             unchanged_steps += 1;
@@ -564,15 +571,9 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
             break;
         }
         shift = shift.min(maximum_height - total_height);
-        // Keep a small overlap at every join. With an exact shift this is a no-op, while a
-        // one-pixel timing/scroll difference is blended instead of becoming a visible seam.
-        let overlap = 8u32
-            .min(shift)
-            .min(previous.height().saturating_sub(shift));
-        segments.push((
-            copy_bottom_rows(&current, shift + overlap),
-            overlap,
-        ));
+        // 정확한 shift에서 하드 컷이 가장 매끄럽다. 블렌딩은 텍스트 경계에
+        // 이중상/흐릿한 띠를 만들어 오히려 이음새를 드러내므로 쓰지 않는다.
+        segments.push((copy_bottom_rows(&current, shift), 0u32));
         total_height += shift;
         previous = current;
     }
@@ -580,47 +581,17 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
     scroll_to_top(target.handle, recipient, point);
     let mut result = RgbaImage::new(scroll_bounds.width as u32, total_height);
     let mut y = 0u32;
-    for (segment_index, (segment, overlap)) in segments.into_iter().enumerate() {
-        let start_y = if segment_index == 0 {
-            0
-        } else {
-            y.saturating_sub(overlap)
-        };
+    for (segment, _overlap) in segments.into_iter() {
         for row in 0..segment.height() {
-            let dst_y = start_y + row;
+            let dst_y = y + row;
             if dst_y >= result.height() {
                 break;
             }
             for x in 0..segment.width() {
-                let next = *segment.get_pixel(x, row);
-                if segment_index > 0 && row < overlap {
-                    let previous = *result.get_pixel(x, dst_y);
-                    let current_weight = row + 1;
-                    let previous_weight = overlap + 1 - current_weight;
-                    result.put_pixel(
-                        x,
-                        dst_y,
-                        Rgba([
-                            ((previous[0] as u32 * previous_weight
-                                + next[0] as u32 * current_weight)
-                                / (overlap + 1)) as u8,
-                            ((previous[1] as u32 * previous_weight
-                                + next[1] as u32 * current_weight)
-                                / (overlap + 1)) as u8,
-                            ((previous[2] as u32 * previous_weight
-                                + next[2] as u32 * current_weight)
-                                / (overlap + 1)) as u8,
-                            ((previous[3] as u32 * previous_weight
-                                + next[3] as u32 * current_weight)
-                                / (overlap + 1)) as u8,
-                        ]),
-                    );
-                } else {
-                    result.put_pixel(x, dst_y, next);
-                }
+                result.put_pixel(x, dst_y, *segment.get_pixel(x, row));
             }
         }
-        y = start_y + segment.height();
+        y += segment.height();
         if y >= result.height() {
             break;
         }
@@ -689,7 +660,7 @@ fn scroll_to_top(window: isize, recipient: isize, point: isize) {
 
 #[cfg(target_os = "windows")]
 fn send_wheel_step(recipient: isize, point: isize, delta: i32) {
-    for _ in 0..4 {
+    for _ in 0..2 {
         if !send_message(recipient, 0x020A, ((delta << 16) as u32) as usize, point) {
             break;
         }
@@ -729,32 +700,53 @@ fn equivalent(first: &RgbaImage, second: &RgbaImage) -> bool {
 
 #[cfg(target_os = "windows")]
 fn find_vertical_shift(previous: &RgbaImage, current: &RgbaImage) -> u32 {
-    let width = previous.width();
     let height = previous.height();
     let minimum = 12u32.max(height / 60);
     let maximum = minimum.max(height * 2 / 3);
-    let mut best_shift = 0;
-    let mut best_score = 0.0;
-    for shift in (minimum..=maximum).step_by(4) {
+    // 4px 간격 coarse 탐색은 1px 최적점을 놓쳐 이웃 봉우리에 걸리기 쉽다.
+    // 2px 간격으로 상위 후보 3개를 추린 뒤 각 후보 ±2를 1px 단위로 정밀 탐색한다.
+    let mut coarse_scores: Vec<(u32, f64)> = Vec::new();
+    let mut shift = minimum;
+    while shift <= maximum {
         let score = score_shift(previous, current, shift);
-        if score > best_score {
-            best_score = score;
-            best_shift = shift;
+        if score > 0.0 {
+            coarse_scores.push((shift, score));
         }
+        shift += 2;
     }
-    if best_shift == 0 {
+    if coarse_scores.is_empty() {
         return 0;
     }
-    let coarse = best_shift;
-    for shift in minimum.max(coarse.saturating_sub(3))..=maximum.min(coarse + 3) {
-        let score = score_shift(previous, current, shift);
-        if score > best_score {
-            best_score = score;
-            best_shift = shift;
+    coarse_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    coarse_scores.truncate(3);
+    let mut best_shift = 0u32;
+    let mut best_score = 0.0f64;
+    for (coarse, _) in coarse_scores {
+        let start = minimum.max(coarse.saturating_sub(2));
+        let end = maximum.min(coarse + 2);
+        for candidate in start..=end {
+            let score = score_shift(previous, current, candidate);
+            if score > best_score {
+                best_score = score;
+                best_shift = candidate;
+            }
         }
     }
-    let _ = width;
-    if best_score >= 0.52 {
+    // 텍스트 경계에서는 1px 어긋나도 점수가 0.9 이상으로 높게 나온다.
+    // 봉우리가 뭉툭하면 잘못된 shift로 하드 컷 되므로 임계값을 높여 확실할 때만 잇는다.
+    if best_score >= 0.68 {
+        // 이웃 shift와 점수 차가 너무 작으면(평탄한 봉우리) 오측정 위험이 있어 파기한다.
+        let neighbor_best = [best_shift.saturating_sub(1), best_shift + 1]
+            .into_iter()
+            .filter(|s| *s >= minimum && *s <= maximum && *s != best_shift)
+            .map(|s| score_shift(previous, current, s))
+            .fold(0.0f64, f64::max);
+        if best_score - neighbor_best < 0.015 {
+            // 단, 거의 완벽한 일치(0.95 이상)는 평탄해도 정답으로 인정한다.
+            if best_score < 0.95 {
+                return 0;
+            }
+        }
         best_shift
     } else {
         0
@@ -765,34 +757,46 @@ fn find_vertical_shift(previous: &RgbaImage, current: &RgbaImage) -> u32 {
 fn score_shift(previous: &RgbaImage, current: &RgbaImage, shift: u32) -> f64 {
     let width = previous.width();
     let height = previous.height();
-    let top_margin = 4u32.max(height / 6);
+    // 상단 고정 UI(탭/주소창)와 하단 고정 밴드를 매칭에서 제외한다.
+    let top_margin = 4u32.max(height / 8);
     let bottom = height
         .saturating_sub(shift)
-        .saturating_sub(4u32.max(height / 16));
-    let left = 2u32.max(width / 10);
+        .saturating_sub(4u32.max(height / 20));
+    let left = 2u32.max(width / 12);
     let right = width.saturating_sub(left);
+    if bottom <= top_margin + 8 || right <= left + 8 {
+        return 0.0;
+    }
     let mut informative = 0u32;
     let mut matches = 0u32;
     let mut y = top_margin;
     while y < bottom {
         let mut x = left;
         while x < right {
-            let same = previous.get_pixel(x, y);
-            if color_distance(same, current.get_pixel(x, y)) >= 18 {
-                let old = previous.get_pixel(x, y + shift);
-                let neighbor = previous.get_pixel(x.saturating_sub(2), y + shift);
-                if color_distance(old, neighbor) >= 24 {
-                    informative += 1;
-                    if color_distance(old, current.get_pixel(x, y)) <= 36 {
-                        matches += 1;
-                    }
-                }
+            let prev_here = previous.get_pixel(x, y);
+            let curr_here = current.get_pixel(x, y);
+            // 스크롤되지 않은 고정 영역(헤더/배경)은 판별에 쓰지 않는다.
+            if color_distance(prev_here, curr_here) < 30 {
+                x += 6;
+                continue;
             }
-            x += 14;
+            let old = previous.get_pixel(x, y + shift);
+            // 평탄한 배경은 어떤 shift에서도 맞으므로 제외하고,
+            // 수평 엣지(텍스트 경계)만으로 1px 정밀도를 확보한다.
+            let neighbor_x = x.saturating_add(2).min(width - 1);
+            if color_distance(old, previous.get_pixel(neighbor_x, y + shift)) < 30 {
+                x += 6;
+                continue;
+            }
+            informative += 1;
+            if color_distance(old, curr_here) <= 24 {
+                matches += 1;
+            }
+            x += 6;
         }
-        y += 7;
+        y += 4;
     }
-    if informative < 25 {
+    if informative < 80 {
         0.0
     } else {
         matches as f64 / informative as f64
