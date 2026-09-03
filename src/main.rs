@@ -631,6 +631,7 @@ struct AppState {
     selection_origin_x: i32,
     selection_origin_y: i32,
     selection_scale: f32,
+    selection_screenshot: Option<Arc<image::RgbaImage>>,
     pending_selection: Option<SelectionPurpose>,
     recording: bool,
     recording_paused: bool,

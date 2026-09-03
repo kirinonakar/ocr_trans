@@ -1044,6 +1044,9 @@ export component SelectionWindow inherits Window {
     in-out property <length> hover_y: 0px;
     in-out property <length> hover_w: 0px;
     in-out property <length> hover_h: 0px;
+    in-out property <string> color_tooltip: "";
+    property <length> color_cursor_x: 0px;
+    property <length> color_cursor_y: 0px;
     property <bool> selecting: false;
     property <length> start_x;
     property <length> start_y;
@@ -1067,6 +1070,7 @@ export component SelectionWindow inherits Window {
     callback area_selected(length, length, length, length);
     callback window_hovered(length, length);
     callback window_selected(length, length);
+    callback color_hovered(length, length);
     callback color_picked(length, length);
     callback closed();
 
@@ -1079,6 +1083,9 @@ export component SelectionWindow inherits Window {
         hover_y = 0px;
         hover_w = 0px;
         hover_h = 0px;
+        color_tooltip = "";
+        color_cursor_x = 0px;
+        color_cursor_y = 0px;
         selecting = false;
     }
 
@@ -1137,10 +1144,18 @@ export component SelectionWindow inherits Window {
                     start_y = i_touch.mouse-y;
                     current_x = start_x;
                     current_y = start_y;
+                    if (color_picker_mode) {
+                        color_cursor_x = start_x;
+                        color_cursor_y = start_y;
+                        color_hovered(start_x, start_y);
+                    }
                 } else if (event.kind == PointerEventKind.up) {
                     selecting = false;
                     if (color_picker_mode) {
-                        color_picked(i_touch.mouse-x, i_touch.mouse-y);
+                        color_cursor_x = i_touch.mouse-x;
+                        color_cursor_y = i_touch.mouse-y;
+                        color_hovered(color_cursor_x, color_cursor_y);
+                        color_picked(color_cursor_x, color_cursor_y);
                     } else if (window_mode) {
                         window_selected(i_touch.mouse-x, i_touch.mouse-y);
                     } else {
@@ -1158,10 +1173,37 @@ export component SelectionWindow inherits Window {
         moved => {
             if (window_mode) {
                 window_hovered(i_touch.mouse-x, i_touch.mouse-y);
+            } else if (color_picker_mode) {
+                color_cursor_x = i_touch.mouse-x;
+                color_cursor_y = i_touch.mouse-y;
+                color_hovered(color_cursor_x, color_cursor_y);
             } else if (selecting) {
                 current_x = i_touch.mouse-x;
                 current_y = i_touch.mouse-y;
             }
+        }
+    }
+
+    if (color_picker_mode && color_tooltip != "") : Rectangle {
+        x: color_cursor_x + 18px + 232px > parent.width ? parent.width - 242px : color_cursor_x + 18px;
+        y: color_cursor_y + 18px + 42px > parent.height ? color_cursor_y - 50px : color_cursor_y + 18px;
+        width: 232px;
+        height: 42px;
+        z: 20;
+        background: #020617e8;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: #64748b;
+        Text {
+            x: 8px;
+            y: 4px;
+            width: parent.width - 16px;
+            height: parent.height - 8px;
+            text: color_tooltip;
+            color: #f8fafc;
+            font-family: "Consolas";
+            font-size: 11px;
+            vertical-alignment: center;
         }
     }
 
