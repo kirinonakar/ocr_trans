@@ -19,9 +19,6 @@ A real-time screen OCR and translation tool built with Rust and Slint powered by
     - **Google Gemini, Cerebras, Ollama Cloud, OpenCode Go, OpenCode Zen**: API key stored in Windows Credential Manager.
   - **Local Providers**:
     - **Ollama, Unsloth Desktop, LMStudio / Custom**
-- **External Config Files**:
-  - `system_prompt.txt`: Auto-loads your custom translation instructions.
-  - `model.txt`: Auto-loads your preferred default model name for LMStudio.
 - **Adjustable Creativity**: Use the **Temperature** slider (0.0 - 1.0) to control translation consistency vs. creativity.
 - **Global Hotkeys**: 
   - **Win + Alt + A**: Trigger area selection.
@@ -32,14 +29,15 @@ A real-time screen OCR and translation tool built with Rust and Slint powered by
 - **C++ Build Tools**: Required for `windows-rs` and `slint`.
 
 ## Getting Started
+
 ### 📥 Download
 You can download the latest version from the [Releases Page](https://github.com/kirinonakar/ocr_trans/releases).
+
 ### Manual build
 
 1. Clone the repository.
-2. (Optional) Create `system_prompt.txt` (for custom instructions) in the current working directory or next to the executable.
-3. Run `cargo run --release`. Or `cargo build --release` to generate the binary.
-4. Open the main window:
+2. Run `cargo run --release`. Or `cargo build --release` to generate the binary.
+3. Open the main window:
    - Select your provider (LMStudio, Google Gemini, Cerebras, Ollama, Ollama Cloud, Unsloth Desktop, OpenCode Go, or OpenCode Zen).
    - Click **SELECT AREA** and drag to select the region you want to translate (e.g. subtitles).
    - Capture starts automatically. Use the **STOP** button to pause, or **Win + Alt + A** to re-select the area.

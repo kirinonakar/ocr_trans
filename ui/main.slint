@@ -1,12 +1,78 @@
 import { Button, CheckBox, SpinBox, Slider, GroupBox, LineEdit, ComboBox, TextEdit, ScrollView } from "std-widgets.slint";
 
+component ToolbarButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> available: true;
+    in property <bool> active: false;
+    in property <bool> dark_theme: false;
+    in property <bool> press_on_down: false;
+    in property <string> label: "";
+    in property <length> icon_size: 17px;
+    callback pressed();
+
+    width: 30px;
+    height: 30px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: active ? (dark_theme ? #60a5fa : #2563eb) : (dark_theme ? #475569 : #cbd5e1);
+    background: active
+        ? (dark_theme ? #1d4ed8 : #dbeafe)
+        : (dark_theme ? (touch.has-hover ? #334155 : #1e293b) : (touch.has-hover ? #e2e8f0 : #ffffffcc));
+    opacity: available ? 1.0 : 0.38;
+
+    Image {
+        source: icon;
+        width: label == "" ? icon_size : 14px;
+        height: label == "" ? icon_size : 14px;
+        x: label == "" ? (parent.width - self.width) / 2 : 6px;
+        y: (parent.height - self.height) / 2;
+        colorize: dark_theme ? #e2e8f0 : #334155;
+    }
+
+    if (label != "") : Text {
+        x: 24px;
+        width: parent.width - 27px;
+        height: parent.height;
+        text: label;
+        color: dark_theme ? #f8fafc : #1e293b;
+        font-size: 10px;
+        font-weight: 700;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    touch := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        z: 10;
+        enabled: available;
+        pointer-event(event) => {
+            if (press_on_down && event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                pressed();
+            }
+        }
+        clicked => {
+            if (!press_on_down) { pressed(); }
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "OCR Translator";
     icon: @image-url("../app.ico");
     width: 400px;
-    preferred-height: show_style_settings ? 935px : 820px;
-    max-height: show_style_settings ? 935px : 820px;
-    background: @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+    // Keep each OCR layout state fixed while giving the optional style panel its own height.
+    // The closed state is shorter to avoid unused space; the open state has room for all controls.
+    preferred-height: show_style_settings ? 1000px : 880px;
+    min-height: show_style_settings ? 1000px : 880px;
+    max-height: show_style_settings ? 1000px : 880px;
+    background: dark_theme
+        ? @linear-gradient(180deg, #0f172a 0%, #111827 100%)
+        : @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
     default-font-family: "Yu Gothic UI";
 
     in-out property <bool> is_running: false;
@@ -29,8 +95,11 @@ export component MainWindow inherits Window {
     in-out property <color> overlay_text_color: #1e293b;
     in-out property <float> overlay_bg_opacity: 0.9;
     in-out property <bool> show_style_settings: false;
+    in-out property <bool> dark_theme: false;
     in-out property <bool> use_textbox: false;
     in-out property <string> last_translated_text: "";
+    in-out property <string> app_mode: "ocr";
+    in-out property <string> capture_folder: "";
 
     
     
@@ -43,37 +112,86 @@ export component MainWindow inherits Window {
     callback sync_lmstudio_models();
     callback style_panel_toggled(bool);
     callback style_changed();
+    callback folder_select_clicked();
+    callback capture_folder_changed(string);
+    callback system_prompt_changed(string);
 
     callback model_changed(string);
     callback thinking_level_changed(string);
+    callback mode_toggle_clicked(string);
     VerticalLayout {
         alignment: start;
         padding: 14px;
         padding-bottom: 30px; // Increased bottom padding to lift content
         spacing: 10px;
 
-        Text {
-            text: "OCR Translator";
-            font-size: 18px;
-            color: #2563eb;
-            horizontal-alignment: center;
-            font-weight: 800;
+        HorizontalLayout {
+            height: 30px;
+            spacing: 8px;
+
+            Text {
+                text: "OCR Translator";
+                font-size: 18px;
+                color: dark_theme ? #60a5fa : #2563eb;
+                vertical-alignment: center;
+                font-weight: 800;
+            }
+
+            Rectangle { }
+
+            // Compact OCR/Capture switch aligned with the title.
+            Rectangle {
+                width: 78px;
+                height: 26px;
+                y: 2px;
+                background: app_mode == "capture" ? #2563eb : (dark_theme ? #334155 : #cbd5e1);
+                border-radius: 13px;
+                border-width: 1px;
+                border-color: app_mode == "capture" ? #1d4ed8 : (dark_theme ? #64748b : #94a3b8);
+
+                Text {
+                    text: app_mode == "capture" ? "CAP" : "OCR";
+                    x: app_mode == "capture" ? 6px : 31px;
+                    width: 41px;
+                    height: 26px;
+                    color: app_mode == "capture" ? #ffffff : (dark_theme ? #e2e8f0 : #334155);
+                    font-size: 10px;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    x: app_mode == "capture" ? 54px : 4px;
+                    y: 3px;
+                    width: 18px;
+                    height: 18px;
+                    background: #ffffff;
+                    border-radius: 9px;
+                }
+
+                TouchArea {
+                    clicked => {
+                        mode_toggle_clicked(app_mode == "capture" ? "ocr" : "capture");
+                    }
+                }
+            }
         }
 
         Rectangle {
-            background: #ffffff;
+            background: dark_theme ? #1e293b : #ffffff;
             border-radius: 12px;
             border-width: 1px;
-            border-color: #e2e8f0;
+            border-color: dark_theme ? #334155 : #e2e8f0;
             
             VerticalLayout {
                 spacing: 8px;
                 padding: 10px;
-                Text { text: "API SETTINGS"; font-weight: 700; color: #2563eb; font-size: 14px; }
+                Text { text: "API SETTINGS"; font-weight: 700; color: dark_theme ? #60a5fa : #2563eb; font-size: 14px; }
                 
                 VerticalLayout {
                     spacing: 6px;
-                    Text { text: "Provider:"; color: #64748b; font-size: 12px; }
+                    Text { text: "Provider:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
                     ComboBox {
                         model: provider_options;
                         current-value <=> api_type;
@@ -87,7 +205,7 @@ export component MainWindow inherits Window {
 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "Endpoint:"; color: #64748b; font-size: 12px; }
+                    Text { text: "Endpoint:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
                     LineEdit {
                         text <=> api_endpoint;
                         placeholder-text: "http://localhost:1234/v1";
@@ -96,7 +214,7 @@ export component MainWindow inherits Window {
                 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "API Key:"; color: #64748b; font-size: 12px; }
+                    Text { text: "API Key:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
                     LineEdit {
                         text <=> api_key;
                         input-type: password;
@@ -108,7 +226,7 @@ export component MainWindow inherits Window {
                 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "Model Name:"; color: #64748b; font-size: 12px; }
+                    Text { text: "Model Name:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
                     HorizontalLayout {
                         spacing: 6px;
                         ComboBox {
@@ -117,10 +235,13 @@ export component MainWindow inherits Window {
                             current-index <=> model_index;
                             selected(value) => { model_changed(value); }
                         }
-                        Button {
-                            text: "Sync";
-                            primary: false;
-                            clicked => { refresh_models_clicked(); }
+                        ToolbarButton {
+                            icon: @image-url("icons/sync.svg");
+                            dark_theme: dark_theme;
+                            width: 32px;
+                            height: 32px;
+                            icon_size: 18px;
+                            pressed => { refresh_models_clicked(); }
                         }
                     }
                 }
@@ -129,8 +250,8 @@ export component MainWindow inherits Window {
                     spacing: 4px;
                     HorizontalLayout {
                         spacing: 4px;
-                        Text { text: "Temperature:"; color: #64748b; font-size: 12px; }
-                        Text { text: round(temperature * 10) / 10; color: #1e293b; font-size: 12px; font-weight: 700; }
+                        Text { text: "Temperature:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
+                        Text { text: round(temperature * 10) / 10; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; font-weight: 700; }
                         Rectangle { } // Flexible spacer to push content left
                     }
                     Slider {
@@ -142,7 +263,7 @@ export component MainWindow inherits Window {
 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "Thinking Level:"; color: #64748b; font-size: 12px; }
+                    Text { text: "Thinking Level:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
                     ComboBox {
                         model: thinking_level_options;
                         current-value <=> thinking_level;
@@ -152,18 +273,19 @@ export component MainWindow inherits Window {
 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "System Prompt:"; color: #64748b; font-size: 12px; }
+                    Text { text: "System Prompt:"; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
                     Rectangle {
-                        background: #f8fafc;
+                        background: dark_theme ? #0f172a : #f8fafc;
                         border-radius: 4px;
                         border-width: 1px;
-                        border-color: #e2e8f0;
+                        border-color: dark_theme ? #475569 : #e2e8f0;
                         height: 80px;
                         TextEdit {
                             text <=> system_prompt;
                             width: 100%;
                             height: 100%;
                             font-size: 13px;
+                            edited(value) => { system_prompt_changed(value); }
                         }
                     }
                 }
@@ -171,20 +293,20 @@ export component MainWindow inherits Window {
         }
 
         Rectangle {
-            background: #ffffff;
+            background: dark_theme ? #1e293b : #ffffff;
             border-radius: 12px;
             border-width: 1px;
-            border-color: #e2e8f0;
+            border-color: dark_theme ? #334155 : #e2e8f0;
             
             VerticalLayout {
                 spacing: 8px;
                 padding: 10px;
-                Text { text: "CAPTURE SETTINGS"; font-weight: 700; color: #2563eb; font-size: 14px; }
+                Text { text: "CAPTURE SETTINGS"; font-weight: 700; color: dark_theme ? #60a5fa : #2563eb; font-size: 14px; }
                 
                 HorizontalLayout {
                     spacing: 4px;
-                    Text { text: "Interval (s): "; vertical-alignment: center; color: #64748b; }
-                    Text { text: interval == 0 ? "Once" : (round(interval * 10) / 10); vertical-alignment: center; font-weight: 700; color: #1e293b; }
+                    Text { text: "Interval (s): "; vertical-alignment: center; color: dark_theme ? #94a3b8 : #64748b; }
+                    Text { text: interval == 0 ? "Once" : (round(interval * 10) / 10); vertical-alignment: center; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; }
                     Rectangle { } // Flexible spacer to push content left
                 }
                 Slider {
@@ -200,14 +322,38 @@ export component MainWindow inherits Window {
                     }
                 }
                 HorizontalLayout {
-                    Text { text: "Font Size: "; vertical-alignment: center; color: #64748b; }
-                    Text { text: round(base_font_size); vertical-alignment: center; font-weight: 700; color: #1e293b; }
+                    height: 30px;
+                    spacing: 6px;
+                    Text {
+                        text: "Save folder:";
+                        width: 74px;
+                        vertical-alignment: center;
+                        color: dark_theme ? #94a3b8 : #64748b;
+                        font-size: 12px;
+                    }
+                    LineEdit {
+                        text <=> capture_folder;
+                        placeholder-text: "Pictures";
+                        edited(value) => { capture_folder_changed(value); }
+                        accepted(value) => { capture_folder_changed(value); }
+                    }
+                    Button {
+                        text: "Browse";
+                        width: 68px;
+                        height: 28px;
+                        primary: false;
+                        clicked => { folder_select_clicked(); }
+                    }
+                }
+                HorizontalLayout {
+                    Text { text: "Font Size: "; vertical-alignment: center; color: dark_theme ? #94a3b8 : #64748b; }
+                    Text { text: round(base_font_size); vertical-alignment: center; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; }
                     
                     Rectangle { } // Flexible spacer
                     
                     HorizontalLayout {
                         spacing: 4px;
-                        Text { text: "Textbox"; vertical-alignment: center; color: #64748b; font-size: 12px; }
+                        Text { text: "Textbox"; vertical-alignment: center; color: dark_theme ? #94a3b8 : #64748b; font-size: 12px; }
                         CheckBox { 
                             checked <=> use_textbox;
                             toggled => { style_changed(); }
@@ -242,7 +388,7 @@ export component MainWindow inherits Window {
                         spacing: 12px;
                         VerticalLayout {
                             spacing: 4px;
-                            Text { text: "Background:"; font-size: 11px; color: #64748b; }
+                            Text { text: "Background:"; font-size: 11px; color: dark_theme ? #94a3b8 : #64748b; }
                             HorizontalLayout {
                                 spacing: 6px;
                                 Rectangle { 
@@ -285,7 +431,7 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             spacing: 4px;
                             HorizontalLayout {
-                                Text { text: "Text Color:"; font-size: 11px; color: #64748b; vertical-alignment: center; }
+                                Text { text: "Text Color:"; font-size: 11px; color: dark_theme ? #94a3b8 : #64748b; vertical-alignment: center; }
                                 Rectangle { } // Flexible spacer
                             }
                             HorizontalLayout {
@@ -322,7 +468,7 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    Text { text: "Background Opacity:"; font-size: 11px; color: #64748b; }
+                    Text { text: "Background Opacity:"; font-size: 11px; color: dark_theme ? #94a3b8 : #64748b; }
                     Slider {
                         minimum: 0.1;
                         maximum: 1.0;
@@ -338,16 +484,16 @@ export component MainWindow inherits Window {
                         clicked => { select_area_clicked(); }
                     }
                     Rectangle {
-                        background: #f8fafc;
+                        background: dark_theme ? #0f172a : #f8fafc;
                         border-radius: 8px;
                         border-width: 1px;
-                        border-color: #e2e8f0;
+                        border-color: dark_theme ? #475569 : #e2e8f0;
                         height: 32px;
                         HorizontalLayout {
                             padding-left: 8px;
                             padding-right: 8px;
                             spacing: 4px;
-                            Text { text: "Overlay"; vertical-alignment: center; font-size: 12px; color: #64748b; }
+                            Text { text: "Overlay"; vertical-alignment: center; font-size: 12px; color: dark_theme ? #94a3b8 : #64748b; }
                             CheckBox {
                                 checked <=> overlay_visible;
                                 toggled => { overlay_toggle_clicked(self.checked); }
@@ -378,6 +524,276 @@ export component MainWindow inherits Window {
         }
 
         Rectangle { height: 10px; } // Extra spacer at the very bottom to lift it slightly more
+    }
+}
+
+export component CaptureToolbarWindow inherits Window {
+    title: "Capture & record";
+    always-on-top: true;
+    no-frame: true;
+    background: transparent;
+    default-font-family: "Yu Gothic UI";
+    preferred-width: 560px;
+    preferred-height: recording ? 48px : (status_text == "" ? 48px : 68px);
+    min-width: 540px;
+
+    in-out property <bool> record_mode: false;
+    in-out property <bool> recording: false;
+    in-out property <bool> recording_paused: false;
+    in-out property <bool> dark_theme: false;
+    in-out property <string> recording_elapsed: "00:00";
+    in-out property <string> status_text: "";
+
+    callback drag_requested();
+    callback theme_toggle_clicked();
+    callback ui_toggle_clicked();
+    callback capture_mode_clicked();
+    callback record_mode_clicked();
+    callback fullscreen_clicked();
+    callback window_clicked();
+    callback scroll_clicked();
+    callback region_clicked();
+    callback ocr_clicked();
+    callback translate_clicked();
+    callback vlm_clicked();
+    callback color_picker_clicked();
+    callback close_clicked();
+    callback pause_recording_clicked();
+    callback stop_recording_clicked();
+
+    VerticalLayout {
+        width: 100%;
+        height: 100%;
+        spacing: 0px;
+
+        Rectangle {
+            width: 100%;
+            height: 48px;
+            background: dark_theme ? #0f172aee : #f1f5f9ee;
+            border-radius: 9px;
+            border-width: 1px;
+            border-color: dark_theme ? #475569 : #94a3b8;
+
+        if (!recording) : HorizontalLayout {
+            x: 0px;
+            y: 0px;
+            width: 100%;
+            height: 48px;
+            padding-left: 7px;
+            padding-right: 7px;
+            padding-top: 6px;
+            padding-bottom: 6px;
+            spacing: 5px;
+
+            ToolbarButton {
+                icon: @image-url("icons/drag.svg");
+                dark_theme: dark_theme;
+                width: 24px;
+                press_on_down: true;
+                pressed => { drag_requested(); }
+            }
+
+            ToolbarButton {
+                icon: @image-url("icons/theme.svg");
+                dark_theme: dark_theme;
+                active: dark_theme;
+                press_on_down: true;
+                width: 30px;
+                icon_size: 16px;
+                pressed => { theme_toggle_clicked(); }
+            }
+
+            // This is the requested UI toggle immediately to the right of the theme button.
+            ToolbarButton {
+                icon: @image-url("icons/ui.svg");
+                dark_theme: dark_theme;
+                width: 64px;
+                icon_size: 14px;
+                label: "Capture";
+                press_on_down: true;
+                pressed => { ui_toggle_clicked(); }
+            }
+
+            Rectangle {
+                width: 68px;
+                height: 34px;
+                background: dark_theme ? #1e293bee : #ffffffaa;
+                border-radius: 7px;
+                border-width: 1px;
+                border-color: dark_theme ? #475569 : #cbd5e1;
+                HorizontalLayout {
+                    width: 100%;
+                    height: 100%;
+                    padding: 2px;
+                    spacing: 3px;
+                    ToolbarButton {
+                        icon: @image-url("icons/capture.svg");
+                        dark_theme: dark_theme;
+                        press_on_down: true;
+                        active: !record_mode;
+                        pressed => { capture_mode_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("icons/record.svg");
+                        dark_theme: dark_theme;
+                        press_on_down: true;
+                        active: record_mode;
+                        pressed => { record_mode_clicked(); }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 134px;
+                height: 34px;
+                background: dark_theme ? #1e293bee : #ffffffaa;
+                border-radius: 7px;
+                border-width: 1px;
+                border-color: dark_theme ? #475569 : #cbd5e1;
+                HorizontalLayout {
+                    width: 100%;
+                    height: 100%;
+                    padding: 2px;
+                    spacing: 3px;
+                    ToolbarButton {
+                        icon: @image-url("icons/fullscreen.svg");
+                        dark_theme: dark_theme;
+                        press_on_down: true;
+                        pressed => { fullscreen_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("icons/window.svg");
+                        dark_theme: dark_theme;
+                        press_on_down: true;
+                        pressed => { window_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("icons/scroll.svg");
+                        dark_theme: dark_theme;
+                        press_on_down: true;
+                        available: !record_mode;
+                        pressed => { scroll_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("icons/region.svg");
+                        dark_theme: dark_theme;
+                        press_on_down: true;
+                        pressed => { region_clicked(); }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 139px;
+                height: 34px;
+                background: dark_theme ? #1e293bee : #ffffffaa;
+                border-radius: 7px;
+                border-width: 1px;
+                border-color: dark_theme ? #475569 : #cbd5e1;
+                HorizontalLayout {
+                    width: 100%;
+                    height: 100%;
+                    padding: 2px;
+                    spacing: 3px;
+                    ToolbarButton {
+                        icon: @image-url("icons/ocr.svg");
+                        dark_theme: dark_theme;
+                        press_on_down: true;
+                        width: 30px;
+                        pressed => { ocr_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("icons/translate.svg");
+                        dark_theme: dark_theme;
+                        press_on_down: true;
+                        width: 34px;
+                        pressed => { translate_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("icons/vlm.svg");
+                        dark_theme: dark_theme;
+                        press_on_down: true;
+                        width: 30px;
+                        pressed => { vlm_clicked(); }
+                    }
+                    // The reference voice-input slot is intentionally a color picker here.
+                    ToolbarButton {
+                        icon: @image-url("icons/color.svg");
+                        dark_theme: dark_theme;
+                        press_on_down: true;
+                        pressed => { color_picker_clicked(); }
+                    }
+                }
+            }
+
+            ToolbarButton {
+                icon: @image-url("icons/close.svg");
+                dark_theme: dark_theme;
+                icon_size: 16px;
+                press_on_down: true;
+                pressed => { close_clicked(); }
+            }
+        }
+
+        if (recording) : HorizontalLayout {
+            x: 0px;
+            y: 0px;
+            width: 100%;
+            height: 48px;
+            padding-left: 9px;
+            padding-right: 9px;
+            padding-top: 7px;
+            padding-bottom: 7px;
+            spacing: 8px;
+            ToolbarButton {
+                icon: @image-url("icons/drag.svg");
+                dark_theme: dark_theme;
+                width: 24px;
+                press_on_down: true;
+                pressed => { drag_requested(); }
+            }
+            Rectangle {
+                width: 12px;
+                height: 12px;
+                border-radius: 6px;
+                background: #c42b1c;
+            }
+            Text {
+                text: recording_elapsed;
+                font-family: "Consolas";
+                font-size: 16px;
+                font-weight: 650;
+                color: dark_theme ? #f8fafc : #111827;
+                vertical-alignment: center;
+            }
+            ToolbarButton {
+                icon: recording_paused ? @image-url("icons/play.svg") : @image-url("icons/pause.svg");
+                dark_theme: dark_theme;
+                press_on_down: true;
+                width: 34px;
+                pressed => { pause_recording_clicked(); }
+            }
+            ToolbarButton {
+                icon: @image-url("icons/stop.svg");
+                dark_theme: dark_theme;
+                press_on_down: true;
+                active: true;
+                width: 38px;
+                pressed => { stop_recording_clicked(); }
+            }
+            }
+        }
+
+        if (!recording && status_text != "") : Text {
+            width: 100%;
+            height: 20px;
+            text: status_text;
+            color: dark_theme ? #cbd5e1 : #475569;
+            font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
     }
 }
 
@@ -504,6 +920,12 @@ export component SelectionWindow inherits Window {
     default-font-family: "Yu Gothic UI";
     
     in-out property <image> screenshot;
+    in-out property <bool> window_mode: false;
+    in-out property <bool> color_picker_mode: false;
+    in-out property <length> hover_x: 0px;
+    in-out property <length> hover_y: 0px;
+    in-out property <length> hover_w: 0px;
+    in-out property <length> hover_h: 0px;
     property <bool> selecting: false;
     property <length> start_x;
     property <length> start_y;
@@ -515,12 +937,19 @@ export component SelectionWindow inherits Window {
     property <length> sel_y: start_y < current_y ? start_y : current_y;
     property <length> sel_w: abs_len(current_x - start_x);
     property <length> sel_h: abs_len(current_y - start_y);
+    property <length> active_x: window_mode && hover_w > 0px ? hover_x : sel_x;
+    property <length> active_y: window_mode && hover_h > 0px ? hover_y : sel_y;
+    property <length> active_w: window_mode && hover_w > 0px ? hover_w : sel_w;
+    property <length> active_h: window_mode && hover_h > 0px ? hover_h : sel_h;
 
     function abs_len(v: length) -> length {
         return v < 0px ? -v : v;
     }
 
     callback area_selected(length, length, length, length);
+    callback window_hovered(length, length);
+    callback window_selected();
+    callback color_picked(length, length);
     callback closed();
 
     public function reset() {
@@ -528,6 +957,10 @@ export component SelectionWindow inherits Window {
         start_y = 0px;
         current_x = 0px;
         current_y = 0px;
+        hover_x = 0px;
+        hover_y = 0px;
+        hover_w = 0px;
+        hover_h = 0px;
         selecting = false;
     }
 
@@ -542,32 +975,36 @@ export component SelectionWindow inherits Window {
     // Top
     Rectangle {
         x: 0; y: 0; width: parent.width;
-        height: sel_y;
+        height: active_y;
         background: #00000080;
+        visible: !color_picker_mode;
     }
     // Bottom
     Rectangle {
         x: 0; 
-        y: sel_y + sel_h;
+        y: active_y + active_h;
         width: parent.width;
         height: parent.height - self.y;
         background: #00000080;
+        visible: !color_picker_mode;
     }
     // Left
     Rectangle {
         x: 0;
-        y: sel_y;
-        width: sel_x;
-        height: sel_h;
+        y: active_y;
+        width: active_x;
+        height: active_h;
         background: #00000080;
+        visible: !color_picker_mode;
     }
     // Right
     Rectangle {
-        x: sel_x + sel_w;
-        y: sel_y;
+        x: active_x + active_w;
+        y: active_y;
         width: parent.width - self.x;
-        height: sel_h;
+        height: active_h;
         background: #00000080;
+        visible: !color_picker_mode;
     }
     
     // Always show a base dim when NOT selecting to avoid jump
@@ -584,18 +1021,26 @@ export component SelectionWindow inherits Window {
                     current_y = start_y;
                 } else if (event.kind == PointerEventKind.up) {
                     selecting = false;
-                    // Provide the calculated rect
-                    area_selected(
-                        start_x < current_x ? start_x : current_x,
-                        start_y < current_y ? start_y : current_y,
-                        abs_len(current_x - start_x),
-                        abs_len(current_y - start_y)
-                    );
+                    if (color_picker_mode) {
+                        color_picked(i_touch.mouse-x, i_touch.mouse-y);
+                    } else if (window_mode) {
+                        window_selected();
+                    } else {
+                        // Provide the calculated rect.
+                        area_selected(
+                            start_x < current_x ? start_x : current_x,
+                            start_y < current_y ? start_y : current_y,
+                            abs_len(current_x - start_x),
+                            abs_len(current_y - start_y)
+                        );
+                    }
                 }
             }
         }
         moved => {
-            if (selecting) {
+            if (window_mode) {
+                window_hovered(i_touch.mouse-x, i_touch.mouse-y);
+            } else if (selecting) {
                 current_x = i_touch.mouse-x;
                 current_y = i_touch.mouse-y;
             }
@@ -616,25 +1061,26 @@ export component SelectionWindow inherits Window {
 
     // Selection border
     Rectangle {
-        x: sel_x;
-        y: sel_y;
-        width: sel_w;
-        height: sel_h;
-        border-color: #2563eb;
-        border-width: selecting ? 2px : 0px; // Use border-width for smoother appearance
+        x: active_x;
+        y: active_y;
+        width: active_w;
+        height: active_h;
+        border-color: window_mode ? #60cdff : #ffffff;
+        border-width: (selecting || (window_mode && hover_w > 0px)) ? 2px : 0px; // Use border-width for smoother appearance
         background: transparent;
+        visible: !color_picker_mode;
     }
     
     VerticalLayout {
         alignment: start;
         padding: 40px;
         Text {
-            text: "Drag your mouse to select capture area";
+            text: color_picker_mode ? "Click a pixel to copy its color" : (window_mode ? "Click a window to select it" : "Drag your mouse to select capture area");
             color: white;
             font-size: 24px;
             font-weight: 700;
             horizontal-alignment: center;
-            opacity: selecting ? 0 : 1; // Use opacity for smoother transition
+            opacity: color_picker_mode || selecting || (window_mode && hover_w > 0px) ? 0 : 1; // Use opacity for smoother transition
         }
     }
 }

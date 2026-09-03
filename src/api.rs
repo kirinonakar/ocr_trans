@@ -1,7 +1,7 @@
-use serde::Serialize;
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::Client;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use serde::Serialize;
 
 #[derive(Serialize)]
 struct GeminiRequest {
@@ -85,7 +85,7 @@ impl ApiClient {
     pub async fn translate_image(&self, img: &image::RgbaImage) -> Result<String> {
         let jpeg_data = self.prepare_image(img)?;
         let base64_image = STANDARD.encode(&jpeg_data);
-        
+
         if self.is_gemini_endpoint() {
             self.call_gemini(base64_image).await
         } else if self.is_ollama_endpoint() {
@@ -97,15 +97,31 @@ impl ApiClient {
         }
     }
 
+    /// Translates plain OCR text using the same provider/model configuration as the original
+    /// VLM path. This is used by the compact OCR+translation toolbar action.
+    pub async fn translate_text(&self, text: &str) -> Result<String> {
+        let text = text.trim();
+        if text.is_empty() {
+            anyhow::bail!("No OCR text was recognized.");
+        }
+        if self.is_gemini_endpoint() {
+            self.call_gemini_text(text).await
+        } else if self.is_ollama_endpoint() {
+            self.call_ollama_text(text).await
+        } else if self.is_responses_model() {
+            self.call_openai_responses_text(text).await
+        } else {
+            self.call_openai_compatible_text(text).await
+        }
+    }
+
     fn is_gemini_endpoint(&self) -> bool {
         self.endpoint.contains("googleapis.com")
     }
 
     fn is_ollama_endpoint(&self) -> bool {
         let endpoint = self.endpoint.to_lowercase();
-        endpoint.contains("ollama.com")
-            || endpoint.contains(":11434")
-            || endpoint.ends_with("/api")
+        endpoint.contains("ollama.com") || endpoint.contains(":11434") || endpoint.ends_with("/api")
     }
 
     fn normalized_thinking_level(&self) -> Option<String> {
@@ -208,7 +224,11 @@ impl ApiClient {
         payload["think"] = if level == "disable" {
             serde_json::Value::Bool(false)
         } else {
-            let level = if level == "xhigh" { "max" } else { level.as_str() };
+            let level = if level == "xhigh" {
+                "max"
+            } else {
+                level.as_str()
+            };
             serde_json::Value::String(level.to_string())
         };
     }
@@ -246,29 +266,34 @@ impl ApiClient {
         };
 
         log::info!("Resizing image from {}x{} to {}x{}", w, h, new_w, new_h);
-        let resized = image::imageops::resize(img, new_w, new_h.max(1), image::imageops::FilterType::Lanczos3);
+        let resized = image::imageops::resize(
+            img,
+            new_w,
+            new_h.max(1),
+            image::imageops::FilterType::Lanczos3,
+        );
         let rgb_img = image::DynamicImage::ImageRgba8(resized).to_rgb8();
 
         let mut buffer = Vec::new();
-        rgb_img.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Jpeg)
+        rgb_img
+            .write_to(
+                &mut std::io::Cursor::new(&mut buffer),
+                image::ImageFormat::Jpeg,
+            )
             .context("Failed to encode image to JPEG")?;
-        
+
         log::info!("Image prepared, size: {} bytes", buffer.len());
         Ok(buffer)
     }
 
     async fn call_gemini(&self, base64_image: String) -> Result<String> {
-
-        // Normalize model name: it shouldn't contain spaces and ideally starts with models/ if not provided, 
+        // Normalize model name: it shouldn't contain spaces and ideally starts with models/ if not provided,
         // though the URL below adds it.
         let model = self.model.trim().to_lowercase().replace(" ", "-");
         // Remove 'models/' if it was already included in the string so we don't double it
         let model = model.strip_prefix("models/").unwrap_or(&model);
 
-        let url = format!(
-            "{}/v1beta/models/{}:generateContent",
-            self.endpoint, model
-        );
+        let url = format!("{}/v1beta/models/{}:generateContent", self.endpoint, model);
 
         let thinking_config = self.gemini_thinking_config();
 
@@ -300,7 +325,7 @@ impl ApiClient {
         }
 
         let response = req.send().await.context("HTTP request failed")?;
-        
+
         let status = response.status();
         log::info!("Gemini Response Status: {}", status);
 
@@ -310,9 +335,13 @@ impl ApiClient {
             anyhow::bail!("Gemini API Error ({}): {}", status, err_body);
         }
 
-        let json_text = response.text().await.context("Failed to get response text")?;
-        let json: serde_json::Value = serde_json::from_str(&json_text).context("Failed to parse JSON")?;
-        
+        let json_text = response
+            .text()
+            .await
+            .context("Failed to get response text")?;
+        let json: serde_json::Value =
+            serde_json::from_str(&json_text).context("Failed to parse JSON")?;
+
         let mut full_text = String::new();
         if let Some(parts) = json["candidates"][0]["content"]["parts"].as_array() {
             for part in parts {
@@ -323,32 +352,71 @@ impl ApiClient {
         }
 
         if full_text.is_empty() {
-             anyhow::bail!("No text found in Gemini response parts. Check for safety filters or model compatibility.");
+            anyhow::bail!("No text found in Gemini response parts. Check for safety filters or model compatibility.");
         }
-        
-        log::info!("Total Gemini response text received (length: {})", full_text.len());
+
+        log::info!(
+            "Total Gemini response text received (length: {})",
+            full_text.len()
+        );
         let mut processed_text = full_text;
-        
+
         // Gemma models sometimes output lines starting with * (notes, thoughts, etc.)
         // We filter these out if the model name contains "gemma"
         if self.model.to_lowercase().contains("gemma") {
-            processed_text = processed_text.lines()
+            processed_text = processed_text
+                .lines()
                 .filter(|line| !line.trim_start().starts_with('*'))
                 .collect::<Vec<_>>()
                 .join("\n");
         }
-        
+
         Ok(processed_text.trim().to_string())
     }
 
-    async fn call_openai_compatible(&self, base64_image: String) -> Result<String> {
+    async fn call_gemini_text(&self, text: &str) -> Result<String> {
+        let model = self.model.trim().to_lowercase().replace(" ", "-");
+        let model = model.strip_prefix("models/").unwrap_or(&model);
+        let url = format!("{}/v1beta/models/{}:generateContent", self.endpoint, model);
+        let request = GeminiRequest {
+            contents: vec![GeminiContent {
+                parts: vec![GeminiPart::Text {
+                    text: format!("{}\n\n{}", self.system_prompt, text),
+                }],
+            }],
+            generation_config: Some(GeminiGenerationConfig {
+                temperature: self.temperature,
+                thinking_config: self.gemini_thinking_config(),
+            }),
+        };
+        let mut req = self.client.post(&url).json(&request);
+        let api_key = self.api_key.trim();
+        if !api_key.is_empty() {
+            req = req.header("x-goog-api-key", api_key);
+        }
+        let response = req.send().await.context("HTTP request failed")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("Gemini API Error ({}): {}", status, body);
+        }
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse Gemini response")?;
+        let text = json["candidates"][0]["content"]["parts"][0]["text"]
+            .as_str()
+            .context("Missing text in Gemini response")?;
+        Ok(text.trim().to_string())
+    }
 
+    async fn call_openai_compatible(&self, base64_image: String) -> Result<String> {
         let url = if self.endpoint.ends_with("/chat/completions") {
             self.endpoint.clone()
         } else {
             format!("{}/chat/completions", self.endpoint)
         };
-        
+
         let mut payload = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -375,7 +443,7 @@ impl ApiClient {
 
         log::info!("Sending AI request to: {}", url);
         let response = req.send().await.context("HTTP request failed")?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let err_body = response.text().await?;
@@ -385,11 +453,45 @@ impl ApiClient {
 
         let json: serde_json::Value = response.json().await.context("Failed to decode JSON")?;
         log::info!("AI Response received.");
-        
+
         let text = json["choices"][0]["message"]["content"]
             .as_str()
             .context("Missing text in OpenAI response. Check if your model supports Vision!")?;
-            
+
+        Ok(text.trim().to_string())
+    }
+
+    async fn call_openai_compatible_text(&self, text: &str) -> Result<String> {
+        let url = if self.endpoint.ends_with("/chat/completions") {
+            self.endpoint.clone()
+        } else {
+            format!("{}/chat/completions", self.endpoint)
+        };
+        let mut payload = serde_json::json!({
+            "model": self.model,
+            "messages": [{
+                "role": "user",
+                "content": format!("{}\n\n{}", self.system_prompt, text)
+            }]
+        });
+        if !self.is_opencode_provider() {
+            payload["temperature"] = serde_json::json!(self.temperature);
+        }
+        self.apply_openai_thinking(&mut payload);
+        let mut req = self.client.post(&url).json(&payload);
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        let response = req.send().await.context("HTTP request failed")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("OpenAI API Error ({}): {}", status, body);
+        }
+        let json: serde_json::Value = response.json().await.context("Failed to decode JSON")?;
+        let text = json["choices"][0]["message"]["content"]
+            .as_str()
+            .context("Missing text in OpenAI response")?;
         Ok(text.trim().to_string())
     }
 
@@ -463,6 +565,60 @@ impl ApiClient {
         Ok(text.trim().to_string())
     }
 
+    async fn call_openai_responses_text(&self, text: &str) -> Result<String> {
+        let url = if self.endpoint.ends_with("/responses") {
+            self.endpoint.clone()
+        } else {
+            format!("{}/responses", self.endpoint)
+        };
+        let mut payload = serde_json::json!({
+            "model": self.model,
+            "input": [{
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": format!("{}\n\n{}", self.system_prompt, text)
+                }]
+            }]
+        });
+        self.apply_responses_thinking(&mut payload);
+        let mut req = self.client.post(&url).json(&payload);
+        if !self.api_key.is_empty() {
+            req = req.bearer_auth(&self.api_key);
+        }
+        let response = req.send().await.context("HTTP request failed")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("OpenAI Responses API Error ({}): {}", status, body);
+        }
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to decode OpenAI Responses JSON")?;
+        if let Some(text) = json["output_text"].as_str() {
+            return Ok(text.trim().to_string());
+        }
+        let mut output_text = String::new();
+        if let Some(output) = json["output"].as_array() {
+            for item in output {
+                if let Some(content) = item["content"].as_array() {
+                    for part in content {
+                        if part["type"].as_str() == Some("output_text") {
+                            if let Some(value) = part["text"].as_str() {
+                                output_text.push_str(value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if output_text.trim().is_empty() {
+            anyhow::bail!("Missing text in OpenAI Responses response");
+        }
+        Ok(output_text.trim().to_string())
+    }
+
     async fn call_ollama(&self, base64_image: String) -> Result<String> {
         let url = self.ollama_api_url("chat");
 
@@ -505,6 +661,39 @@ impl ApiClient {
             .as_str()
             .context("Missing text in Ollama response. Check if your model supports Vision!")?;
 
+        Ok(text.trim().to_string())
+    }
+
+    async fn call_ollama_text(&self, text: &str) -> Result<String> {
+        let url = self.ollama_api_url("chat");
+        let mut payload = serde_json::json!({
+            "model": self.model,
+            "messages": [{
+                "role": "user",
+                "content": format!("{}\n\n{}", self.system_prompt, text)
+            }],
+            "stream": false,
+            "options": { "temperature": self.temperature }
+        });
+        self.apply_ollama_thinking(&mut payload);
+        let mut req = self.client.post(&url).json(&payload);
+        let api_key = self.api_key.trim();
+        if !api_key.is_empty() {
+            req = req.bearer_auth(api_key);
+        }
+        let response = req.send().await.context("HTTP request failed")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await?;
+            anyhow::bail!("Ollama API Error ({}): {}", status, body);
+        }
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to decode Ollama response")?;
+        let text = json["message"]["content"]
+            .as_str()
+            .context("Missing text in Ollama response")?;
         Ok(text.trim().to_string())
     }
 
