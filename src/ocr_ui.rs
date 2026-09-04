@@ -2,7 +2,9 @@ use crate::capture_workflow::*;
 use crate::settings::*;
 use crate::state::{AppState, SelectionPurpose};
 use crate::text_layout::calculate_font_size;
-use crate::{win_utils, MainWindow, OverlayWindow, SelectionWindow, TextboxWindow};
+use crate::{
+    win_utils, CaptureToolbarWindow, MainWindow, OverlayWindow, SelectionWindow, TextboxWindow,
+};
 use global_hotkey::{hotkey::HotKey, GlobalHotKeyManager};
 use i_slint_backend_winit::WinitWindowAccessor;
 use slint::ComponentHandle;
@@ -14,6 +16,7 @@ pub(crate) fn register_callbacks(
     overlay_window: &OverlayWindow,
     selection_window: &SelectionWindow,
     textbox_window: &TextboxWindow,
+    capture_toolbar: &CaptureToolbarWindow,
     state: Arc<Mutex<AppState>>,
     hotkey_manager: Option<Arc<GlobalHotKeyManager>>,
     esc_hotkey: HotKey,
@@ -152,9 +155,18 @@ pub(crate) fn register_callbacks(
     // Textbox Closed Callback (Switch back to overlay)
     let main_weak_tb_close = main_window.as_weak();
     let overlay_weak_tb_close = overlay_window.as_weak();
+    let toolbar_weak_tb_close = capture_toolbar.as_weak();
     let state_tb_close = state.clone();
     textbox_window.window().on_close_requested(move || {
-        if let (Some(main), Some(overlay)) = (
+        let capture_mode = main_weak_tb_close
+            .upgrade()
+            .map(|main| main.get_app_mode() == "capture")
+            .unwrap_or(false);
+        if capture_mode {
+            if let Some(toolbar) = toolbar_weak_tb_close.upgrade() {
+                toolbar.set_textbox_visible(false);
+            }
+        } else if let (Some(main), Some(overlay)) = (
             main_weak_tb_close.upgrade(),
             overlay_weak_tb_close.upgrade(),
         ) {

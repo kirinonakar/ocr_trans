@@ -125,6 +125,9 @@ pub(crate) fn register_callbacks(
             if let Some(textbox) = textbox_weak_mode.upgrade() {
                 let _ = textbox.hide();
             }
+            if let Some(toolbar) = toolbar_weak_mode.upgrade() {
+                toolbar.set_textbox_visible(false);
+            }
             main.set_app_mode("capture".into());
             let main_weak_switch = main.as_weak();
             let toolbar_weak_switch = toolbar_weak_mode.clone();
@@ -198,6 +201,7 @@ pub(crate) fn register_callbacks(
     let main_weak_toolbar_ui = main_window.as_weak();
     let toolbar_weak_toolbar_ui = capture_toolbar.as_weak();
     let frame_weak_toolbar_ui = capture_frame_window.as_weak();
+    let textbox_weak_toolbar_ui = textbox_window.as_weak();
     main_window.set_app_mode(initial_app_mode.into());
 
     capture_toolbar.on_ui_toggle_clicked(move || {
@@ -207,6 +211,7 @@ pub(crate) fn register_callbacks(
         let main_weak = main_weak_toolbar_ui.clone();
         let toolbar_weak = toolbar_weak_toolbar_ui.clone();
         let frame_weak = frame_weak_toolbar_ui.clone();
+        let textbox_weak = textbox_weak_toolbar_ui.clone();
         slint::Timer::single_shot(Duration::from_millis(1), move || {
             if let Some(toolbar) = toolbar_weak.upgrade() {
                 if toolbar.get_recording() {
@@ -230,9 +235,13 @@ pub(crate) fn register_callbacks(
             if let Some(toolbar) = toolbar_weak.upgrade() {
                 let _ = toolbar.hide();
                 toolbar.set_frame_mode(false);
+                toolbar.set_textbox_visible(false);
             }
             if let Some(frame) = frame_weak.upgrade() {
                 let _ = frame.hide();
+            }
+            if let Some(textbox) = textbox_weak.upgrade() {
+                let _ = textbox.hide();
             }
         });
     });

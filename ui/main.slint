@@ -545,14 +545,15 @@ export component CaptureToolbarWindow inherits Window {
     no-frame: true;
     background: transparent;
     default-font-family: "Yu Gothic UI";
-    preferred-width: 603px;
+    preferred-width: 638px;
     preferred-height: recording ? 48px : ((status_text == "" && active_tooltip == "") ? 48px : 68px);
-    min-width: 603px;
+    min-width: 638px;
 
     in-out property <bool> record_mode: false;
     in-out property <bool> frame_mode: false;
     in-out property <bool> recording: false;
     in-out property <bool> recording_paused: false;
+    in-out property <bool> textbox_visible: false;
     in-out property <bool> dark_theme: false;
     in-out property <string> recording_elapsed: "00:00";
     in-out property <string> status_text: "";
@@ -570,6 +571,7 @@ export component CaptureToolbarWindow inherits Window {
     callback scroll_clicked();
     callback frame_clicked();
     callback region_clicked();
+    callback textbox_toggle_clicked();
     callback ocr_clicked();
     callback translate_clicked();
     callback vlm_clicked();
@@ -758,6 +760,21 @@ export component CaptureToolbarWindow inherits Window {
                         pressed => { region_clicked(); }
                     }
                 }
+            }
+
+            ToolbarButton {
+                icon: @image-url("icons/textbox.svg");
+                dark_theme: dark_theme;
+                active: textbox_visible;
+                width: 30px;
+                height: 34px;
+                icon_size: 17px;
+                tooltip: textbox_visible ? "Hide result text box" : "Show result text box";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
+                pressed => { textbox_toggle_clicked(); }
             }
 
             Rectangle {

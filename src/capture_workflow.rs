@@ -149,7 +149,7 @@ pub(crate) fn sync_capture_toolbar_size(toolbar: &CaptureToolbarWindow) {
         .set_size(slint::LogicalSize::new(CAPTURE_TOOLBAR_WIDTH, height));
 }
 
-pub(crate) const CAPTURE_TOOLBAR_WIDTH: f32 = 603.0;
+pub(crate) const CAPTURE_TOOLBAR_WIDTH: f32 = 638.0;
 pub(crate) const CAPTURE_FRAME_HEADER: f32 = 42.0;
 pub(crate) const CAPTURE_FRAME_BORDER: f32 = 3.0;
 pub(crate) const OCR_WINDOW_WIDTH: f32 = 400.0;
@@ -223,6 +223,7 @@ pub(crate) fn configure_textbox_native_theme(textbox: &TextboxWindow, dark_theme
         };
         let hwnd = windows::Win32::Foundation::HWND(handle.hwnd.get() as _);
         win_utils::set_title_bar_theme(hwnd, dark_theme);
+        win_utils::set_exclude_from_capture(hwnd);
         configured = true;
     });
     configured
@@ -703,6 +704,7 @@ pub(crate) fn begin_fullscreen_toolbar_action(
     recorder_slot: Arc<Mutex<Option<capture::ScreenRecorder>>>,
     http: reqwest::Client,
     recording_border: slint::Weak<RecordingBorderWindow>,
+    textbox: slint::Weak<TextboxWindow>,
 ) {
     if toolbar.get_recording() {
         return;
@@ -723,6 +725,7 @@ pub(crate) fn begin_fullscreen_toolbar_action(
             recorder_slot,
             http,
             recording_border,
+            textbox,
         );
     });
 }
@@ -734,6 +737,7 @@ pub(crate) fn begin_fullscreen_toolbar_action_now(
     recorder_slot: Arc<Mutex<Option<capture::ScreenRecorder>>>,
     http: reqwest::Client,
     recording_border: slint::Weak<RecordingBorderWindow>,
+    textbox: slint::Weak<TextboxWindow>,
 ) {
     if toolbar.get_recording() {
         return;
@@ -798,6 +802,7 @@ pub(crate) fn begin_fullscreen_toolbar_action_now(
             state,
             recorder_slot,
             http,
+            textbox,
         ));
         if let Err(error) = spawn_result {
             log::error!("Failed to start capture action: {error:?}");
@@ -858,6 +863,7 @@ pub(crate) async fn run_toolbar_action(
     state: Arc<Mutex<AppState>>,
     recorder_slot: Arc<Mutex<Option<capture::ScreenRecorder>>>,
     http: reqwest::Client,
+    textbox: slint::Weak<TextboxWindow>,
 ) {
     let Some(main) = main.upgrade() else {
         return;
@@ -978,8 +984,12 @@ pub(crate) async fn run_toolbar_action(
                     if text.trim().is_empty() {
                         anyhow::bail!("VLM returned no text");
                     }
+                    let text = clean_text(&text);
                     capture::copy_text_to_clipboard(&text)?;
-                    main.set_last_translated_text(clean_text(&text).into());
+                    main.set_last_translated_text(text.clone().into());
+                    if let Some(textbox) = textbox.upgrade() {
+                        textbox.set_text(text.into());
+                    }
                     return Ok("VLM result copied to clipboard".to_string());
                 }
 
@@ -993,6 +1003,9 @@ pub(crate) async fn run_toolbar_action(
                 .context("OCR worker stopped")??;
                 let text = clean_text(&recognized_text);
                 if text.trim().is_empty() {
+                    if let Some(textbox) = textbox.upgrade() {
+                        textbox.set_text("No text was recognized".into());
+                    }
                     return Ok("No text was recognized".to_string());
                 }
                 let translation = if action == SelectionPurpose::OcrTranslate {
@@ -1002,6 +1015,9 @@ pub(crate) async fn run_toolbar_action(
                 };
                 let composed = compose_ocr_clipboard(&text, translation.as_deref());
                 capture::copy_text_to_clipboard(&composed)?;
+                if let Some(textbox) = textbox.upgrade() {
+                    textbox.set_text(composed.into());
+                }
                 if translation.is_some() {
                     Ok("OCR text and translation copied".to_string())
                 } else {

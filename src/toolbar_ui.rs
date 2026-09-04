@@ -2,7 +2,7 @@ use crate::capture_workflow::*;
 use crate::state::{AppState, SelectionPurpose};
 use crate::{
     capture, win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow,
-    RecordingBorderWindow, SelectionWindow,
+    RecordingBorderWindow, SelectionWindow, TextboxWindow,
 };
 use global_hotkey::{hotkey::HotKey, GlobalHotKeyManager};
 use i_slint_backend_winit::WinitWindowAccessor;
@@ -16,6 +16,7 @@ pub(crate) fn register_callbacks(
     selection_window: &SelectionWindow,
     capture_frame_window: &CaptureFrameWindow,
     recording_border_window: &RecordingBorderWindow,
+    textbox_window: &TextboxWindow,
     state: Arc<Mutex<AppState>>,
     recorder_slot: Arc<Mutex<Option<capture::ScreenRecorder>>>,
     http_client: reqwest::Client,
@@ -24,6 +25,46 @@ pub(crate) fn register_callbacks(
     selection_initialized: Arc<Mutex<bool>>,
 ) {
     let frame_initialized = Arc::new(Mutex::new(false));
+
+    let toolbar_weak_textbox_toggle = capture_toolbar.as_weak();
+    let textbox_weak_toggle = textbox_window.as_weak();
+    let main_weak_textbox_toggle = main_window.as_weak();
+    capture_toolbar.on_textbox_toggle_clicked(move || {
+        let Some(toolbar) = toolbar_weak_textbox_toggle.upgrade() else {
+            return;
+        };
+        let visible = !toolbar.get_textbox_visible();
+        toolbar.set_textbox_visible(visible);
+
+        let toolbar_weak = toolbar.as_weak();
+        let textbox_weak = textbox_weak_toggle.clone();
+        let main_weak = main_weak_textbox_toggle.clone();
+        slint::Timer::single_shot(Duration::from_millis(1), move || {
+            let (Some(toolbar), Some(textbox)) = (toolbar_weak.upgrade(), textbox_weak.upgrade())
+            else {
+                return;
+            };
+            if visible {
+                if let Some(main) = main_weak.upgrade() {
+                    textbox.set_dark_theme(toolbar.get_dark_theme());
+                    textbox.set_text_color(main.get_overlay_text_color());
+                    textbox.set_font_size(main.get_base_font_size());
+                }
+                if textbox.show().is_ok() {
+                    #[cfg(target_os = "windows")]
+                    schedule_textbox_native_theme(textbox.as_weak(), 0);
+                } else {
+                    toolbar.set_textbox_visible(false);
+                    set_capture_toolbar_status(
+                        &toolbar,
+                        "Unable to open result text box".to_string(),
+                    );
+                }
+            } else {
+                let _ = textbox.hide();
+            }
+        });
+    });
 
     // Tooltips occupy the compact status row. Resize only after the hover event has returned;
     // changing a native window while Winit is dispatching pointer input can crash on Windows.
@@ -67,6 +108,7 @@ pub(crate) fn register_callbacks(
     let recorder_fullscreen = recorder_slot.clone();
     let http_fullscreen = http_client.clone();
     let recording_border_fullscreen = recording_border_window.as_weak();
+    let textbox_weak_fullscreen = textbox_window.as_weak();
     capture_toolbar.on_fullscreen_clicked(move || {
         if let (Some(toolbar), Some(main)) = (
             toolbar_weak_fullscreen.upgrade(),
@@ -79,6 +121,7 @@ pub(crate) fn register_callbacks(
                 recorder_fullscreen.clone(),
                 http_fullscreen.clone(),
                 recording_border_fullscreen.clone(),
+                textbox_weak_fullscreen.clone(),
             );
         }
     });
@@ -204,6 +247,7 @@ pub(crate) fn register_callbacks(
     let recorder_frame_capture = recorder_slot.clone();
     let http_frame_capture = http_client.clone();
     let recording_border_frame_capture = recording_border_window.as_weak();
+    let textbox_weak_frame_capture = textbox_window.as_weak();
     capture_frame_window.on_capture_clicked(move || {
         let toolbar_weak = toolbar_weak_frame_capture.clone();
         let frame_weak = frame_weak_capture.clone();
@@ -212,6 +256,7 @@ pub(crate) fn register_callbacks(
         let recorder = recorder_frame_capture.clone();
         let http = http_frame_capture.clone();
         let recording_border = recording_border_frame_capture.clone();
+        let textbox = textbox_weak_frame_capture.clone();
         slint::Timer::single_shot(Duration::from_millis(16), move || {
             let (Some(toolbar), Some(frame), Some(main)) = (
                 toolbar_weak.upgrade(),
@@ -244,6 +289,7 @@ pub(crate) fn register_callbacks(
                 state,
                 recorder,
                 http,
+                textbox,
             ));
             if let Err(error) = spawn_result {
                 set_capture_toolbar_status(&toolbar, format!("Error: {error:?}"));
@@ -258,6 +304,7 @@ pub(crate) fn register_callbacks(
     let recorder_frame_record = recorder_slot.clone();
     let http_frame_record = http_client.clone();
     let recording_border_frame_record = recording_border_window.as_weak();
+    let textbox_weak_frame_record = textbox_window.as_weak();
     capture_frame_window.on_record_clicked(move || {
         let toolbar_weak = toolbar_weak_frame_record.clone();
         let frame_weak = frame_weak_record.clone();
@@ -266,6 +313,7 @@ pub(crate) fn register_callbacks(
         let recorder = recorder_frame_record.clone();
         let http = http_frame_record.clone();
         let recording_border = recording_border_frame_record.clone();
+        let textbox = textbox_weak_frame_record.clone();
         slint::Timer::single_shot(Duration::from_millis(16), move || {
             let (Some(toolbar), Some(frame), Some(main)) = (
                 toolbar_weak.upgrade(),
@@ -297,6 +345,7 @@ pub(crate) fn register_callbacks(
                 state.clone(),
                 recorder,
                 http,
+                textbox,
             ));
             if let Err(error) = spawn_result {
                 set_capture_toolbar_status(&toolbar, format!("Error: {error:?}"));

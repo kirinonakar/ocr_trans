@@ -217,16 +217,20 @@ pub(crate) fn register_callbacks(
                     };
                     let tooltip = ruler_toolbar_tooltip(rect);
                     let clipboard_text = ruler_clipboard_text(rect);
+                    let textbox_weak = textbox_weak.clone();
                     let _ = slint::spawn_local(async move {
                         let result = tokio::task::spawn_blocking(move || {
                             capture::copy_text_to_clipboard(&clipboard_text)?;
-                            Ok::<String, anyhow::Error>(tooltip)
+                            Ok::<(String, String), anyhow::Error>((tooltip, clipboard_text))
                         })
                         .await
                         .context("Ruler clipboard worker stopped")
                         .and_then(|result| result);
                         match result {
-                            Ok(measurement) => {
+                            Ok((measurement, textbox_text)) => {
+                                if let Some(textbox) = textbox_weak.upgrade() {
+                                    textbox.set_text(textbox_text.into());
+                                }
                                 toolbar.set_ruler_tooltip(measurement.clone().into());
                                 toolbar.set_active_tooltip(measurement.into());
                                 set_capture_toolbar_status(
@@ -255,6 +259,7 @@ pub(crate) fn register_callbacks(
                         state,
                         recorder_slot,
                         http,
+                        textbox_weak,
                     )) {
                         log::error!("Failed to start capture action: {error:?}");
                         set_capture_toolbar_status(&toolbar, format!("Error: {error:?}"));
@@ -507,6 +512,7 @@ pub(crate) fn register_callbacks(
     let recorder_slot_window_selected = recorder_slot.clone();
     let http_window_selected = http_client.clone();
     let recording_border_window_selected = recording_border_window.as_weak();
+    let textbox_weak_window_selected = textbox_window.as_weak();
     selection_window.on_window_selected(move |click_x, click_y| {
         let Some(selection) = selection_weak_window_selected.upgrade() else {
             return;
@@ -562,6 +568,7 @@ pub(crate) fn register_callbacks(
         let recorder_slot = recorder_slot_window_selected.clone();
         let http = http_window_selected.clone();
         let recording_border = recording_border_window_selected.clone();
+        let textbox = textbox_weak_window_selected.clone();
         slint::Timer::single_shot(Duration::from_millis(1), move || {
             // Keep a visible window while closing the selector; otherwise capture mode's
             // selection window would be the last registered window and stop the event loop.
@@ -589,6 +596,7 @@ pub(crate) fn register_callbacks(
                     state,
                     recorder_slot,
                     http,
+                    textbox,
                 )) {
                     log::error!("Failed to start window capture action: {error:?}");
                     set_capture_toolbar_status(&toolbar, format!("Error: {error:?}"));
@@ -602,6 +610,7 @@ pub(crate) fn register_callbacks(
     let hotkey_manager_color_picked = hotkey_manager.clone();
     let esc_hotkey_color_picked = esc_hotkey.clone();
     let toolbar_weak_color_picked = capture_toolbar.as_weak();
+    let textbox_weak_color_picked = textbox_window.as_weak();
     selection_window.on_color_picked(move |x, y| {
         let Some(selection) = selection_weak_color_picked.upgrade() else {
             return;
@@ -622,6 +631,7 @@ pub(crate) fn register_callbacks(
         let screen_y = origin_y + (y * scale).round() as i32;
         let selection_weak = selection.as_weak();
         let toolbar_weak = toolbar_weak_color_picked.clone();
+        let textbox_weak = textbox_weak_color_picked.clone();
         let hotkey_manager = hotkey_manager_color_picked.clone();
         slint::Timer::single_shot(Duration::from_millis(1), move || {
             // Show the toolbar before hiding the selector so the capture-mode event loop keeps
@@ -648,13 +658,16 @@ pub(crate) fn register_callbacks(
                     let tooltip = color_toolbar_tooltip(&color);
                     let clipboard_text = color_selection_tooltip(&color);
                     capture::copy_text_to_clipboard(&clipboard_text)?;
-                    Ok::<String, anyhow::Error>(tooltip)
+                    Ok::<(String, String), anyhow::Error>((tooltip, clipboard_text))
                 })
                 .await
                 .context("Color picker worker stopped")
                 .and_then(|result| result);
                 match result {
-                    Ok(color_info) => {
+                    Ok((color_info, textbox_text)) => {
+                        if let Some(textbox) = textbox_weak.upgrade() {
+                            textbox.set_text(textbox_text.into());
+                        }
                         toolbar.set_color_picker_tooltip(color_info.clone().into());
                         toolbar.set_active_tooltip(color_info.clone().into());
                         set_capture_toolbar_status(&toolbar, format!("Copied {color_info}"));
