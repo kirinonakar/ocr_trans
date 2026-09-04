@@ -4,7 +4,9 @@ use crate::capture_workflow::{
 };
 use crate::settings::{save_app_mode, save_capture_folder, save_dark_theme, save_system_prompt};
 use crate::state::AppState;
-use crate::{win_utils, CaptureToolbarWindow, MainWindow, OverlayWindow, TextboxWindow};
+use crate::{
+    win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow, OverlayWindow, TextboxWindow,
+};
 use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,6 +14,7 @@ use std::time::Duration;
 pub(crate) fn register_callbacks(
     main_window: &MainWindow,
     capture_toolbar: &CaptureToolbarWindow,
+    capture_frame_window: &CaptureFrameWindow,
     overlay_window: &OverlayWindow,
     textbox_window: &TextboxWindow,
     state: Arc<Mutex<AppState>>,
@@ -65,6 +68,7 @@ pub(crate) fn register_callbacks(
     // not update Windows' non-client area.
     let main_weak_main_theme = main_window.as_weak();
     let toolbar_weak_main_theme = capture_toolbar.as_weak();
+    let frame_weak_main_theme = capture_frame_window.as_weak();
     main_window.on_theme_toggle_clicked(move || {
         let Some(main) = main_weak_main_theme.upgrade() else {
             return;
@@ -73,6 +77,9 @@ pub(crate) fn register_callbacks(
         main.set_dark_theme(dark_theme);
         if let Some(toolbar) = toolbar_weak_main_theme.upgrade() {
             toolbar.set_dark_theme(dark_theme);
+        }
+        if let Some(frame) = frame_weak_main_theme.upgrade() {
+            frame.set_dark_theme(dark_theme);
         }
         #[cfg(target_os = "windows")]
         {
@@ -154,12 +161,16 @@ pub(crate) fn register_callbacks(
     // windows while the OCR settings window is hidden.
     let main_weak_toolbar_theme = main_window.as_weak();
     let toolbar_weak_toolbar_theme = capture_toolbar.as_weak();
+    let frame_weak_toolbar_theme = capture_frame_window.as_weak();
     capture_toolbar.on_theme_toggle_clicked(move || {
         let Some(toolbar) = toolbar_weak_toolbar_theme.upgrade() else {
             return;
         };
         let dark_theme = !toolbar.get_dark_theme();
         toolbar.set_dark_theme(dark_theme);
+        if let Some(frame) = frame_weak_toolbar_theme.upgrade() {
+            frame.set_dark_theme(dark_theme);
+        }
         if let Some(main) = main_weak_toolbar_theme.upgrade() {
             main.set_dark_theme(dark_theme);
             #[cfg(target_os = "windows")]
@@ -174,6 +185,7 @@ pub(crate) fn register_callbacks(
     // The toolbar's small UI button is the reverse path back to the full OCR settings UI.
     let main_weak_toolbar_ui = main_window.as_weak();
     let toolbar_weak_toolbar_ui = capture_toolbar.as_weak();
+    let frame_weak_toolbar_ui = capture_frame_window.as_weak();
     main_window.set_app_mode(initial_app_mode.into());
 
     capture_toolbar.on_ui_toggle_clicked(move || {
@@ -182,6 +194,7 @@ pub(crate) fn register_callbacks(
         // which can terminate the Winit event loop on Windows.
         let main_weak = main_weak_toolbar_ui.clone();
         let toolbar_weak = toolbar_weak_toolbar_ui.clone();
+        let frame_weak = frame_weak_toolbar_ui.clone();
         slint::Timer::single_shot(Duration::from_millis(1), move || {
             if let Some(toolbar) = toolbar_weak.upgrade() {
                 if toolbar.get_recording() {
@@ -204,6 +217,10 @@ pub(crate) fn register_callbacks(
             save_app_mode("ocr");
             if let Some(toolbar) = toolbar_weak.upgrade() {
                 let _ = toolbar.hide();
+                toolbar.set_frame_mode(false);
+            }
+            if let Some(frame) = frame_weak.upgrade() {
+                let _ = frame.hide();
             }
         });
     });

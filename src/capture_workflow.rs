@@ -1,8 +1,8 @@
 use crate::state::{AppState, SelectionPurpose};
 use crate::text_layout::*;
 use crate::{
-    api, capture, ocr, win_utils, CaptureToolbarWindow, MainWindow, RecordingBorderWindow,
-    SelectionWindow,
+    api, capture, ocr, win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow,
+    RecordingBorderWindow, SelectionWindow,
 };
 use anyhow::{Context, Result};
 use global_hotkey::{hotkey::HotKey, GlobalHotKeyManager};
@@ -43,11 +43,11 @@ fn selection_magnifier_pixels(state: &AppState, x: f32, y: f32) -> Option<image:
         return None;
     }
 
-    let mut pixels = image::RgbaImage::from_pixel(5, 5, image::Rgba([15, 23, 42, 255]));
-    for preview_y in 0..5 {
-        for preview_x in 0..5 {
-            let source_x = center_x + preview_x as i32 - 2;
-            let source_y = center_y + preview_y as i32 - 2;
+    let mut pixels = image::RgbaImage::from_pixel(9, 9, image::Rgba([15, 23, 42, 255]));
+    for preview_y in 0..9 {
+        for preview_x in 0..9 {
+            let source_x = center_x + preview_x as i32 - 4;
+            let source_y = center_y + preview_y as i32 - 4;
             if source_x >= 0
                 && source_y >= 0
                 && source_x < screenshot.width() as i32
@@ -149,7 +149,9 @@ pub(crate) fn sync_capture_toolbar_size(toolbar: &CaptureToolbarWindow) {
         .set_size(slint::LogicalSize::new(CAPTURE_TOOLBAR_WIDTH, height));
 }
 
-pub(crate) const CAPTURE_TOOLBAR_WIDTH: f32 = 570.0;
+pub(crate) const CAPTURE_TOOLBAR_WIDTH: f32 = 603.0;
+pub(crate) const CAPTURE_FRAME_HEADER: f32 = 42.0;
+pub(crate) const CAPTURE_FRAME_BORDER: f32 = 3.0;
 pub(crate) const OCR_WINDOW_WIDTH: f32 = 400.0;
 pub(crate) const OCR_WINDOW_CLOSED_HEIGHT: f32 = 880.0;
 pub(crate) const OCR_WINDOW_STYLE_HEIGHT: f32 = 1000.0;
@@ -224,6 +226,102 @@ pub(crate) fn configure_capture_toolbar_native_window(toolbar: &CaptureToolbarWi
         win_utils::set_exclude_from_capture(hwnd);
         win_utils::disable_window_transitions(hwnd);
     });
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn configure_capture_frame_native_window(frame: &CaptureFrameWindow) {
+    let _ = frame.window().with_winit_window(|winit_window| {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Ok(handle) = winit_window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = windows::Win32::Foundation::HWND(handle.hwnd.get() as _);
+        win_utils::set_layered(hwnd);
+        win_utils::set_tool_window(hwnd, true);
+        win_utils::set_exclude_from_capture(hwnd);
+        win_utils::disable_window_transitions(hwnd);
+    });
+}
+
+pub(crate) fn position_capture_frame(frame: &CaptureFrameWindow) {
+    let (cursor_x, cursor_y) = capture::cursor_position();
+    let monitor = capture::monitor_rect_at_point(cursor_x, cursor_y).ok();
+    let (position, size) = if let Some(monitor) = monitor {
+        let width = (monitor.width * 3 / 5).clamp(480, 960);
+        let content_height = (width * 9 / 16).clamp(270, (monitor.height * 3 / 5).max(270));
+        let height = content_height + CAPTURE_FRAME_HEADER as i32 + CAPTURE_FRAME_BORDER as i32;
+        (
+            slint::PhysicalPosition::new(
+                monitor.x + (monitor.width - width) / 2,
+                monitor.y + ((monitor.height - height) / 2).max(32),
+            ),
+            slint::PhysicalSize::new(width as u32, height as u32),
+        )
+    } else {
+        (
+            slint::PhysicalPosition::new(120, 120),
+            slint::PhysicalSize::new(720, 450),
+        )
+    };
+    frame
+        .window()
+        .set_position(slint::WindowPosition::Physical(position));
+    frame.window().set_size(slint::WindowSize::Physical(size));
+}
+
+pub(crate) fn show_capture_frame(frame: &CaptureFrameWindow, use_default_geometry: bool) -> bool {
+    if use_default_geometry {
+        position_capture_frame(frame);
+    }
+    if frame.show().is_err() {
+        return false;
+    }
+    #[cfg(target_os = "windows")]
+    configure_capture_frame_native_window(frame);
+    if use_default_geometry {
+        // Secondary windows are created lazily; repeat the physical placement after show().
+        position_capture_frame(frame);
+    }
+    true
+}
+
+pub(crate) fn capture_frame_rect(
+    frame: &CaptureFrameWindow,
+) -> anyhow::Result<capture::CaptureRect> {
+    let position = frame.window().position();
+    let size = frame.window().size();
+    let scale = frame.window().scale_factor().max(1.0);
+    capture_frame_rect_from_geometry(
+        position.x,
+        position.y,
+        size.width as i32,
+        size.height as i32,
+        scale,
+    )
+}
+
+fn capture_frame_rect_from_geometry(
+    x: i32,
+    y: i32,
+    frame_width: i32,
+    frame_height: i32,
+    scale: f32,
+) -> anyhow::Result<capture::CaptureRect> {
+    let side = (CAPTURE_FRAME_BORDER * scale).round() as i32;
+    let top = (CAPTURE_FRAME_HEADER * scale).round() as i32;
+    let width = frame_width - side * 2;
+    let height = frame_height - top - side;
+    anyhow::ensure!(width >= 64 && height >= 64, "Capture frame is too small");
+    Ok(capture::CaptureRect {
+        x: x + side,
+        y: y + top,
+        width,
+        height,
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -799,15 +897,16 @@ pub(crate) async fn run_toolbar_action(
                         display_recording_border(border, recording_rect);
                     }
                 }
-                let recorder = match capture::ScreenRecorder::start(rect, path.clone(), 30) {
-                    Ok(recorder) => recorder,
-                    Err(error) => {
-                        if let Some(border) = recording_border_window.as_ref() {
-                            let _ = border.hide();
+                let recorder =
+                    match capture::ScreenRecorder::start(recording_rect, path.clone(), 30) {
+                        Ok(recorder) => recorder,
+                        Err(error) => {
+                            if let Some(border) = recording_border_window.as_ref() {
+                                let _ = border.hide();
+                            }
+                            return Err(error);
                         }
-                        return Err(error);
-                    }
-                };
+                    };
                 {
                     let mut slot = recorder_slot.lock().unwrap();
                     *slot = Some(recorder);
@@ -907,31 +1006,31 @@ pub(crate) async fn run_toolbar_action(
 
 #[cfg(test)]
 mod tests {
-    use super::selection_magnifier_pixels;
+    use super::{capture_frame_rect_from_geometry, selection_magnifier_pixels};
     use crate::state::AppState;
     use image::{Rgba, RgbaImage};
     use std::sync::Arc;
 
     #[test]
-    fn magnifier_contains_five_by_five_pixels_centered_on_cursor() {
-        let source = RgbaImage::from_fn(7, 7, |x, y| Rgba([x as u8, y as u8, 0, 255]));
+    fn magnifier_contains_nine_by_nine_pixels_centered_on_cursor() {
+        let source = RgbaImage::from_fn(11, 11, |x, y| Rgba([x as u8, y as u8, 0, 255]));
         let state = AppState {
             selection_scale: 1.0,
             selection_screenshot: Some(Arc::new(source)),
             ..Default::default()
         };
 
-        let preview = selection_magnifier_pixels(&state, 3.0, 3.0).unwrap();
+        let preview = selection_magnifier_pixels(&state, 5.0, 5.0).unwrap();
 
-        assert_eq!(preview.dimensions(), (5, 5));
+        assert_eq!(preview.dimensions(), (9, 9));
         assert_eq!(*preview.get_pixel(0, 0), Rgba([1, 1, 0, 255]));
-        assert_eq!(*preview.get_pixel(2, 2), Rgba([3, 3, 0, 255]));
         assert_eq!(*preview.get_pixel(4, 4), Rgba([5, 5, 0, 255]));
+        assert_eq!(*preview.get_pixel(8, 8), Rgba([9, 9, 0, 255]));
     }
 
     #[test]
     fn magnifier_keeps_cursor_at_center_near_screen_edge() {
-        let source = RgbaImage::from_fn(3, 3, |x, y| Rgba([x as u8, y as u8, 0, 255]));
+        let source = RgbaImage::from_fn(5, 5, |x, y| Rgba([x as u8, y as u8, 0, 255]));
         let state = AppState {
             selection_scale: 1.0,
             selection_screenshot: Some(Arc::new(source)),
@@ -940,8 +1039,28 @@ mod tests {
 
         let preview = selection_magnifier_pixels(&state, 0.0, 0.0).unwrap();
 
-        assert_eq!(*preview.get_pixel(2, 2), Rgba([0, 0, 0, 255]));
+        assert_eq!(*preview.get_pixel(4, 4), Rgba([0, 0, 0, 255]));
         assert_eq!(*preview.get_pixel(0, 0), Rgba([15, 23, 42, 255]));
-        assert_eq!(*preview.get_pixel(4, 4), Rgba([2, 2, 0, 255]));
+        assert_eq!(*preview.get_pixel(8, 8), Rgba([4, 4, 0, 255]));
+    }
+
+    #[test]
+    fn capture_frame_rect_excludes_header_and_border_at_standard_scale() {
+        let rect = capture_frame_rect_from_geometry(100, 200, 720, 450, 1.0).unwrap();
+
+        assert_eq!(rect.x, 103);
+        assert_eq!(rect.y, 242);
+        assert_eq!(rect.width, 714);
+        assert_eq!(rect.height, 405);
+    }
+
+    #[test]
+    fn capture_frame_rect_uses_physical_offsets_at_high_dpi() {
+        let rect = capture_frame_rect_from_geometry(200, 300, 1080, 675, 1.5).unwrap();
+
+        assert_eq!(rect.x, 205);
+        assert_eq!(rect.y, 363);
+        assert_eq!(rect.width, 1070);
+        assert_eq!(rect.height, 607);
     }
 }

@@ -71,6 +71,20 @@ component ToolbarButton inherits Rectangle {
     }
 }
 
+component FrameResizeHandle inherits TouchArea {
+    in property <string> direction;
+    callback resize_requested(string);
+
+    // A native resize loop consumes the mouse release, so cancel Slint's pointer grab as soon
+    // as the resize begins. This mirrors the toolbar's native drag handle behavior.
+    enabled: !self.pressed;
+    pointer-event(event) => {
+        if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+            resize_requested(direction);
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "OCR Translator";
     icon: @image-url("../app.ico");
@@ -545,11 +559,12 @@ export component CaptureToolbarWindow inherits Window {
     no-frame: true;
     background: transparent;
     default-font-family: "Yu Gothic UI";
-    preferred-width: 570px;
+    preferred-width: 603px;
     preferred-height: recording ? 48px : ((status_text == "" && active_tooltip == "") ? 48px : 68px);
-    min-width: 570px;
+    min-width: 603px;
 
     in-out property <bool> record_mode: false;
+    in-out property <bool> frame_mode: false;
     in-out property <bool> recording: false;
     in-out property <bool> recording_paused: false;
     in-out property <bool> dark_theme: false;
@@ -567,6 +582,7 @@ export component CaptureToolbarWindow inherits Window {
     callback fullscreen_clicked();
     callback window_clicked();
     callback scroll_clicked();
+    callback frame_clicked();
     callback region_clicked();
     callback ocr_clicked();
     callback translate_clicked();
@@ -692,7 +708,7 @@ export component CaptureToolbarWindow inherits Window {
             }
 
             Rectangle {
-                width: 134px;
+                width: 167px;
                 height: 34px;
                 background: dark_theme ? #37373fff : #ffffffaa;
                 border-radius: 7px;
@@ -733,6 +749,17 @@ export component CaptureToolbarWindow inherits Window {
                             tooltip_visibility_changed(value);
                         }
                         pressed => { scroll_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("icons/frame.svg");
+                        dark_theme: dark_theme;
+                        active: frame_mode;
+                        tooltip: frame_mode ? "Close capture frame" : "Open capture frame";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { frame_clicked(); }
                     }
                     ToolbarButton {
                         icon: @image-url("icons/region.svg");
@@ -945,6 +972,149 @@ export component CaptureToolbarWindow inherits Window {
             vertical-alignment: center;
             overflow: elide;
         }
+    }
+}
+
+export component CaptureFrameWindow inherits Window {
+    title: "Capture frame";
+    always-on-top: true;
+    no-frame: true;
+    background: transparent;
+    default-font-family: "Yu Gothic UI";
+    preferred-width: 720px;
+    preferred-height: 450px;
+    min-width: 300px;
+    min-height: 190px;
+
+    in-out property <bool> dark_theme: false;
+
+    callback drag_requested();
+    callback resize_requested(string);
+    callback capture_clicked();
+    callback record_clicked();
+    callback close_clicked();
+
+    // The opening starts at y=42px and 3px inside the remaining edges. Rust uses the same
+    // measurements when translating this window into the physical screen capture rectangle.
+    Rectangle {
+        x: 0px;
+        y: 39px;
+        width: 100%;
+        height: parent.height - 39px;
+        background: transparent;
+        border-width: 3px;
+        border-color: dark_theme ? #45b8ed : #2563eb;
+    }
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 42px;
+        background: dark_theme ? #2b2b31f5 : #f8fafcf5;
+        border-radius: 7px;
+        border-width: 1px;
+        border-color: dark_theme ? #52525b : #cbd5e1;
+        drop-shadow-color: dark_theme ? #00000080 : #00000035;
+        drop-shadow-blur: 10px;
+        drop-shadow-offset-y: 3px;
+
+        HorizontalLayout {
+            padding-left: 7px;
+            padding-right: 7px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+            spacing: 6px;
+
+            ToolbarButton {
+                icon: @image-url("icons/drag.svg");
+                dark_theme: dark_theme;
+                width: 28px;
+                height: 34px;
+                tooltip: "Move frame";
+                press_on_down: true;
+                pressed => { drag_requested(); }
+            }
+
+            Text {
+                text: "FRAME";
+                color: dark_theme ? #cbd5e1 : #475569;
+                font-size: 11px;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            ToolbarButton {
+                icon: @image-url("icons/capture.svg");
+                label: "Capture";
+                dark_theme: dark_theme;
+                width: 78px;
+                height: 34px;
+                pressed => { capture_clicked(); }
+            }
+
+            ToolbarButton {
+                icon: @image-url("icons/record.svg");
+                label: "Record";
+                dark_theme: dark_theme;
+                width: 74px;
+                height: 34px;
+                pressed => { record_clicked(); }
+            }
+
+            ToolbarButton {
+                icon: @image-url("icons/close.svg");
+                dark_theme: dark_theme;
+                width: 30px;
+                height: 34px;
+                icon_size: 15px;
+                pressed => { close_clicked(); }
+            }
+        }
+    }
+
+    // Generous invisible hit targets make every edge and corner easy to resize while keeping
+    // the view through the frame completely clear.
+    FrameResizeHandle {
+        x: 0px; y: 0px; width: 10px; height: 10px; z: 30;
+        direction: "north-west";
+        resize_requested(direction) => { root.resize_requested(direction); }
+    }
+    FrameResizeHandle {
+        x: parent.width - 10px; y: 0px; width: 10px; height: 10px; z: 30;
+        direction: "north-east";
+        resize_requested(direction) => { root.resize_requested(direction); }
+    }
+    FrameResizeHandle {
+        x: 0px; y: parent.height - 10px; width: 10px; height: 10px; z: 30;
+        direction: "south-west";
+        resize_requested(direction) => { root.resize_requested(direction); }
+    }
+    FrameResizeHandle {
+        x: parent.width - 10px; y: parent.height - 10px; width: 10px; height: 10px; z: 30;
+        direction: "south-east";
+        resize_requested(direction) => { root.resize_requested(direction); }
+    }
+    FrameResizeHandle {
+        x: 10px; y: 0px; width: parent.width - 20px; height: 6px; z: 29;
+        direction: "north";
+        resize_requested(direction) => { root.resize_requested(direction); }
+    }
+    FrameResizeHandle {
+        x: 10px; y: parent.height - 6px; width: parent.width - 20px; height: 6px; z: 29;
+        direction: "south";
+        resize_requested(direction) => { root.resize_requested(direction); }
+    }
+    FrameResizeHandle {
+        x: 0px; y: 10px; width: 6px; height: parent.height - 20px; z: 29;
+        direction: "west";
+        resize_requested(direction) => { root.resize_requested(direction); }
+    }
+    FrameResizeHandle {
+        x: parent.width - 6px; y: 10px; width: 6px; height: parent.height - 20px; z: 29;
+        direction: "east";
+        resize_requested(direction) => { root.resize_requested(direction); }
     }
 }
 
@@ -1327,12 +1497,12 @@ export component SelectionWindow inherits Window {
         }
     }
 
-    // A pixel-accurate 5x5 neighborhood for placing region corners precisely.
+    // A pixel-accurate 9x9 neighborhood for placing region corners precisely.
     if (!window_mode && !color_picker_mode && !ruler_mode && magnifier_visible) : Rectangle {
-        x: selection_cursor_x + 18px + 112px > parent.width ? selection_cursor_x - 130px : selection_cursor_x + 18px;
-        y: selection_cursor_y + 18px + 112px > parent.height ? selection_cursor_y - 130px : selection_cursor_y + 18px;
-        width: 112px;
-        height: 112px;
+        x: selection_cursor_x + 18px + 120px > parent.width ? selection_cursor_x - 138px : selection_cursor_x + 18px;
+        y: selection_cursor_y + 18px + 120px > parent.height ? selection_cursor_y - 138px : selection_cursor_y + 18px;
+        width: 120px;
+        height: 120px;
         z: 20;
         background: #020617e8;
         border-radius: 6px;
@@ -1345,27 +1515,35 @@ export component SelectionWindow inherits Window {
         Image {
             x: 6px;
             y: 6px;
-            width: 100px;
-            height: 100px;
+            width: 108px;
+            height: 108px;
             source: selection_magnifier;
             image-fit: fill;
             image-rendering: pixelated;
         }
 
-        // Grid lines separate the 25 source pixels; the outlined center is the cursor pixel.
-        Rectangle { x: 26px; y: 6px; width: 1px; height: 100px; background: #ffffff55; }
-        Rectangle { x: 46px; y: 6px; width: 1px; height: 100px; background: #ffffff55; }
-        Rectangle { x: 66px; y: 6px; width: 1px; height: 100px; background: #ffffff55; }
-        Rectangle { x: 86px; y: 6px; width: 1px; height: 100px; background: #ffffff55; }
-        Rectangle { x: 6px; y: 26px; width: 100px; height: 1px; background: #ffffff55; }
-        Rectangle { x: 6px; y: 46px; width: 100px; height: 1px; background: #ffffff55; }
-        Rectangle { x: 6px; y: 66px; width: 100px; height: 1px; background: #ffffff55; }
-        Rectangle { x: 6px; y: 86px; width: 100px; height: 1px; background: #ffffff55; }
+        // Grid lines separate the 81 source pixels; the outlined center is the cursor pixel.
+        Rectangle { x: 18px; y: 6px; width: 1px; height: 108px; background: #ffffff55; }
+        Rectangle { x: 30px; y: 6px; width: 1px; height: 108px; background: #ffffff55; }
+        Rectangle { x: 42px; y: 6px; width: 1px; height: 108px; background: #ffffff55; }
+        Rectangle { x: 54px; y: 6px; width: 1px; height: 108px; background: #ffffff55; }
+        Rectangle { x: 66px; y: 6px; width: 1px; height: 108px; background: #ffffff55; }
+        Rectangle { x: 78px; y: 6px; width: 1px; height: 108px; background: #ffffff55; }
+        Rectangle { x: 90px; y: 6px; width: 1px; height: 108px; background: #ffffff55; }
+        Rectangle { x: 102px; y: 6px; width: 1px; height: 108px; background: #ffffff55; }
+        Rectangle { x: 6px; y: 18px; width: 108px; height: 1px; background: #ffffff55; }
+        Rectangle { x: 6px; y: 30px; width: 108px; height: 1px; background: #ffffff55; }
+        Rectangle { x: 6px; y: 42px; width: 108px; height: 1px; background: #ffffff55; }
+        Rectangle { x: 6px; y: 54px; width: 108px; height: 1px; background: #ffffff55; }
+        Rectangle { x: 6px; y: 66px; width: 108px; height: 1px; background: #ffffff55; }
+        Rectangle { x: 6px; y: 78px; width: 108px; height: 1px; background: #ffffff55; }
+        Rectangle { x: 6px; y: 90px; width: 108px; height: 1px; background: #ffffff55; }
+        Rectangle { x: 6px; y: 102px; width: 108px; height: 1px; background: #ffffff55; }
         Rectangle {
-            x: 46px;
-            y: 46px;
-            width: 20px;
-            height: 20px;
+            x: 54px;
+            y: 54px;
+            width: 12px;
+            height: 12px;
             background: transparent;
             border-width: 2px;
             border-color: #facc15;

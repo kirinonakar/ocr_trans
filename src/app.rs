@@ -1,6 +1,6 @@
 use crate::{
-    capture, win_utils, CaptureToolbarWindow, MainWindow, OverlayWindow, RecordingBorderWindow,
-    SelectionWindow, TextboxWindow,
+    capture, win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow, OverlayWindow,
+    RecordingBorderWindow, SelectionWindow, TextboxWindow,
 };
 
 use anyhow::Result;
@@ -26,6 +26,7 @@ pub(crate) async fn run() -> Result<()> {
     let selection_window = SelectionWindow::new()?;
     let textbox_window = TextboxWindow::new()?;
     let capture_toolbar = CaptureToolbarWindow::new()?;
+    let capture_frame_window = CaptureFrameWindow::new()?;
     let recording_border_window = RecordingBorderWindow::new()?;
 
     let http_client = reqwest::Client::builder()
@@ -42,6 +43,7 @@ pub(crate) async fn run() -> Result<()> {
     let initial_capture_folder = startup.capture_folder;
     let initial_dark_theme = startup.dark_theme;
     let initial_app_mode = startup.app_mode;
+    capture_frame_window.set_dark_theme(initial_dark_theme);
 
     let state = Arc::new(Mutex::new(AppState {
         api_endpoint: main_window.get_api_endpoint().to_string(),
@@ -111,6 +113,7 @@ pub(crate) async fn run() -> Result<()> {
     let selection_initialized = crate::window_mode::register_callbacks(
         &main_window,
         &capture_toolbar,
+        &capture_frame_window,
         &overlay_window,
         &textbox_window,
         state.clone(),
@@ -125,6 +128,7 @@ pub(crate) async fn run() -> Result<()> {
         &capture_toolbar,
         &main_window,
         &selection_window,
+        &capture_frame_window,
         &recording_border_window,
         state.clone(),
         recorder_slot.clone(),

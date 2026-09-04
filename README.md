@@ -28,6 +28,7 @@ Capture toolbar (dark theme)
   - **Win + Alt + A**: Trigger area selection.
   - **Win + Alt + P**: Start or Stop the translation process.
 - **Capture Mode**: Compact always-on-top toolbar (`Capture` ↔ `OCR` toggle).
+  - Frame mode opens a movable, resizable transparent capture frame with its own Capture and Record controls.
   - Fullscreen / Window / Scrolling (Windows only) / Region (`Esc` to cancel).
   - One-shot OCR, OCR+Translate, VLM, color picker, ruler.
   - PNG/MP4 saved as `YYYY-MM-DD_001...` + clipboard copy; recording needs `ffmpeg`.

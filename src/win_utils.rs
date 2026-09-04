@@ -6,7 +6,8 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongW, SendMessageW, SetLayeredWindowAttributes, SetWindowLongW, GWL_EXSTYLE,
-    HTCAPTION, LWA_ALPHA, WM_NCLBUTTONDOWN, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+    HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT,
+    HTTOPRIGHT, LWA_ALPHA, WM_NCLBUTTONDOWN, WS_EX_LAYERED, WS_EX_TRANSPARENT,
 };
 
 /// Sets the window to be click-through by applying WS_EX_TRANSPARENT and WS_EX_LAYERED styles.
@@ -160,6 +161,25 @@ pub fn begin_window_drag(hwnd: HWND) {
             WPARAM(HTCAPTION as usize),
             LPARAM(0),
         );
+    }
+}
+
+/// Starts native resizing for one edge or corner of a frameless window.
+pub fn begin_window_resize(hwnd: HWND, direction: &str) {
+    let hit_test = match direction {
+        "north" => HTTOP,
+        "north-east" => HTTOPRIGHT,
+        "east" => HTRIGHT,
+        "south-east" => HTBOTTOMRIGHT,
+        "south" => HTBOTTOM,
+        "south-west" => HTBOTTOMLEFT,
+        "west" => HTLEFT,
+        "north-west" => HTTOPLEFT,
+        _ => return,
+    };
+    unsafe {
+        let _ = ReleaseCapture();
+        let _ = SendMessageW(hwnd, WM_NCLBUTTONDOWN, WPARAM(hit_test as usize), LPARAM(0));
     }
 }
 

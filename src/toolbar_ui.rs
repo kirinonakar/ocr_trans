@@ -1,7 +1,8 @@
 use crate::capture_workflow::*;
 use crate::state::{AppState, SelectionPurpose};
 use crate::{
-    capture, win_utils, CaptureToolbarWindow, MainWindow, RecordingBorderWindow, SelectionWindow,
+    capture, win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow,
+    RecordingBorderWindow, SelectionWindow,
 };
 use global_hotkey::{hotkey::HotKey, GlobalHotKeyManager};
 use i_slint_backend_winit::WinitWindowAccessor;
@@ -13,6 +14,7 @@ pub(crate) fn register_callbacks(
     capture_toolbar: &CaptureToolbarWindow,
     main_window: &MainWindow,
     selection_window: &SelectionWindow,
+    capture_frame_window: &CaptureFrameWindow,
     recording_border_window: &RecordingBorderWindow,
     state: Arc<Mutex<AppState>>,
     recorder_slot: Arc<Mutex<Option<capture::ScreenRecorder>>>,
@@ -21,6 +23,8 @@ pub(crate) fn register_callbacks(
     esc_hotkey: HotKey,
     selection_initialized: Arc<Mutex<bool>>,
 ) {
+    let frame_initialized = Arc::new(Mutex::new(false));
+
     // Tooltips occupy the compact status row. Resize only after the hover event has returned;
     // changing a native window while Winit is dispatching pointer input can crash on Windows.
     let toolbar_weak_tooltip = capture_toolbar.as_weak();
@@ -126,6 +130,236 @@ pub(crate) fn register_callbacks(
                 esc_hotkey_scroll,
             );
         }
+    });
+
+    let toolbar_weak_frame_toggle = capture_toolbar.as_weak();
+    let frame_weak_toggle = capture_frame_window.as_weak();
+    let frame_initialized_toggle = frame_initialized.clone();
+    capture_toolbar.on_frame_clicked(move || {
+        let Some(toolbar) = toolbar_weak_frame_toggle.upgrade() else {
+            return;
+        };
+        if toolbar.get_recording() {
+            return;
+        }
+        let enabled = !toolbar.get_frame_mode();
+        toolbar.set_frame_mode(enabled);
+        toolbar.set_status_text(String::new().into());
+        let toolbar_weak = toolbar.as_weak();
+        let frame_weak = frame_weak_toggle.clone();
+        let initialized = frame_initialized_toggle.clone();
+        // Showing or hiding a native window from the toolbar's pointer callback is unsafe on
+        // some Winit/Windows combinations, so make the change on the next event-loop turn.
+        slint::Timer::single_shot(Duration::from_millis(1), move || {
+            let (Some(toolbar), Some(frame)) = (toolbar_weak.upgrade(), frame_weak.upgrade())
+            else {
+                return;
+            };
+            if enabled {
+                frame.set_dark_theme(toolbar.get_dark_theme());
+                let use_default_geometry = {
+                    let mut initialized = initialized.lock().unwrap();
+                    let first_show = !*initialized;
+                    *initialized = true;
+                    first_show
+                };
+                if !show_capture_frame(&frame, use_default_geometry) {
+                    toolbar.set_frame_mode(false);
+                    set_capture_toolbar_status(
+                        &toolbar,
+                        "Unable to open capture frame".to_string(),
+                    );
+                }
+            } else {
+                let _ = frame.hide();
+            }
+        });
+    });
+
+    let frame_weak_drag = capture_frame_window.as_weak();
+    capture_frame_window.on_drag_requested(move || {
+        let frame_weak = frame_weak_drag.clone();
+        slint::Timer::single_shot(Duration::from_millis(1), move || {
+            let Some(frame) = frame_weak.upgrade() else {
+                return;
+            };
+            #[cfg(target_os = "windows")]
+            frame.window().with_winit_window(|winit_window| {
+                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(handle) = winit_window.window_handle() {
+                    if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+                        win_utils::begin_window_drag(windows::Win32::Foundation::HWND(
+                            handle.hwnd.get() as _,
+                        ));
+                    }
+                }
+            });
+        });
+    });
+
+    let frame_weak_resize = capture_frame_window.as_weak();
+    capture_frame_window.on_resize_requested(move |direction| {
+        let frame_weak = frame_weak_resize.clone();
+        let direction = direction.to_string();
+        slint::Timer::single_shot(Duration::from_millis(1), move || {
+            let Some(frame) = frame_weak.upgrade() else {
+                return;
+            };
+            #[cfg(target_os = "windows")]
+            frame.window().with_winit_window(|winit_window| {
+                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(handle) = winit_window.window_handle() {
+                    if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+                        win_utils::begin_window_resize(
+                            windows::Win32::Foundation::HWND(handle.hwnd.get() as _),
+                            &direction,
+                        );
+                    }
+                }
+            });
+        });
+    });
+
+    let toolbar_weak_frame_capture = capture_toolbar.as_weak();
+    let frame_weak_capture = capture_frame_window.as_weak();
+    let main_weak_frame_capture = main_window.as_weak();
+    let state_frame_capture = state.clone();
+    let recorder_frame_capture = recorder_slot.clone();
+    let http_frame_capture = http_client.clone();
+    let recording_border_frame_capture = recording_border_window.as_weak();
+    capture_frame_window.on_capture_clicked(move || {
+        let toolbar_weak = toolbar_weak_frame_capture.clone();
+        let frame_weak = frame_weak_capture.clone();
+        let main_weak = main_weak_frame_capture.clone();
+        let state = state_frame_capture.clone();
+        let recorder = recorder_frame_capture.clone();
+        let http = http_frame_capture.clone();
+        let recording_border = recording_border_frame_capture.clone();
+        slint::Timer::single_shot(Duration::from_millis(16), move || {
+            let (Some(toolbar), Some(frame), Some(main)) = (
+                toolbar_weak.upgrade(),
+                frame_weak.upgrade(),
+                main_weak.upgrade(),
+            ) else {
+                return;
+            };
+            if toolbar.get_recording() {
+                return;
+            }
+            #[cfg(target_os = "windows")]
+            configure_capture_frame_native_window(&frame);
+            let rect = match capture_frame_rect(&frame) {
+                Ok(rect) => rect,
+                Err(error) => {
+                    set_capture_toolbar_status(&toolbar, format!("Error: {error}"));
+                    return;
+                }
+            };
+            let spawn_result = slint::spawn_local(run_toolbar_action(
+                SelectionPurpose::Capture,
+                rect,
+                None,
+                None,
+                false,
+                recording_border,
+                main.as_weak(),
+                toolbar.as_weak(),
+                state,
+                recorder,
+                http,
+            ));
+            if let Err(error) = spawn_result {
+                set_capture_toolbar_status(&toolbar, format!("Error: {error:?}"));
+            }
+        });
+    });
+
+    let toolbar_weak_frame_record = capture_toolbar.as_weak();
+    let frame_weak_record = capture_frame_window.as_weak();
+    let main_weak_frame_record = main_window.as_weak();
+    let state_frame_record = state.clone();
+    let recorder_frame_record = recorder_slot.clone();
+    let http_frame_record = http_client.clone();
+    let recording_border_frame_record = recording_border_window.as_weak();
+    capture_frame_window.on_record_clicked(move || {
+        let toolbar_weak = toolbar_weak_frame_record.clone();
+        let frame_weak = frame_weak_record.clone();
+        let main_weak = main_weak_frame_record.clone();
+        let state = state_frame_record.clone();
+        let recorder = recorder_frame_record.clone();
+        let http = http_frame_record.clone();
+        let recording_border = recording_border_frame_record.clone();
+        slint::Timer::single_shot(Duration::from_millis(16), move || {
+            let (Some(toolbar), Some(frame), Some(main)) = (
+                toolbar_weak.upgrade(),
+                frame_weak.upgrade(),
+                main_weak.upgrade(),
+            ) else {
+                return;
+            };
+            if toolbar.get_recording() {
+                return;
+            }
+            let rect = match capture_frame_rect(&frame) {
+                Ok(rect) => rect,
+                Err(error) => {
+                    set_capture_toolbar_status(&toolbar, format!("Error: {error}"));
+                    return;
+                }
+            };
+            let _ = frame.hide();
+            let spawn_result = slint::spawn_local(run_toolbar_action(
+                SelectionPurpose::Record,
+                rect,
+                None,
+                None,
+                true,
+                recording_border,
+                main.as_weak(),
+                toolbar.as_weak(),
+                state.clone(),
+                recorder,
+                http,
+            ));
+            if let Err(error) = spawn_result {
+                set_capture_toolbar_status(&toolbar, format!("Error: {error:?}"));
+                if toolbar.get_frame_mode() {
+                    let _ = frame.show();
+                    #[cfg(target_os = "windows")]
+                    configure_capture_frame_native_window(&frame);
+                }
+                return;
+            }
+
+            // If FFmpeg fails to start, restore the still-active frame automatically.
+            let toolbar_weak = toolbar.as_weak();
+            let frame_weak = frame.as_weak();
+            slint::Timer::single_shot(Duration::from_millis(750), move || {
+                let (Some(toolbar), Some(frame)) = (toolbar_weak.upgrade(), frame_weak.upgrade())
+                else {
+                    return;
+                };
+                if !toolbar.get_recording() && toolbar.get_frame_mode() {
+                    let _ = frame.show();
+                    #[cfg(target_os = "windows")]
+                    configure_capture_frame_native_window(&frame);
+                }
+            });
+        });
+    });
+
+    let toolbar_weak_frame_close = capture_toolbar.as_weak();
+    let frame_weak_close = capture_frame_window.as_weak();
+    capture_frame_window.on_close_clicked(move || {
+        if let Some(toolbar) = toolbar_weak_frame_close.upgrade() {
+            toolbar.set_frame_mode(false);
+        }
+        let frame_weak = frame_weak_close.clone();
+        slint::Timer::single_shot(Duration::from_millis(1), move || {
+            if let Some(frame) = frame_weak.upgrade() {
+                let _ = frame.hide();
+            }
+        });
     });
 
     let toolbar_weak_region = capture_toolbar.as_weak();
@@ -336,6 +570,7 @@ pub(crate) fn register_callbacks(
     let state_stop_recording = state.clone();
     let recorder_stop_recording = recorder_slot.clone();
     let recording_border_stop_recording = recording_border_window.as_weak();
+    let capture_frame_stop_recording = capture_frame_window.as_weak();
     capture_toolbar.on_stop_recording_clicked(move || {
         let Some(toolbar) = toolbar_weak_stop_recording.upgrade() else {
             return;
@@ -374,6 +609,16 @@ pub(crate) fn register_callbacks(
             Err(error) => set_capture_toolbar_status(&toolbar, format!("Error: {error}")),
         }
         let _ = toolbar.show();
+        if toolbar.get_frame_mode() {
+            let frame_weak = capture_frame_stop_recording.clone();
+            slint::Timer::single_shot(Duration::from_millis(1), move || {
+                if let Some(frame) = frame_weak.upgrade() {
+                    let _ = frame.show();
+                    #[cfg(target_os = "windows")]
+                    configure_capture_frame_native_window(&frame);
+                }
+            });
+        }
     });
 
     let recorder_slot_toolbar_close = recorder_slot.clone();
