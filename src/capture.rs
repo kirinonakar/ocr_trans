@@ -1039,7 +1039,7 @@ fn probe_wasapi_loopback_format() -> Result<WasapiAudioFormat> {
 #[cfg(target_os = "windows")]
 fn probe_wasapi_loopback_format_on_mta() -> Result<WasapiAudioFormat> {
     use windows::Win32::Media::Audio::{
-        eConsole, eRender, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
+        eMultimedia, eRender, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_MULTITHREADED,
@@ -1056,7 +1056,7 @@ fn probe_wasapi_loopback_format_on_mta() -> Result<WasapiAudioFormat> {
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
         }
         .context("Failed to create the Windows audio device enumerator")?;
-        let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
+        let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) }
             .context("Failed to find the default Windows playback device")?;
         let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None) }
             .context("Failed to activate the default Windows playback device")?;
@@ -1236,7 +1236,7 @@ fn capture_wasapi_loopback_on_mta(
     stop: &AtomicBool,
 ) -> Result<()> {
     use windows::Win32::Media::Audio::{
-        eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
+        eMultimedia, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
         MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY,
         AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR,
         AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
@@ -1260,7 +1260,7 @@ fn capture_wasapi_loopback_on_mta(
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
         }
         .context("Failed to create the Windows audio device enumerator")?;
-        let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
+        let device = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) }
             .context("Failed to open the default Windows playback device")?;
         let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None) }
             .context("Failed to activate Windows audio loopback")?;
@@ -1309,6 +1309,7 @@ fn capture_wasapi_loopback_on_mta(
             let silence_chunk_frames = (expected_format.sample_rate as u64 / 100).max(1);
             let mut written_frames = 0u64;
             let mut device_to_output_offset: Option<i128> = None;
+            let mut last_device_packet_at: Option<Instant> = None;
             while !stop.load(Ordering::Relaxed) {
                 let packet_frames = match unsafe { capture_client.GetNextPacketSize() } {
                     Ok(packet_frames) => {
@@ -1332,10 +1333,18 @@ fn capture_wasapi_loopback_on_mta(
                     }
                 };
                 if packet_frames == 0 {
+                    if last_device_packet_at
+                        .is_some_and(|received| received.elapsed() < Duration::from_millis(100))
+                    {
+                        // Device packets can arrive less frequently than their contained frame
+                        // duration. Never insert wall-clock silence between active packets.
+                        thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
                     // Keep a continuous audio track when Windows suppresses loopback packets
-                    // during silence, but stay 20 ms behind the device clock. If a real packet
-                    // arrives for that interval, its device position below causes the overlap to
-                    // be skipped instead of appending duplicate samples (the old noise source).
+                    // for an extended silent period, but stay 20 ms behind the wall clock. If a
+                    // real packet resumes for that interval, device-position alignment below
+                    // skips the overlap rather than appending duplicate samples.
                     let elapsed_frames = (capture_started.elapsed().as_secs_f64()
                         * expected_format.sample_rate as f64)
                         as u64;
@@ -1383,6 +1392,7 @@ fn capture_wasapi_loopback_on_mta(
                     thread::sleep(Duration::from_millis(2));
                     continue;
                 }
+                last_device_packet_at = Some(Instant::now());
 
                 let byte_len = frames as usize * expected_format.block_align;
                 let is_silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0;
@@ -1466,6 +1476,7 @@ fn capture_wasapi_loopback_on_mta(
 #[cfg(target_os = "windows")]
 fn prepare_wasapi_input() -> Result<(WasapiAudioFormat, TcpListener, String)> {
     let format = probe_wasapi_loopback_format()?;
+    log::info!("Windows playback loopback format: {format:?}");
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .context("Failed to create the Windows audio loopback stream")?;
     let url = format!(

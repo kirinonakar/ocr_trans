@@ -651,6 +651,7 @@ enum SelectionPurpose {
     OcrTranslate,
     Vlm,
     ColorPicker,
+    Ruler,
 }
 
 fn clean_text(text: &str) -> String {
@@ -723,7 +724,8 @@ fn is_japanese_spacing_char(character: char) -> bool {
 
 #[cfg(test)]
 mod text_tests {
-    use super::clean_text;
+    use super::{clean_text, ruler_clipboard_text, ruler_selection_lines, ruler_toolbar_tooltip};
+    use crate::capture::CaptureRect;
 
     #[test]
     fn removes_spaces_inserted_between_japanese_characters() {
@@ -738,6 +740,32 @@ mod text_tests {
         assert_eq!(
             clean_text("日 本 AI  tool\r\n次 の 行"),
             "日本 AI  tool\n次の行"
+        );
+    }
+
+    #[test]
+    fn formats_all_ruler_corners_and_dimensions() {
+        let rect = CaptureRect {
+            x: -120,
+            y: 45,
+            width: 320,
+            height: 180,
+        };
+
+        assert_eq!(
+            ruler_toolbar_tooltip(rect),
+            "TL (-120,45)  TR (200,45)  BR (200,225)  BL (-120,225)  |  W 320  H 180"
+        );
+        assert_eq!(
+            ruler_selection_lines(rect),
+            (
+                "TL (-120,45)  TR (200,45)".to_string(),
+                "BL (-120,225)  BR (200,225)  |  W 320  H 180".to_string(),
+            )
+        );
+        assert_eq!(
+            ruler_clipboard_text(rect),
+            "Top-left: (-120, 45)\nTop-right: (200, 45)\nBottom-right: (200, 225)\nBottom-left: (-120, 225)\nWidth: 320\nHeight: 180"
         );
     }
 }
@@ -860,6 +888,65 @@ fn color_preview(color: &image::Rgba<u8>) -> slint::Color {
     slint::Color::from_rgb_u8(color[0], color[1], color[2])
 }
 
+fn ruler_corners(rect: capture::CaptureRect) -> ((i32, i32), (i32, i32), (i32, i32), (i32, i32)) {
+    let right = rect.x + rect.width;
+    let bottom = rect.y + rect.height;
+    (
+        (rect.x, rect.y),
+        (right, rect.y),
+        (right, bottom),
+        (rect.x, bottom),
+    )
+}
+
+fn ruler_toolbar_tooltip(rect: capture::CaptureRect) -> String {
+    let (top_left, top_right, bottom_right, bottom_left) = ruler_corners(rect);
+    format!(
+        "TL ({},{})  TR ({},{})  BR ({},{})  BL ({},{})  |  W {}  H {}",
+        top_left.0,
+        top_left.1,
+        top_right.0,
+        top_right.1,
+        bottom_right.0,
+        bottom_right.1,
+        bottom_left.0,
+        bottom_left.1,
+        rect.width,
+        rect.height,
+    )
+}
+
+fn ruler_selection_lines(rect: capture::CaptureRect) -> (String, String) {
+    let (top_left, top_right, bottom_right, bottom_left) = ruler_corners(rect);
+    (
+        format!(
+            "TL ({},{})  TR ({},{})",
+            top_left.0, top_left.1, top_right.0, top_right.1
+        ),
+        format!(
+            "BL ({},{})  BR ({},{})  |  W {}  H {}",
+            bottom_left.0, bottom_left.1, bottom_right.0, bottom_right.1, rect.width, rect.height,
+        ),
+    )
+}
+
+fn ruler_clipboard_text(rect: capture::CaptureRect) -> String {
+    let (top_left, top_right, bottom_right, bottom_left) = ruler_corners(rect);
+    format!(
+        "Top-left: ({}, {})\nTop-right: ({}, {})\nBottom-right: ({}, {})\nBottom-left: ({}, {})\nWidth: {}\nHeight: {}",
+        top_left.0,
+        top_left.1,
+        top_right.0,
+        top_right.1,
+        bottom_right.0,
+        bottom_right.1,
+        bottom_left.0,
+        bottom_left.1,
+        rect.width,
+        rect.height,
+    )
+}
+
 fn selection_pixel_at(state: &AppState, x: f32, y: f32) -> Option<image::Rgba<u8>> {
     if state.pending_selection != Some(SelectionPurpose::ColorPicker) {
         return None;
@@ -958,7 +1045,7 @@ fn sync_capture_toolbar_size(toolbar: &CaptureToolbarWindow) {
         .set_size(slint::LogicalSize::new(CAPTURE_TOOLBAR_WIDTH, height));
 }
 
-const CAPTURE_TOOLBAR_WIDTH: f32 = 533.0;
+const CAPTURE_TOOLBAR_WIDTH: f32 = 570.0;
 const OCR_WINDOW_WIDTH: f32 = 400.0;
 const OCR_WINDOW_CLOSED_HEIGHT: f32 = 880.0;
 const OCR_WINDOW_STYLE_HEIGHT: f32 = 1000.0;
@@ -1169,6 +1256,7 @@ fn prepare_selection_window(
     let _ = selection.hide();
     selection.set_window_mode(window_mode);
     selection.set_color_picker_mode(color_picker_mode);
+    selection.set_ruler_mode(purpose == SelectionPurpose::Ruler);
     selection.invoke_reset();
 
     let (cursor_x, cursor_y) = capture::cursor_position();
@@ -1685,7 +1773,9 @@ async fn run_toolbar_action(
                     ))
                 }
             }
-            SelectionPurpose::ContinuousOcr | SelectionPurpose::ColorPicker => {
+            SelectionPurpose::ContinuousOcr
+            | SelectionPurpose::ColorPicker
+            | SelectionPurpose::Ruler => {
                 anyhow::bail!("This action requires a different selection flow")
             }
         }
@@ -2577,6 +2667,28 @@ async fn main() -> Result<()> {
                 &selection_initialized_color,
                 &hotkey_manager_color,
                 esc_hotkey_color,
+            );
+        }
+    });
+
+    let toolbar_weak_ruler = capture_toolbar.as_weak();
+    let selection_weak_ruler = selection_window.as_weak();
+    let state_ruler = state.clone();
+    let selection_initialized_ruler = selection_initialized.clone();
+    let hotkey_manager_ruler = hotkey_manager.clone();
+    let esc_hotkey_ruler = esc_hotkey.clone();
+    capture_toolbar.on_ruler_clicked(move || {
+        if let Some(toolbar) = toolbar_weak_ruler.upgrade() {
+            begin_toolbar_selection(
+                &toolbar,
+                &selection_weak_ruler,
+                &state_ruler,
+                SelectionPurpose::Ruler,
+                false,
+                false,
+                &selection_initialized_ruler,
+                &hotkey_manager_ruler,
+                esc_hotkey_ruler,
             );
         }
     });
@@ -3510,6 +3622,23 @@ async fn main() -> Result<()> {
         });
     });
 
+    let selection_weak_area_updated = selection_window.as_weak();
+    let state_area_updated = state.clone();
+    selection_window.on_area_updated(move |x, y, w, h| {
+        let rect = {
+            let state = state_area_updated.lock().unwrap();
+            if state.pending_selection != Some(SelectionPurpose::Ruler) {
+                return;
+            }
+            physical_selection_rect(&state, x, y, w, h)
+        };
+        if let Some(selection) = selection_weak_area_updated.upgrade() {
+            let (line_1, line_2) = ruler_selection_lines(rect);
+            selection.set_ruler_info_line_1(line_1.into());
+            selection.set_ruler_info_line_2(line_2.into());
+        }
+    });
+
     let state_for_selection = state.clone();
     let hotkey_manager_area = hotkey_manager.clone();
     let esc_hotkey_area = esc_hotkey.clone();
@@ -3530,7 +3659,12 @@ async fn main() -> Result<()> {
         let pending = state_for_selection.lock().unwrap().pending_selection;
         if let Some(purpose) = pending.filter(|purpose| *purpose != SelectionPurpose::ContinuousOcr)
         {
-            if w < 5.0 || h < 5.0 {
+            let minimum_size = if purpose == SelectionPurpose::Ruler {
+                1.0
+            } else {
+                5.0
+            };
+            if w < minimum_size || h < minimum_size {
                 let selection_weak = selection.as_weak();
                 let toolbar_weak = toolbar_weak_for_selection_actions.clone();
                 let state = state_for_selection.clone();
@@ -3588,6 +3722,37 @@ async fn main() -> Result<()> {
                             "Click a pixel to choose a color".to_string(),
                         );
                     }
+                    return;
+                }
+
+                if purpose == SelectionPurpose::Ruler {
+                    let Some(toolbar) = toolbar else {
+                        return;
+                    };
+                    let tooltip = ruler_toolbar_tooltip(rect);
+                    let clipboard_text = ruler_clipboard_text(rect);
+                    let _ = slint::spawn_local(async move {
+                        let result = tokio::task::spawn_blocking(move || {
+                            capture::copy_text_to_clipboard(&clipboard_text)?;
+                            Ok::<String, anyhow::Error>(tooltip)
+                        })
+                        .await
+                        .context("Ruler clipboard worker stopped")
+                        .and_then(|result| result);
+                        match result {
+                            Ok(measurement) => {
+                                toolbar.set_ruler_tooltip(measurement.clone().into());
+                                toolbar.set_active_tooltip(measurement.into());
+                                set_capture_toolbar_status(
+                                    &toolbar,
+                                    "Copied region coordinates and dimensions".to_string(),
+                                );
+                            }
+                            Err(error) => {
+                                set_capture_toolbar_status(&toolbar, format!("Error: {error}"));
+                            }
+                        }
+                    });
                     return;
                 }
 
