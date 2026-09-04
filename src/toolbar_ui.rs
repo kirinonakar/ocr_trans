@@ -10,6 +10,12 @@ use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+fn clear_textbox_result(textbox: &slint::Weak<TextboxWindow>) {
+    if let Some(textbox) = textbox.upgrade() {
+        textbox.set_text(String::new().into());
+    }
+}
+
 pub(crate) fn register_callbacks(
     capture_toolbar: &CaptureToolbarWindow,
     main_window: &MainWindow,
@@ -421,8 +427,10 @@ pub(crate) fn register_callbacks(
     let selection_initialized_ocr = selection_initialized.clone();
     let hotkey_manager_ocr = hotkey_manager.clone();
     let esc_hotkey_ocr = esc_hotkey.clone();
+    let textbox_weak_ocr = textbox_window.as_weak();
     capture_toolbar.on_ocr_clicked(move || {
         if let Some(toolbar) = toolbar_weak_ocr.upgrade() {
+            clear_textbox_result(&textbox_weak_ocr);
             begin_toolbar_selection(
                 &toolbar,
                 &selection_weak_ocr,
@@ -443,8 +451,10 @@ pub(crate) fn register_callbacks(
     let selection_initialized_translate = selection_initialized.clone();
     let hotkey_manager_translate = hotkey_manager.clone();
     let esc_hotkey_translate = esc_hotkey.clone();
+    let textbox_weak_translate = textbox_window.as_weak();
     capture_toolbar.on_translate_clicked(move || {
         if let Some(toolbar) = toolbar_weak_translate.upgrade() {
+            clear_textbox_result(&textbox_weak_translate);
             begin_toolbar_selection(
                 &toolbar,
                 &selection_weak_translate,
@@ -465,8 +475,10 @@ pub(crate) fn register_callbacks(
     let selection_initialized_vlm = selection_initialized.clone();
     let hotkey_manager_vlm = hotkey_manager.clone();
     let esc_hotkey_vlm = esc_hotkey.clone();
+    let textbox_weak_vlm = textbox_window.as_weak();
     capture_toolbar.on_vlm_clicked(move || {
         if let Some(toolbar) = toolbar_weak_vlm.upgrade() {
+            clear_textbox_result(&textbox_weak_vlm);
             begin_toolbar_selection(
                 &toolbar,
                 &selection_weak_vlm,
@@ -487,8 +499,10 @@ pub(crate) fn register_callbacks(
     let selection_initialized_color = selection_initialized.clone();
     let hotkey_manager_color = hotkey_manager.clone();
     let esc_hotkey_color = esc_hotkey.clone();
+    let textbox_weak_color = textbox_window.as_weak();
     capture_toolbar.on_color_picker_clicked(move || {
         if let Some(toolbar) = toolbar_weak_color.upgrade() {
+            clear_textbox_result(&textbox_weak_color);
             begin_toolbar_selection(
                 &toolbar,
                 &selection_weak_color,
@@ -509,8 +523,10 @@ pub(crate) fn register_callbacks(
     let selection_initialized_ruler = selection_initialized.clone();
     let hotkey_manager_ruler = hotkey_manager.clone();
     let esc_hotkey_ruler = esc_hotkey.clone();
+    let textbox_weak_ruler = textbox_window.as_weak();
     capture_toolbar.on_ruler_clicked(move || {
         if let Some(toolbar) = toolbar_weak_ruler.upgrade() {
+            clear_textbox_result(&textbox_weak_ruler);
             begin_toolbar_selection(
                 &toolbar,
                 &selection_weak_ruler,

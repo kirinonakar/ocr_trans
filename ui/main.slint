@@ -1115,6 +1115,15 @@ export component TextboxWindow inherits Window {
     in-out property <length> font_size: 15px;
     in-out property <bool> dark_theme: false;
 
+    // ScrollView and its hover states use the standard widget palette. Keep that palette in
+    // sync even while the main settings window is hidden in capture mode.
+    init => {
+        Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light;
+    }
+    changed dark_theme => {
+        Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light;
+    }
+
     VerticalLayout {
         padding: 12px;
         spacing: 0px; // Reduced spacing since header is removed
