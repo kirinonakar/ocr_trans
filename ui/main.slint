@@ -1100,8 +1100,12 @@ export component SelectionWindow inherits Window {
     in-out property <string> color_decimal: "";
     in-out property <string> ruler_info_line_1: "";
     in-out property <string> ruler_info_line_2: "";
+    in-out property <image> selection_magnifier;
+    in-out property <bool> magnifier_visible: false;
     property <length> color_cursor_x: 0px;
     property <length> color_cursor_y: 0px;
+    property <length> selection_cursor_x: 0px;
+    property <length> selection_cursor_y: 0px;
     property <bool> selecting: false;
     property <length> start_x;
     property <length> start_y;
@@ -1127,6 +1131,7 @@ export component SelectionWindow inherits Window {
     callback window_selected(length, length);
     callback color_hovered(length, length);
     callback color_picked(length, length);
+    callback selection_hovered(length, length);
     callback area_updated(length, length, length, length);
     callback closed();
 
@@ -1146,6 +1151,9 @@ export component SelectionWindow inherits Window {
         ruler_info_line_2 = "";
         color_cursor_x = 0px;
         color_cursor_y = 0px;
+        selection_cursor_x = 0px;
+        selection_cursor_y = 0px;
+        magnifier_visible = false;
         selecting = false;
     }
 
@@ -1206,11 +1214,18 @@ export component SelectionWindow inherits Window {
                     color_cursor_x = i_touch.mouse-x;
                     color_cursor_y = i_touch.mouse-y;
                     color_hovered(color_cursor_x, color_cursor_y);
-                } else if (selecting) {
-                    current_x = i_touch.mouse-x;
-                    current_y = i_touch.mouse-y;
-                    if (ruler_mode) {
-                        area_updated(sel_x, sel_y, sel_w, sel_h);
+                } else {
+                    selection_cursor_x = i_touch.mouse-x;
+                    selection_cursor_y = i_touch.mouse-y;
+                    if (!ruler_mode) {
+                        selection_hovered(selection_cursor_x, selection_cursor_y);
+                    }
+                    if (selecting) {
+                        current_x = selection_cursor_x;
+                        current_y = selection_cursor_y;
+                        if (ruler_mode) {
+                            area_updated(sel_x, sel_y, sel_w, sel_h);
+                        }
                     }
                 }
             } else if (event.button == PointerEventButton.left) {
@@ -1226,6 +1241,10 @@ export component SelectionWindow inherits Window {
                         color_hovered(start_x, start_y);
                     } else if (ruler_mode) {
                         area_updated(sel_x, sel_y, sel_w, sel_h);
+                    } else {
+                        selection_cursor_x = start_x;
+                        selection_cursor_y = start_y;
+                        selection_hovered(selection_cursor_x, selection_cursor_y);
                     }
                 } else if (event.kind == PointerEventKind.up) {
                     selecting = false;
@@ -1253,6 +1272,12 @@ export component SelectionWindow inherits Window {
                 color_cursor_x = i_touch.mouse-x;
                 color_cursor_y = i_touch.mouse-y;
                 color_hovered(color_cursor_x, color_cursor_y);
+            } else if (!window_mode && !ruler_mode && self.has-hover) {
+                selection_cursor_x = i_touch.mouse-x;
+                selection_cursor_y = i_touch.mouse-y;
+                selection_hovered(selection_cursor_x, selection_cursor_y);
+            } else if (!self.has-hover) {
+                magnifier_visible = false;
             }
         }
     }
@@ -1299,6 +1324,51 @@ export component SelectionWindow inherits Window {
             font-family: "Consolas";
             font-size: 11px;
             vertical-alignment: center;
+        }
+    }
+
+    // A pixel-accurate 5x5 neighborhood for placing region corners precisely.
+    if (!window_mode && !color_picker_mode && !ruler_mode && magnifier_visible) : Rectangle {
+        x: selection_cursor_x + 18px + 112px > parent.width ? selection_cursor_x - 130px : selection_cursor_x + 18px;
+        y: selection_cursor_y + 18px + 112px > parent.height ? selection_cursor_y - 130px : selection_cursor_y + 18px;
+        width: 112px;
+        height: 112px;
+        z: 20;
+        background: #020617e8;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: #f8fafc;
+        drop-shadow-color: #00000066;
+        drop-shadow-blur: 8px;
+        drop-shadow-offset-y: 2px;
+
+        Image {
+            x: 6px;
+            y: 6px;
+            width: 100px;
+            height: 100px;
+            source: selection_magnifier;
+            image-fit: fill;
+            image-rendering: pixelated;
+        }
+
+        // Grid lines separate the 25 source pixels; the outlined center is the cursor pixel.
+        Rectangle { x: 26px; y: 6px; width: 1px; height: 100px; background: #ffffff55; }
+        Rectangle { x: 46px; y: 6px; width: 1px; height: 100px; background: #ffffff55; }
+        Rectangle { x: 66px; y: 6px; width: 1px; height: 100px; background: #ffffff55; }
+        Rectangle { x: 86px; y: 6px; width: 1px; height: 100px; background: #ffffff55; }
+        Rectangle { x: 6px; y: 26px; width: 100px; height: 1px; background: #ffffff55; }
+        Rectangle { x: 6px; y: 46px; width: 100px; height: 1px; background: #ffffff55; }
+        Rectangle { x: 6px; y: 66px; width: 100px; height: 1px; background: #ffffff55; }
+        Rectangle { x: 6px; y: 86px; width: 100px; height: 1px; background: #ffffff55; }
+        Rectangle {
+            x: 46px;
+            y: 46px;
+            width: 20px;
+            height: 20px;
+            background: transparent;
+            border-width: 2px;
+            border-color: #facc15;
         }
     }
 

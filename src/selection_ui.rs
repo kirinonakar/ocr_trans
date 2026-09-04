@@ -108,6 +108,23 @@ pub(crate) fn register_callbacks(
         }
     });
 
+    let selection_weak_magnifier = selection_window.as_weak();
+    let state_magnifier = state.clone();
+    selection_window.on_selection_hovered(move |x, y| {
+        let magnifier = {
+            let state = state_magnifier.lock().unwrap();
+            selection_magnifier_at(&state, x, y)
+        };
+        if let Some(selection) = selection_weak_magnifier.upgrade() {
+            if let Some(image) = magnifier {
+                selection.set_selection_magnifier(image);
+                selection.set_magnifier_visible(true);
+            } else {
+                selection.set_magnifier_visible(false);
+            }
+        }
+    });
+
     let state_for_selection = state.clone();
     let hotkey_manager_area = hotkey_manager.clone();
     let esc_hotkey_area = esc_hotkey.clone();

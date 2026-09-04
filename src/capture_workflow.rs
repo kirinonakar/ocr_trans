@@ -29,6 +29,46 @@ pub(crate) fn selection_pixel_at(state: &AppState, x: f32, y: f32) -> Option<ima
     Some(*screenshot.get_pixel(local_x as u32, local_y as u32))
 }
 
+fn selection_magnifier_pixels(state: &AppState, x: f32, y: f32) -> Option<image::RgbaImage> {
+    let screenshot = state.selection_screenshot.as_ref()?;
+    let scale = state.selection_scale.max(1.0);
+    let center_x = (x * scale).round() as i32;
+    let center_y = (y * scale).round() as i32;
+
+    if center_x < 0
+        || center_y < 0
+        || center_x >= screenshot.width() as i32
+        || center_y >= screenshot.height() as i32
+    {
+        return None;
+    }
+
+    let mut pixels = image::RgbaImage::from_pixel(5, 5, image::Rgba([15, 23, 42, 255]));
+    for preview_y in 0..5 {
+        for preview_x in 0..5 {
+            let source_x = center_x + preview_x as i32 - 2;
+            let source_y = center_y + preview_y as i32 - 2;
+            if source_x >= 0
+                && source_y >= 0
+                && source_x < screenshot.width() as i32
+                && source_y < screenshot.height() as i32
+            {
+                pixels.put_pixel(
+                    preview_x,
+                    preview_y,
+                    *screenshot.get_pixel(source_x as u32, source_y as u32),
+                );
+            }
+        }
+    }
+
+    Some(pixels)
+}
+
+pub(crate) fn selection_magnifier_at(state: &AppState, x: f32, y: f32) -> Option<slint::Image> {
+    selection_magnifier_pixels(state, x, y).map(rgba_to_slint_image)
+}
+
 pub(crate) fn sync_capture_state(state: &mut AppState, main: &MainWindow) {
     state.api_endpoint = main.get_api_endpoint().to_string();
     state.api_key = main.get_api_key().to_string();
@@ -347,7 +387,11 @@ pub(crate) fn prepare_selection_window(
 
     let (width, height) = screenshot.dimensions();
     let scale = selection.window().scale_factor().max(1.0);
-    let selection_screenshot = color_picker_mode.then(|| Arc::new(screenshot.clone()));
+    // Keep the pixels while the selector is open. Both the color picker and the region
+    // magnifier sample from this immutable frame, so the preview exactly matches the capture.
+    let selection_screenshot = (color_picker_mode
+        || (!window_mode && purpose != SelectionPurpose::Ruler))
+        .then(|| Arc::new(screenshot.clone()));
     {
         let mut state = state.lock().unwrap();
         state.pending_selection = Some(purpose);
@@ -859,4 +903,45 @@ pub(crate) async fn run_toolbar_action(
     }
     toolbar.set_recording(false);
     let _ = toolbar.show();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::selection_magnifier_pixels;
+    use crate::state::AppState;
+    use image::{Rgba, RgbaImage};
+    use std::sync::Arc;
+
+    #[test]
+    fn magnifier_contains_five_by_five_pixels_centered_on_cursor() {
+        let source = RgbaImage::from_fn(7, 7, |x, y| Rgba([x as u8, y as u8, 0, 255]));
+        let state = AppState {
+            selection_scale: 1.0,
+            selection_screenshot: Some(Arc::new(source)),
+            ..Default::default()
+        };
+
+        let preview = selection_magnifier_pixels(&state, 3.0, 3.0).unwrap();
+
+        assert_eq!(preview.dimensions(), (5, 5));
+        assert_eq!(*preview.get_pixel(0, 0), Rgba([1, 1, 0, 255]));
+        assert_eq!(*preview.get_pixel(2, 2), Rgba([3, 3, 0, 255]));
+        assert_eq!(*preview.get_pixel(4, 4), Rgba([5, 5, 0, 255]));
+    }
+
+    #[test]
+    fn magnifier_keeps_cursor_at_center_near_screen_edge() {
+        let source = RgbaImage::from_fn(3, 3, |x, y| Rgba([x as u8, y as u8, 0, 255]));
+        let state = AppState {
+            selection_scale: 1.0,
+            selection_screenshot: Some(Arc::new(source)),
+            ..Default::default()
+        };
+
+        let preview = selection_magnifier_pixels(&state, 0.0, 0.0).unwrap();
+
+        assert_eq!(*preview.get_pixel(2, 2), Rgba([0, 0, 0, 255]));
+        assert_eq!(*preview.get_pixel(0, 0), Rgba([15, 23, 42, 255]));
+        assert_eq!(*preview.get_pixel(4, 4), Rgba([2, 2, 0, 255]));
+    }
 }
