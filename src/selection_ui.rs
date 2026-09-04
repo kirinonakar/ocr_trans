@@ -394,6 +394,8 @@ pub(crate) fn register_callbacks(
                     if let Some(tw) = textbox_weak.upgrade() {
                         tw.set_text("Searching...".into());
                         let _ = tw.show();
+                        #[cfg(target_os = "windows")]
+                        schedule_textbox_native_theme(tw.as_weak(), 0);
                     }
                 }
 

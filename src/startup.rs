@@ -50,6 +50,7 @@ pub(crate) fn initialize_ui(
     save_app_settings(&initial_settings);
     main_window.set_capture_folder(initial_capture_folder.clone().into());
     main_window.set_dark_theme(initial_dark_theme);
+    textbox_window.set_dark_theme(initial_dark_theme);
     capture_toolbar.set_dark_theme(initial_dark_theme);
     // Load saved provider configuration
     let config = initial_settings.provider.clone();

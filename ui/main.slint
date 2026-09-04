@@ -1143,21 +1143,22 @@ export component TextboxWindow inherits Window {
     preferred-height: 200px;
     min-width: 320px;
     min-height: 100px;
-    background: #f8fafc;
+    background: dark_theme ? #2b2b31 : #f8fafc;
     default-font-family: "Yu Gothic UI";
     
     in-out property <string> text: "";
     in-out property <color> text_color: #1e293b;
     in-out property <length> font_size: 15px;
+    in-out property <bool> dark_theme: false;
 
     VerticalLayout {
         padding: 12px;
         spacing: 0px; // Reduced spacing since header is removed
         Rectangle {
-            background: #ffffff;
+            background: dark_theme ? #37373f : #ffffff;
             border-radius: 8px;
             border-width: 1px;
-            border-color: #e2e8f0;
+            border-color: dark_theme ? #52525b : #e2e8f0;
             ScrollView {
                 VerticalLayout {
                     width: parent.width;
@@ -1166,7 +1167,9 @@ export component TextboxWindow inherits Window {
                         text: text;
                         read-only: true;
                         font-size: font_size;
-                        color: text_color == #ffffff ? #000000 : text_color;
+                        color: dark_theme
+                            ? (text_color == #1e293b || text_color == #000000 ? #f8fafc : text_color)
+                            : (text_color == #ffffff ? #1e293b : text_color);
                         wrap: word-wrap;
                     }
                 }

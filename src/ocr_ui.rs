@@ -102,6 +102,8 @@ pub(crate) fn register_callbacks(
                 overlay.set_hide_text(true);
                 overlay.set_is_textbox_mode(true);
                 let _ = textbox.show();
+                #[cfg(target_os = "windows")]
+                schedule_textbox_native_theme(textbox.as_weak(), 0);
                 textbox.set_text_color(main.get_overlay_text_color());
                 textbox.set_font_size(main.get_base_font_size());
             } else {
@@ -273,6 +275,8 @@ pub(crate) fn register_callbacks(
                             textbox.set_text_color(main.get_overlay_text_color());
                             textbox.set_font_size(main.get_base_font_size());
                             let _ = textbox.show();
+                            #[cfg(target_os = "windows")]
+                            schedule_textbox_native_theme(textbox.as_weak(), 0);
                         }
                     }
 

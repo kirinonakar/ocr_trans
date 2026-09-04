@@ -1,6 +1,6 @@
 use crate::capture_workflow::{
     configure_main_window_native_theme, schedule_main_window_native_theme,
-    show_capture_toolbar_at_top_center, sync_ocr_window_size,
+    schedule_textbox_native_theme, show_capture_toolbar_at_top_center, sync_ocr_window_size,
 };
 use crate::settings::{save_app_mode, save_capture_folder, save_dark_theme, save_system_prompt};
 use crate::state::AppState;
@@ -69,6 +69,7 @@ pub(crate) fn register_callbacks(
     let main_weak_main_theme = main_window.as_weak();
     let toolbar_weak_main_theme = capture_toolbar.as_weak();
     let frame_weak_main_theme = capture_frame_window.as_weak();
+    let textbox_weak_main_theme = textbox_window.as_weak();
     main_window.on_theme_toggle_clicked(move || {
         let Some(main) = main_weak_main_theme.upgrade() else {
             return;
@@ -80,6 +81,11 @@ pub(crate) fn register_callbacks(
         }
         if let Some(frame) = frame_weak_main_theme.upgrade() {
             frame.set_dark_theme(dark_theme);
+        }
+        if let Some(textbox) = textbox_weak_main_theme.upgrade() {
+            textbox.set_dark_theme(dark_theme);
+            #[cfg(target_os = "windows")]
+            schedule_textbox_native_theme(textbox.as_weak(), 0);
         }
         #[cfg(target_os = "windows")]
         {
@@ -162,6 +168,7 @@ pub(crate) fn register_callbacks(
     let main_weak_toolbar_theme = main_window.as_weak();
     let toolbar_weak_toolbar_theme = capture_toolbar.as_weak();
     let frame_weak_toolbar_theme = capture_frame_window.as_weak();
+    let textbox_weak_toolbar_theme = textbox_window.as_weak();
     capture_toolbar.on_theme_toggle_clicked(move || {
         let Some(toolbar) = toolbar_weak_toolbar_theme.upgrade() else {
             return;
@@ -170,6 +177,11 @@ pub(crate) fn register_callbacks(
         toolbar.set_dark_theme(dark_theme);
         if let Some(frame) = frame_weak_toolbar_theme.upgrade() {
             frame.set_dark_theme(dark_theme);
+        }
+        if let Some(textbox) = textbox_weak_toolbar_theme.upgrade() {
+            textbox.set_dark_theme(dark_theme);
+            #[cfg(target_os = "windows")]
+            schedule_textbox_native_theme(textbox.as_weak(), 0);
         }
         if let Some(main) = main_weak_toolbar_theme.upgrade() {
             main.set_dark_theme(dark_theme);

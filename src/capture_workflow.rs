@@ -2,7 +2,7 @@ use crate::state::{AppState, SelectionPurpose};
 use crate::text_layout::*;
 use crate::{
     api, capture, ocr, win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow,
-    RecordingBorderWindow, SelectionWindow,
+    RecordingBorderWindow, SelectionWindow, TextboxWindow,
 };
 use anyhow::{Context, Result};
 use global_hotkey::{hotkey::HotKey, GlobalHotKeyManager};
@@ -206,6 +206,45 @@ pub(crate) fn schedule_main_window_native_theme(
         };
         let _ = configure_main_window_native_theme(&main, dark_theme);
         schedule_main_window_native_theme(main.as_weak(), dark_theme, attempt + 1);
+    });
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn configure_textbox_native_theme(textbox: &TextboxWindow, dark_theme: bool) -> bool {
+    let mut configured = false;
+    let _ = textbox.window().with_winit_window(|winit_window| {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Ok(handle) = winit_window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = windows::Win32::Foundation::HWND(handle.hwnd.get() as _);
+        win_utils::set_title_bar_theme(hwnd, dark_theme);
+        configured = true;
+    });
+    configured
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn schedule_textbox_native_theme(textbox: slint::Weak<TextboxWindow>, attempt: usize) {
+    // TextboxWindow is created lazily on its first show, so retry briefly until its HWND exists.
+    const RETRY_DELAYS_MS: [u64; 6] = [0, 16, 50, 150, 350, 700];
+    let Some(delay) = RETRY_DELAYS_MS.get(attempt).copied() else {
+        return;
+    };
+
+    slint::Timer::single_shot(Duration::from_millis(delay), move || {
+        let Some(textbox) = textbox.upgrade() else {
+            return;
+        };
+        // Read the live property so an older retry cannot restore a stale theme after a
+        // quick second toggle.
+        let current_dark_theme = textbox.get_dark_theme();
+        let _ = configure_textbox_native_theme(&textbox, current_dark_theme);
+        schedule_textbox_native_theme(textbox.as_weak(), attempt + 1);
     });
 }
 
