@@ -814,16 +814,87 @@ fn color_distance(first: &Rgba<u8>, second: &Rgba<u8>) -> u32 {
         + (first[2] as i32 - second[2] as i32).unsigned_abs()
 }
 
-/// Lightweight ffmpeg-backed recorder. The worker writes raw RGBA frames and the UI owns the
-/// stop/pause handles, giving the compact toolbar the same recording lifecycle as AIMediaWorker.
+/// Lightweight FFmpeg-backed recorder. Windows uses Desktop Duplication with NVENC for normal
+/// single-monitor selections; the raw-frame worker remains as a cross-monitor/non-Windows
+/// fallback. The UI owns the stop/pause handles and recording lifecycle.
 pub struct ScreenRecorder {
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    /// FFmpeg reads video frames from stdin for the GDI path. The ddagrab path captures frames
+    /// itself, so stdin is retained here and receives `q` for a graceful MP4 finalization.
+    control_stdin: Option<ChildStdin>,
     audio_worker: Option<JoinHandle<()>>,
     audio_error: Arc<Mutex<Option<String>>>,
     ffmpeg_stderr: Option<JoinHandle<String>>,
     child: Option<Arc<Mutex<Child>>>,
+}
+
+const RECORDING_MAX_WIDTH: i32 = 2560;
+const RECORDING_MAX_HEIGHT: i32 = 1440;
+
+fn recording_output_size(width: i32, height: i32) -> (i32, i32) {
+    let scale = (RECORDING_MAX_WIDTH as f64 / width as f64)
+        .min(RECORDING_MAX_HEIGHT as f64 / height as f64)
+        .min(1.0);
+    let scaled_width = ((width as f64 * scale).floor() as i32 & !1).max(2);
+    let scaled_height = ((height as f64 * scale).floor() as i32 & !1).max(2);
+    (scaled_width, scaled_height)
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug)]
+struct DdaGrabConfig {
+    input_filter: String,
+    output_width: i32,
+    output_height: i32,
+}
+
+#[cfg(target_os = "windows")]
+fn ddagrab_config(rect: CaptureRect, fps: u32) -> Result<Option<DdaGrabConfig>> {
+    let monitors = Monitor::all().context("Failed to enumerate monitors for ddagrab")?;
+    let Some((enumeration_index, monitor)) = monitors.iter().enumerate().find(|(_, monitor)| {
+        let right = rect.x.saturating_add(rect.width);
+        let bottom = rect.y.saturating_add(rect.height);
+        rect.x >= monitor.x()
+            && rect.y >= monitor.y()
+            && right <= monitor.x().saturating_add(monitor.width() as i32)
+            && bottom <= monitor.y().saturating_add(monitor.height() as i32)
+    }) else {
+        // One ddagrab source addresses one DXGI output. Keep cross-monitor selections on the
+        // existing raw-frame path instead of silently recording the wrong display.
+        log::warn!("Recording spans multiple monitors; falling back to raw capture");
+        return Ok(None);
+    };
+
+    // DISPLAY<n> is a persistent Windows device label, not a DXGI output index (the primary
+    // display can legitimately be DISPLAY2). EnumDisplayMonitors and ddagrab enumerate active
+    // outputs in the same primary-first order, so use that zero-based position directly.
+    let output_index = enumeration_index;
+    let offset_x = rect.x - monitor.x();
+    let offset_y = rect.y - monitor.y();
+    let (output_width, output_height) = recording_output_size(rect.width, rect.height);
+    let mut input_filter = format!(
+        "ddagrab=output_idx={output_index}:draw_mouse=1:framerate={fps}:video_size={}x{}:offset_x={offset_x}:offset_y={offset_y}",
+        rect.width, rect.height
+    );
+    // h264_nvenc accepts BGRA and performs the final color conversion on the encoder. Make the
+    // D3D11 frame transition explicit; otherwise an output `-pix_fmt yuv420p` makes FFmpeg try
+    // to insert an unsupported software conversion directly after a hardware frame.
+    input_filter.push_str(",hwdownload,format=bgra");
+    if output_width != rect.width || output_height != rect.height {
+        // Cap large sources at 1440p while preserving aspect ratio. NVENC uploads and encodes
+        // the resulting BGRA frames on NVIDIA.
+        input_filter.push_str(&format!(
+            ",scale={output_width}:{output_height}:flags=fast_bilinear"
+        ));
+    }
+
+    Ok(Some(DdaGrabConfig {
+        input_filter,
+        output_width,
+        output_height,
+    }))
 }
 
 #[cfg(target_os = "windows")]
@@ -1111,6 +1182,25 @@ fn feed_silence_until_stop(
 }
 
 #[cfg(target_os = "windows")]
+fn write_silence_frames(
+    stream: &mut TcpStream,
+    mut frames: u64,
+    format: WasapiAudioFormat,
+    stop: &AtomicBool,
+) -> bool {
+    let max_chunk_frames = (format.sample_rate as u64 / 100).max(1);
+    while frames > 0 {
+        let chunk_frames = frames.min(max_chunk_frames) as usize;
+        let packet = silent_audio_bytes(chunk_frames, format);
+        if !write_audio_bytes(stream, &packet, stop) {
+            return false;
+        }
+        frames -= chunk_frames as u64;
+    }
+    true
+}
+
+#[cfg(target_os = "windows")]
 fn capture_wasapi_loopback(
     listener: TcpListener,
     expected_format: WasapiAudioFormat,
@@ -1147,7 +1237,9 @@ fn capture_wasapi_loopback_on_mta(
 ) -> Result<()> {
     use windows::Win32::Media::Audio::{
         eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
-        MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+        MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY,
+        AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR,
+        AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_MULTITHREADED,
@@ -1211,13 +1303,12 @@ fn capture_wasapi_loopback_on_mta(
         unsafe { client.Start() }.context("Failed to start Windows audio loopback")?;
 
         let capture_result = (|| {
-            let silent_frames = (expected_format.sample_rate as usize / 100).max(1);
-            let silent_packet = silent_audio_bytes(silent_frames, expected_format);
-            let silent_duration = Duration::from_secs_f64(
-                silent_frames as f64 / expected_format.sample_rate as f64,
-            );
-            let mut next_silent_packet = Instant::now();
             let mut consecutive_read_errors = 0u32;
+            let capture_started = Instant::now();
+            let silence_guard_frames = (expected_format.sample_rate as u64 / 50).max(1);
+            let silence_chunk_frames = (expected_format.sample_rate as u64 / 100).max(1);
+            let mut written_frames = 0u64;
+            let mut device_to_output_offset: Option<i128> = None;
             while !stop.load(Ordering::Relaxed) {
                 let packet_frames = match unsafe { capture_client.GetNextPacketSize() } {
                     Ok(packet_frames) => {
@@ -1233,29 +1324,37 @@ fn capture_wasapi_loopback_on_mta(
                                 "Windows audio packet read failed (attempt {consecutive_read_errors}): {error:?}"
                             );
                         }
-                        if !write_paced_silence_packet(
-                            &mut stream,
-                            &silent_packet,
-                            silent_duration,
-                            &mut next_silent_packet,
-                            stop,
-                        ) {
-                            break;
-                        }
+                        // Do not manufacture a packet here. The next WASAPI packet already
+                        // covers the device timeline; inserting silence before it duplicates
+                        // samples and is heard as crackle/static.
+                        thread::sleep(Duration::from_millis(2));
                         continue;
                     }
                 };
                 if packet_frames == 0 {
-                    // Some Windows output devices expose no loopback packet while silent. Keep
-                    // the raw audio input alive with real-time paced silence.
-                    if !write_paced_silence_packet(
-                        &mut stream,
-                        &silent_packet,
-                        silent_duration,
-                        &mut next_silent_packet,
-                        stop,
-                    ) {
-                        break;
+                    // Keep a continuous audio track when Windows suppresses loopback packets
+                    // during silence, but stay 20 ms behind the device clock. If a real packet
+                    // arrives for that interval, its device position below causes the overlap to
+                    // be skipped instead of appending duplicate samples (the old noise source).
+                    let elapsed_frames = (capture_started.elapsed().as_secs_f64()
+                        * expected_format.sample_rate as f64)
+                        as u64;
+                    let target_frames = elapsed_frames.saturating_sub(silence_guard_frames);
+                    let frames_to_fill = target_frames
+                        .saturating_sub(written_frames)
+                        .min(silence_chunk_frames);
+                    if frames_to_fill > 0 {
+                        if !write_silence_frames(
+                            &mut stream,
+                            frames_to_fill,
+                            expected_format,
+                            stop,
+                        ) {
+                            break;
+                        }
+                        written_frames += frames_to_fill;
+                    } else {
+                        thread::sleep(Duration::from_millis(1));
                     }
                     continue;
                 }
@@ -1263,9 +1362,15 @@ fn capture_wasapi_loopback_on_mta(
                 let mut data_ptr: *mut u8 = std::ptr::null_mut();
                 let mut frames = 0u32;
                 let mut flags = 0u32;
+                let mut device_position = 0u64;
                 let buffer_result = unsafe {
-                    capture_client
-                        .GetBuffer(&mut data_ptr, &mut frames, &mut flags, None, None)
+                    capture_client.GetBuffer(
+                        &mut data_ptr,
+                        &mut frames,
+                        &mut flags,
+                        Some(&mut device_position),
+                        None,
+                    )
                 }
                 .context("Failed to read the Windows audio capture buffer");
                 if let Err(error) = buffer_result {
@@ -1275,20 +1380,13 @@ fn capture_wasapi_loopback_on_mta(
                             "Windows audio buffer read failed (attempt {consecutive_read_errors}): {error:?}"
                         );
                     }
-                    if !write_paced_silence_packet(
-                        &mut stream,
-                        &silent_packet,
-                        silent_duration,
-                        &mut next_silent_packet,
-                        stop,
-                    ) {
-                        break;
-                    }
+                    thread::sleep(Duration::from_millis(2));
                     continue;
                 }
 
                 let byte_len = frames as usize * expected_format.block_align;
-                let bytes = if flags & 2 != 0 || data_ptr.is_null() {
+                let is_silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0;
+                let bytes = if is_silent || data_ptr.is_null() {
                     // AUDCLNT_BUFFERFLAGS_SILENT: the loopback engine still advances the
                     // timeline, so write an equally sized silent packet instead of dropping it.
                     silent_audio_bytes(frames as usize, expected_format)
@@ -1305,23 +1403,48 @@ fn capture_wasapi_loopback_on_mta(
                             "Windows audio buffer release failed (attempt {consecutive_read_errors}): {error:?}"
                         );
                     }
-                    if !write_paced_silence_packet(
+                    return Err(error);
+                }
+
+                let discontinuity = flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0;
+                let timestamp_error = flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 != 0;
+                if device_to_output_offset.is_none() || discontinuity || timestamp_error {
+                    // Anchor the device frame counter to the already-written output timeline.
+                    // Re-anchor after a device reset instead of treating its new position as a
+                    // giant gap or overlap.
+                    device_to_output_offset =
+                        Some(written_frames as i128 - device_position as i128);
+                    if discontinuity || timestamp_error {
+                        log::warn!("Windows audio loopback timeline was re-synchronized");
+                    }
+                }
+
+                let mapped_packet_start = (device_position as i128
+                    + device_to_output_offset.unwrap_or_default())
+                .max(0) as u64;
+                if mapped_packet_start > written_frames {
+                    let gap_frames = mapped_packet_start - written_frames;
+                    if !write_silence_frames(
                         &mut stream,
-                        &silent_packet,
-                        silent_duration,
-                        &mut next_silent_packet,
+                        gap_frames,
+                        expected_format,
                         stop,
                     ) {
                         break;
                     }
-                    continue;
+                    written_frames += gap_frames;
                 }
 
-                if !write_audio_bytes(&mut stream, &bytes, stop) {
+                let overlap_frames = written_frames.saturating_sub(mapped_packet_start);
+                if overlap_frames >= frames as u64 {
+                    continue;
+                }
+                let frames_to_write = frames as u64 - overlap_frames;
+                let byte_offset = overlap_frames as usize * expected_format.block_align;
+                if !write_audio_bytes(&mut stream, &bytes[byte_offset..], stop) {
                     break;
                 }
-                next_silent_packet = Instant::now() +
-                    Duration::from_secs_f64(frames as f64 / expected_format.sample_rate as f64);
+                written_frames += frames_to_write;
             }
             Ok::<(), anyhow::Error>(())
         })();
@@ -1338,6 +1461,21 @@ fn capture_wasapi_loopback_on_mta(
         return Err(error);
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn prepare_wasapi_input() -> Result<(WasapiAudioFormat, TcpListener, String)> {
+    let format = probe_wasapi_loopback_format()?;
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .context("Failed to create the Windows audio loopback stream")?;
+    let url = format!(
+        "tcp://127.0.0.1:{}",
+        listener
+            .local_addr()
+            .context("Failed to get the Windows audio loopback address")?
+            .port()
+    );
+    Ok((format, listener, url))
 }
 
 impl ScreenRecorder {
@@ -1357,20 +1495,43 @@ impl ScreenRecorder {
         };
         let fps = fps.clamp(1, 60);
 
+        #[cfg(target_os = "windows")]
+        let ddagrab = ddagrab_config(rect, fps)?;
+        #[cfg(target_os = "windows")]
+        let use_ddagrab = ddagrab.is_some();
+        #[cfg(not(target_os = "windows"))]
+        let use_ddagrab = false;
+
+        // Validate the software capture path before reporting "Recording started". Previously
+        // all capture errors happened on a detached worker, leaving the toolbar in a recording
+        // state even though FFmpeg had received no usable video.
+        let first_frame = if use_ddagrab {
+            None
+        } else {
+            let image = capture_area(&rect, &None).context("Failed to capture the first frame")?;
+            if image.width() != width as u32 || image.height() != height as u32 {
+                anyhow::bail!(
+                    "The recording area crosses a monitor boundary (captured {}x{}, expected {width}x{height})",
+                    image.width(),
+                    image.height()
+                );
+            }
+            Some(image.into_raw())
+        };
+
         let video_size = format!("{}x{}", width, height);
         #[cfg(target_os = "windows")]
-        let audio_format = probe_wasapi_loopback_format()?;
-        #[cfg(target_os = "windows")]
-        let audio_listener = TcpListener::bind(("127.0.0.1", 0))
-            .context("Failed to create the Windows audio loopback stream")?;
-        #[cfg(target_os = "windows")]
-        let audio_url = format!(
-            "tcp://127.0.0.1:{}",
-            audio_listener
-                .local_addr()
-                .context("Failed to get the Windows audio loopback address")?
-                .port()
-        );
+        let audio_input = match prepare_wasapi_input() {
+            Ok(input) => Some(input),
+            Err(error) => {
+                // Audio-device setup must not prevent screen recording. This is common on PCs
+                // with no active playback endpoint and was the main all-or-nothing failure path.
+                log::warn!(
+                    "Windows playback audio is unavailable; recording video only: {error:?}"
+                );
+                None
+            }
+        };
         let framerate = fps.to_string();
         let mut ffmpeg = Command::new("ffmpeg");
         #[cfg(target_os = "windows")]
@@ -1381,17 +1542,41 @@ impl ScreenRecorder {
             // terminal window while recording from the toolbar.
             ffmpeg.creation_flags(0x0800_0000);
         }
+        ffmpeg.args(["-y", "-loglevel", "error", "-fflags", "+genpts"]);
+        #[cfg(target_os = "windows")]
+        if let Some(config) = ddagrab.as_ref() {
+            ffmpeg.args(["-f", "lavfi", "-i", config.input_filter.as_str()]);
+            log::info!(
+                "Starting ddagrab/NVENC recording at {}x{} and {fps} fps",
+                config.output_width,
+                config.output_height
+            );
+        } else {
+            ffmpeg.args([
+                "-probesize",
+                "32k",
+                "-analyzeduration",
+                "0",
+                "-thread_queue_size",
+                "1024",
+                "-f",
+                "rawvideo",
+                "-pixel_format",
+                "rgba",
+                "-video_size",
+                video_size.as_str(),
+                "-framerate",
+                framerate.as_str(),
+                "-i",
+                "-",
+            ]);
+        }
+        #[cfg(not(target_os = "windows"))]
         ffmpeg.args([
-            "-y",
-            "-loglevel",
-            "error",
-            // 라이브 파이프 입력 초기 연결 지연으로 앞부분이 잘리는 것을 방지
             "-probesize",
             "32k",
             "-analyzeduration",
             "0",
-            "-fflags",
-            "+genpts",
             "-thread_queue_size",
             "1024",
             "-f",
@@ -1406,7 +1591,7 @@ impl ScreenRecorder {
             "-",
         ]);
         #[cfg(target_os = "windows")]
-        {
+        if let Some((audio_format, _, audio_url)) = audio_input.as_ref() {
             // FFmpeg builds without a WASAPI demuxer are still common on Windows. Feed it the
             // native default-render loopback through localhost, so the recording contains
             // Windows playback audio instead of whichever webcam microphone DirectShow lists.
@@ -1424,23 +1609,42 @@ impl ScreenRecorder {
                 "-i",
             ]);
             ffmpeg.arg(audio_url);
+        }
+
+        ffmpeg.args(["-map", "0:v:0"]);
+        #[cfg(target_os = "windows")]
+        if audio_input.is_some() {
+            ffmpeg.args(["-map", "1:a:0"]);
+        } else {
+            ffmpeg.arg("-an");
+        }
+
+        #[cfg(target_os = "windows")]
+        if use_ddagrab {
             ffmpeg.args([
-                "-map",
-                "0:v:0",
-                "-map",
-                "1:a:0",
                 "-c:v",
-                "libx264",
+                "h264_nvenc",
                 "-preset",
-                "ultrafast",
-                // 입력 캡처가 30fps를 못 지켜도(느린 캡처/일시정지) 출력은
-                // 30fps CFR로 고정해 빨리감기 재생을 방지한다.
-                "-vsync",
-                "cfr",
-                "-r",
-                framerate.as_str(),
-                // Downmix multichannel output cleanly and always write a standard stereo AAC
-                // track at a stable rate. The resampler also keeps the two inputs synchronized.
+                "p4",
+                "-tune",
+                "hq",
+                "-rc",
+                "vbr",
+                "-cq",
+                "21",
+                "-b:v",
+                "0",
+            ]);
+        } else {
+            ffmpeg.args(["-c:v", "libx264", "-preset", "ultrafast"]);
+        }
+        #[cfg(not(target_os = "windows"))]
+        ffmpeg.args(["-an", "-c:v", "libx264", "-preset", "ultrafast"]);
+
+        ffmpeg.args(["-fps_mode", "cfr", "-r", framerate.as_str()]);
+        #[cfg(target_os = "windows")]
+        if audio_input.is_some() {
+            ffmpeg.args([
                 "-af",
                 "aresample=async=1:min_hard_comp=0.100:first_pts=0",
                 "-ar",
@@ -1455,30 +1659,18 @@ impl ScreenRecorder {
                 "aac_low",
                 "-b:a",
                 "192k",
-                // Both live inputs are closed by ScreenRecorder::stop. Do not let an early
-                // audio EOF truncate the video when a Windows playback device briefly resets.
-                "-pix_fmt",
-                "yuv420p",
             ]);
         }
-        #[cfg(not(target_os = "windows"))]
-        ffmpeg.args([
-            "-an",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-pix_fmt",
-            "yuv420p",
-        ]);
+        ffmpeg.args(["-pix_fmt", "yuv420p", "-movflags", "+faststart"]);
+
         let mut child = ffmpeg
-            .arg(path)
+            .arg(&path)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .context("FFmpeg was not found. Install ffmpeg and make sure it is on PATH.")?;
-        let ffmpeg_stderr = child.stderr.take().map(|mut stderr| {
+        let mut ffmpeg_stderr = child.stderr.take().map(|mut stderr| {
             thread::spawn(move || {
                 let mut output = Vec::new();
                 let _ = stderr.read_to_end(&mut output);
@@ -1493,33 +1685,77 @@ impl ScreenRecorder {
                 anyhow::bail!("Failed to open FFmpeg input");
             }
         };
-        let child = Arc::new(Mutex::new(child));
         let stop = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
         let audio_error = Arc::new(Mutex::new(None));
 
         #[cfg(target_os = "windows")]
-        let audio_worker = {
+        let mut audio_worker = audio_input.map(|(audio_format, audio_listener, _)| {
             let audio_stop = stop.clone();
             let audio_error = audio_error.clone();
-            Some(thread::spawn(move || {
+            thread::spawn(move || {
                 capture_wasapi_loopback(audio_listener, audio_format, audio_stop, audio_error)
-            }))
-        };
-        #[cfg(not(target_os = "windows"))]
-        let audio_worker = None;
-
-        let worker_stop = stop.clone();
-        let worker_paused = paused.clone();
-        let interval = Duration::from_secs_f64(1.0 / fps as f64);
-        let worker = thread::spawn(move || {
-            record_frames(&mut stdin, rect, interval, worker_stop, worker_paused)
+            })
         });
+        #[cfg(not(target_os = "windows"))]
+        let mut audio_worker = None;
+
+        let (mut worker, mut control_stdin) = if use_ddagrab {
+            (None, Some(stdin))
+        } else {
+            let initial_frame = first_frame.expect("raw capture always has a validated frame");
+            if let Err(error) = stdin.write_all(&initial_frame) {
+                stop.store(true, Ordering::Relaxed);
+                let _ = child.kill();
+                if let Some(audio_worker) = audio_worker.take() {
+                    let _ = audio_worker.join();
+                }
+                let _ = child.wait();
+                anyhow::bail!("FFmpeg closed before recording started: {error}");
+            }
+            let worker_stop = stop.clone();
+            let worker_paused = paused.clone();
+            let interval = Duration::from_secs_f64(1.0 / fps as f64);
+            let worker = thread::spawn(move || {
+                record_frames(
+                    &mut stdin,
+                    rect,
+                    interval,
+                    worker_stop,
+                    worker_paused,
+                    Some(initial_frame),
+                )
+            });
+            (Some(worker), None)
+        };
+
+        // FFmpeg used to fail asynchronously (missing encoder, bad input, etc.) while start()
+        // still returned success. Give it enough time to initialize and surface the real error.
+        thread::sleep(Duration::from_millis(350));
+        if let Some(status) = child.try_wait().context("Failed to check FFmpeg startup")? {
+            stop.store(true, Ordering::Relaxed);
+            control_stdin.take();
+            if let Some(worker) = worker.take() {
+                let _ = worker.join();
+            }
+            if let Some(audio_worker) = audio_worker.take() {
+                let _ = audio_worker.join();
+            }
+            let diagnostic = ffmpeg_stderr
+                .take()
+                .and_then(|reader| reader.join().ok())
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| format!("FFmpeg exited with {status}"));
+            anyhow::bail!("FFmpeg could not start recording: {diagnostic}");
+        }
+
+        let child = Arc::new(Mutex::new(child));
 
         Ok(Self {
             stop,
             paused,
-            worker: Some(worker),
+            worker,
+            control_stdin,
             audio_worker,
             audio_error,
             ffmpeg_stderr,
@@ -1533,6 +1769,13 @@ impl ScreenRecorder {
 
     pub fn stop(mut self) -> Result<()> {
         self.stop.store(true, Ordering::Relaxed);
+
+        // ddagrab has no raw-video stdin to close. Ask FFmpeg to stop through its normal console
+        // control path so it writes the MP4 trailer instead of leaving an unplayable file.
+        if let Some(mut stdin) = self.control_stdin.take() {
+            let _ = stdin.write_all(b"q\n");
+            let _ = stdin.flush();
+        }
 
         // A blocked pipe write can otherwise keep a worker alive forever if FFmpeg exited early
         // (for example after an audio-device change). Give the normal graceful close a short
@@ -1595,7 +1838,8 @@ impl ScreenRecorder {
             log::warn!("FFmpeg reported a recorder diagnostic: {error}");
         }
         if let Some(error) = audio_error {
-            anyhow::bail!("Windows playback audio could not be recorded: {error}");
+            // Preserve the completed video when the playback device changes or disappears.
+            log::warn!("Windows playback audio could not be recorded completely: {error}");
         }
         Ok(())
     }
@@ -1620,12 +1864,12 @@ fn record_frames(
     interval: Duration,
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
+    mut last_frame: Option<Vec<u8>>,
 ) {
     // 매 프레임 Monitor::all()을 호출하면 열거 비용으로 30fps를 못 지켜
     // 입력보다 짧은 영상이 되며 빨리감기처럼 보인다. 미리 한 번만 조회해 재사용한다.
     let cached_monitors: Option<Vec<xcap::Monitor>> =
         xcap::Monitor::all().ok().filter(|m| !m.is_empty());
-    let mut last_frame: Option<Vec<u8>> = None;
     let mut next_frame = Instant::now();
     while !stop.load(Ordering::Relaxed) {
         let is_paused = paused.load(Ordering::Relaxed);
@@ -1700,4 +1944,25 @@ pub fn is_changed(prev: &Option<RgbaImage>, curr: &RgbaImage, _threshold: f32) -
         }
     }
     total_pixels != 0 && diff_sum as f32 / total_pixels as f32 >= 0.01
+}
+
+#[cfg(test)]
+mod tests {
+    use super::recording_output_size;
+
+    #[test]
+    fn recording_size_caps_4k_at_1440p() {
+        assert_eq!(recording_output_size(3840, 2160), (2560, 1440));
+    }
+
+    #[test]
+    fn recording_size_preserves_wide_and_portrait_aspect_ratios() {
+        assert_eq!(recording_output_size(3440, 1440), (2560, 1070));
+        assert_eq!(recording_output_size(1600, 2000), (1152, 1440));
+    }
+
+    #[test]
+    fn recording_size_does_not_upscale_small_frames() {
+        assert_eq!(recording_output_size(1920, 1080), (1920, 1080));
+    }
 }
