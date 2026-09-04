@@ -197,29 +197,6 @@ pub(crate) fn register_callbacks(
         });
     });
 
-    let frame_weak_resize = capture_frame_window.as_weak();
-    capture_frame_window.on_resize_requested(move |direction| {
-        let frame_weak = frame_weak_resize.clone();
-        let direction = direction.to_string();
-        slint::Timer::single_shot(Duration::from_millis(1), move || {
-            let Some(frame) = frame_weak.upgrade() else {
-                return;
-            };
-            #[cfg(target_os = "windows")]
-            frame.window().with_winit_window(|winit_window| {
-                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                if let Ok(handle) = winit_window.window_handle() {
-                    if let RawWindowHandle::Win32(handle) = handle.as_raw() {
-                        win_utils::begin_window_resize(
-                            windows::Win32::Foundation::HWND(handle.hwnd.get() as _),
-                            &direction,
-                        );
-                    }
-                }
-            });
-        });
-    });
-
     let toolbar_weak_frame_capture = capture_toolbar.as_weak();
     let frame_weak_capture = capture_frame_window.as_weak();
     let main_weak_frame_capture = main_window.as_weak();
