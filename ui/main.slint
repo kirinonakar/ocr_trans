@@ -598,9 +598,7 @@ export component CaptureToolbarWindow inherits Window {
             border-radius: 9px;
             border-width: 0px;
             border-color: transparent;
-            drop-shadow-color: dark_theme ? #00000080 : #00000030;
-            drop-shadow-blur: 14px;
-            drop-shadow-offset-y: 4px;
+            // Keep the area outside the rounded toolbar fully transparent.
 
         if (!recording) : HorizontalLayout {
             x: 0px;
