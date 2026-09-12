@@ -281,6 +281,7 @@ pub(crate) struct AppSettings {
     pub(crate) system_prompt: String,
     pub(crate) app_mode: String,
     pub(crate) dark_theme: bool,
+    pub(crate) ocr_language: String,
 }
 
 fn settings_read_path() -> Option<PathBuf> {
@@ -462,6 +463,7 @@ pub(crate) fn load_app_settings() -> AppSettings {
             .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()),
         app_mode: "ocr".to_string(),
         dark_theme: false,
+        ocr_language: String::new(),
     };
 
     if let Some(path) = settings_read_path() {
@@ -525,6 +527,7 @@ pub(crate) fn load_app_settings() -> AppSettings {
                 ini_value(&values, "app", "system_prompt", settings.system_prompt);
             settings.app_mode = ini_value(&values, "app", "app_mode", settings.app_mode);
             settings.dark_theme = ini_bool(&values, "app", "dark_theme", settings.dark_theme);
+            settings.ocr_language = ini_value(&values, "app", "ocr_language", settings.ocr_language);
         }
     }
     settings
@@ -532,7 +535,7 @@ pub(crate) fn load_app_settings() -> AppSettings {
 
 pub(crate) fn save_app_settings(settings: &AppSettings) {
     let contents = format!(
-        "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\napp_mode={}\ndark_theme={}\n",
+        "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\napp_mode={}\ndark_theme={}\nocr_language={}\n",
         ini_escape(&settings.provider.provider),
         ini_escape(&settings.provider.lm_model),
         ini_escape(&settings.provider.gemini_model),
@@ -547,6 +550,7 @@ pub(crate) fn save_app_settings(settings: &AppSettings) {
         ini_escape(&settings.system_prompt),
         ini_escape(&settings.app_mode),
         if settings.dark_theme { "true" } else { "false" },
+        ini_escape(settings.ocr_language.trim()),
     );
     if let Some(path) = settings_write_path() {
         if let Err(error) = std::fs::write(path, contents) {
@@ -598,5 +602,11 @@ pub(crate) fn save_app_mode(mode: &str) {
 pub(crate) fn save_dark_theme(dark_theme: bool) {
     let mut settings = load_app_settings();
     settings.dark_theme = dark_theme;
+    save_app_settings(&settings);
+}
+
+pub(crate) fn save_ocr_language(language: &str) {
+    let mut settings = load_app_settings();
+    settings.ocr_language = language.trim().to_string();
     save_app_settings(&settings);
 }

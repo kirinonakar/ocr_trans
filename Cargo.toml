@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-slint = { version = "1.9", features = ["renderer-skia"] }
+slint = { version = "1.17.1", features = ["renderer-skia"] }
+pulldown-cmark = "0.13"
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 uuid = { version = "1", features = ["v4"] }
@@ -36,11 +38,11 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Gdi",
     "Win32_System_WinRT"
 ] }
-i-slint-backend-winit = "1.9"
+i-slint-backend-winit = "1.17.1"
 winit = "0.29"
 
 [build-dependencies]
-slint-build = "1.9"
+slint-build = "1.17.1"
 winres = "0.1"
 
 [profile.release]

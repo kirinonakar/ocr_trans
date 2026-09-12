@@ -149,7 +149,7 @@ pub(crate) fn sync_capture_toolbar_size(toolbar: &CaptureToolbarWindow) {
         .set_size(slint::LogicalSize::new(CAPTURE_TOOLBAR_WIDTH, height));
 }
 
-pub(crate) const CAPTURE_TOOLBAR_WIDTH: f32 = 638.0;
+pub(crate) const CAPTURE_TOOLBAR_WIDTH: f32 = 783.0;
 pub(crate) const CAPTURE_FRAME_HEADER: f32 = 42.0;
 pub(crate) const CAPTURE_FRAME_BORDER: f32 = 3.0;
 pub(crate) const OCR_WINDOW_WIDTH: f32 = 400.0;
@@ -996,8 +996,9 @@ pub(crate) async fn run_toolbar_action(
                 let width = image.width();
                 let height = image.height();
                 let pixels = rgba_to_bgra_bytes(&image);
+                let language = ocr::language_tag(toolbar.get_ocr_language().as_str()).to_string();
                 let recognized_text = tokio::task::spawn_blocking(move || {
-                    ocr::recognize_text(&pixels, width, height)
+                    ocr::recognize_text(&pixels, width, height, &language)
                 })
                 .await
                 .context("OCR worker stopped")??;

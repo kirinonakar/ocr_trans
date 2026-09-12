@@ -25,6 +25,22 @@ pub(crate) fn initialize_ui(
         .window()
         .set_size(slint::LogicalSize::new(CAPTURE_TOOLBAR_WIDTH, 48.0));
     let mut initial_settings = load_app_settings();
+    let language_label = crate::ocr::language_label(initial_settings.ocr_language.trim());
+    let mut language_options: Vec<slint::SharedString> = crate::ocr::LANGUAGE_OPTIONS
+        .iter()
+        .map(|(_, label)| (*label).into())
+        .collect();
+    // Preserve custom BCP-47 language tags configured in the INI file.
+    if !language_options
+        .iter()
+        .any(|label| label.as_str() == language_label)
+    {
+        language_options.push(language_label.into());
+    }
+    capture_toolbar.set_ocr_language_options(
+        std::rc::Rc::new(slint::VecModel::from(language_options)).into(),
+    );
+    capture_toolbar.set_ocr_language(language_label.into());
     let initial_capture_folder = if !initial_settings.capture_folder.trim().is_empty()
         && Path::new(initial_settings.capture_folder.trim()).is_dir()
     {

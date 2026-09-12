@@ -545,9 +545,9 @@ export component CaptureToolbarWindow inherits Window {
     no-frame: true;
     background: transparent;
     default-font-family: "Yu Gothic UI";
-    preferred-width: 638px;
+    preferred-width: 783px;
     preferred-height: recording ? 48px : ((status_text == "" && active_tooltip == "") ? 48px : 68px);
-    min-width: 638px;
+    min-width: 783px;
 
     in-out property <bool> record_mode: false;
     in-out property <bool> frame_mode: false;
@@ -560,6 +560,9 @@ export component CaptureToolbarWindow inherits Window {
     in-out property <string> active_tooltip: "";
     in-out property <string> color_picker_tooltip: "Pick color";
     in-out property <string> ruler_tooltip: "Measure region";
+    in property <[string]> ocr_language_options;
+    in-out property <string> ocr_language: "OCR: Windows";
+    callback ocr_language_changed(string);
 
     callback drag_requested();
     callback theme_toggle_clicked();
@@ -821,6 +824,15 @@ export component CaptureToolbarWindow inherits Window {
                         pressed => { vlm_clicked(); }
                     }
                 }
+            }
+
+            ComboBox {
+                width: 140px;
+                height: 34px;
+                horizontal-stretch: 0;
+                model: ocr_language_options;
+                current-value <=> ocr_language;
+                selected(value) => { ocr_language_changed(value); }
             }
 
             // Keep the utility tools together, with a little extra separation from OCR/VLM.
@@ -1097,6 +1109,22 @@ export component RecordingBorderWindow inherits Window {
     }
 }
 
+export struct MarkdownCell {
+    content: styled-text,
+}
+
+export struct MarkdownBlock {
+    cells: [MarkdownCell],
+    prefix: string,
+    font-scale: float,
+    indent: int,
+    heading: bool,
+    code: bool,
+    quote: bool,
+    table-row: bool,
+    rule: bool,
+}
+
 export component TextboxWindow inherits Window {
     title: "Result";
     icon: @image-url("../app.ico");
@@ -1112,6 +1140,13 @@ export component TextboxWindow inherits Window {
     in-out property <color> text_color: #1e293b;
     in-out property <length> font_size: 15px;
     in-out property <bool> dark_theme: false;
+    pure callback render-markdown(string) -> [MarkdownBlock];
+    callback copy-original();
+    private property <[MarkdownBlock]> blocks: render-markdown(text);
+    private property <color> foreground: dark_theme
+        ? (text_color == #1e293b || text_color == #000000 ? #f8fafc : text_color)
+        : (text_color == #ffffff ? #1e293b : text_color);
+    forward-focus: copy-keys;
 
     // ScrollView and its hover states use the standard widget palette. Keep that palette in
     // sync even while the main settings window is hidden in capture mode.
@@ -1122,26 +1157,69 @@ export component TextboxWindow inherits Window {
         Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light;
     }
 
-    VerticalLayout {
-        padding: 12px;
-        spacing: 0px; // Reduced spacing since header is removed
-        Rectangle {
-            background: dark_theme ? #37373f : #ffffff;
-            border-radius: 8px;
-            border-width: 1px;
-            border-color: dark_theme ? #52525b : #e2e8f0;
-            ScrollView {
-                VerticalLayout {
-                    width: parent.width;
-                    padding: 8px;
-                    TextInput {
-                        text: text;
-                        read-only: true;
-                        font-size: font_size;
-                        color: dark_theme
-                            ? (text_color == #1e293b || text_color == #000000 ? #f8fafc : text_color)
-                            : (text_color == #ffffff ? #1e293b : text_color);
-                        wrap: word-wrap;
+    copy-keys := FocusScope {
+        key-pressed(event) => {
+            if (event.modifiers.control && (event.text == "c" || event.text == "C")) {
+                root.copy-original();
+                return accept;
+            }
+            return reject;
+        }
+        VerticalLayout {
+            padding: 12px;
+            spacing: 6px;
+            HorizontalLayout {
+                alignment: end;
+                Button {
+                    text: "Copy original";
+                    enabled: root.text != "";
+                    clicked => { root.copy-original(); copy-keys.focus(); }
+                }
+            }
+            Rectangle {
+                background: dark_theme ? #37373f : #ffffff;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: dark_theme ? #52525b : #e2e8f0;
+                ScrollView {
+                    VerticalLayout {
+                        width: parent.width;
+                        padding: 8px;
+                        spacing: 6px;
+                        alignment: start;
+                        for block in root.blocks: Rectangle {
+                            vertical-stretch: 0;
+                            min-height: block.rule ? 1px : 0px;
+                            background: block.rule ? (root.dark_theme ? #52525b : #cbd5e1)
+                                : block.code || block.table-row ? (root.dark_theme ? #292930 : #f1f5f9)
+                                : transparent;
+                            border-radius: block.code ? 4px : 0px;
+                            HorizontalLayout {
+                                padding: block.code || block.table-row ? 8px : 0px;
+                                padding-left: block.indent * 18px + (block.code || block.table-row ? 8px : 0px);
+                                spacing: 8px;
+                                if block.quote: Rectangle {
+                                    width: 3px;
+                                    background: root.dark_theme ? #94a3b8 : #64748b;
+                                }
+                                if block.prefix != "": Text {
+                                    text: block.prefix;
+                                    color: root.foreground;
+                                    font-size: root.font_size;
+                                    vertical-alignment: top;
+                                }
+                                for cell in block.cells: StyledText {
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    preferred-width: 0px;
+                                    text: block.heading ? @markdown("**\{cell.content}**") : cell.content;
+                                    default-font-size: root.font_size * block.font-scale;
+                                    default-font-family: block.code ? "Consolas" : "Yu Gothic UI";
+                                    default-color: root.foreground;
+                                    vertical-alignment: top;
+                                }
+                            }
+                        }
                     }
                 }
             }

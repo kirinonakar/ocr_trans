@@ -204,7 +204,7 @@ pub(crate) fn start(
                                                 display_text.clone().into(),
                                             );
                                             if let Some(tw) = tww.upgrade() {
-                                                tw.set_text(display_text.clone().into());
+                                                tw.set_text(final_text.clone().into());
                                                 tw.set_text_color(main.get_overlay_text_color());
                                                 tw.set_font_size(main.get_base_font_size());
                                             }

@@ -32,6 +32,10 @@ pub(crate) fn register_callbacks(
 ) {
     let frame_initialized = Arc::new(Mutex::new(false));
 
+    capture_toolbar.on_ocr_language_changed(move |label| {
+        crate::settings::save_ocr_language(crate::ocr::language_tag(label.as_str()));
+    });
+
     let toolbar_weak_textbox_toggle = capture_toolbar.as_weak();
     let textbox_weak_toggle = textbox_window.as_weak();
     let main_weak_textbox_toggle = main_window.as_weak();

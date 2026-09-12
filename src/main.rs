@@ -7,6 +7,7 @@ mod app;
 mod capture;
 mod capture_workflow;
 mod credentials;
+mod markdown;
 mod ocr;
 mod ocr_ui;
 mod provider_ui;

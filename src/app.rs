@@ -25,6 +25,7 @@ pub(crate) async fn run() -> Result<()> {
     let overlay_window = OverlayWindow::new()?;
     let selection_window = SelectionWindow::new()?;
     let textbox_window = TextboxWindow::new()?;
+    crate::markdown::initialize(&textbox_window);
     let capture_toolbar = CaptureToolbarWindow::new()?;
     let capture_frame_window = CaptureFrameWindow::new()?;
     let recording_border_window = RecordingBorderWindow::new()?;
