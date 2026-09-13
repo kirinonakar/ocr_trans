@@ -870,6 +870,10 @@ export component CaptureToolbarWindow inherits Window {
                     width: 100%;
                     height: 100%;
                     enabled: ocr_language_index >= 0;
+                    changed has-hover => {
+                        active_tooltip = self.has-hover ? "Select OCR language" : "";
+                        tooltip_visibility_changed(self.has-hover ? "Select OCR language" : "");
+                    }
                     clicked => {
                         // The cursor is on the button while it is clicked. Anchoring the native
                         // menu from these in-button offsets keeps it right below the button even
