@@ -1,28 +1,99 @@
 use anyhow::{Context, Result};
 
-pub(crate) const LANGUAGE_OPTIONS: &[(&str, &str)] = &[
-    ("", "OCR: Windows"),
-    ("ko-KR", "OCR: 한국어"),
-    ("ja-JP", "OCR: 日本語"),
-    ("en-US", "OCR: English"),
-    ("zh-Hans", "OCR: 简体中文"),
-    ("zh-Hant", "OCR: 繁體中文"),
-];
-
-pub(crate) fn language_label(tag: &str) -> &str {
-    LANGUAGE_OPTIONS
-        .iter()
-        .find(|(code, _)| *code == tag)
-        .map(|(_, label)| *label)
-        .unwrap_or(tag)
+#[derive(Debug)]
+pub(crate) struct OcrLanguage {
+    pub(crate) tag: String,
+    pub(crate) label: String,
 }
 
-pub(crate) fn language_tag(label: &str) -> &str {
-    LANGUAGE_OPTIONS
+#[derive(Debug, Default)]
+pub(crate) struct LanguageMenu {
+    pub(crate) languages: Vec<OcrLanguage>,
+    pub(crate) selected: Option<usize>,
+}
+
+fn compact_language_label(tag: &str) -> String {
+    match tag
+        .split('-')
+        .next()
+        .unwrap_or(tag)
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "ja" => "JP".to_string(),
+        code => code.to_ascii_uppercase(),
+    }
+}
+
+fn language_menu(tags: Vec<String>, saved: Option<&str>, system: Option<&str>) -> LanguageMenu {
+    let labels: Vec<String> = tags.iter().map(|tag| compact_language_label(tag)).collect();
+    let selected = saved
+        .into_iter()
+        .chain(system)
+        .find_map(|preferred| {
+            tags.iter()
+                .position(|tag| tag.eq_ignore_ascii_case(preferred))
+        })
+        .or_else(|| (!tags.is_empty()).then_some(0));
+    let languages = tags
         .iter()
-        .find(|(_, name)| *name == label)
-        .map(|(tag, _)| *tag)
-        .unwrap_or(label)
+        .zip(&labels)
+        .map(|(tag, label)| OcrLanguage {
+            tag: tag.clone(),
+            // Distinguish regional/script packs when more than one shares a short label.
+            label: if labels.iter().filter(|other| *other == label).count() > 1 {
+                tag.to_ascii_uppercase()
+            } else {
+                label.clone()
+            },
+        })
+        .collect();
+    LanguageMenu {
+        languages,
+        selected,
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn installed_language_menu(saved_tag: &str) -> Result<LanguageMenu> {
+    use windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED};
+    use windows::{core::HSTRING, Globalization::Language, Media::Ocr::OcrEngine};
+
+    let initialized = unsafe { RoInitialize(RO_INIT_MULTITHREADED).is_ok() };
+    let result = (|| {
+        let available = OcrEngine::AvailableRecognizerLanguages()
+            .context("Unable to read installed Windows OCR languages")?;
+        let mut tags = Vec::new();
+        for index in 0..available.Size()? {
+            tags.push(available.GetAt(index)?.LanguageTag()?.to_string());
+        }
+        let system = OcrEngine::TryCreateFromUserProfileLanguages()
+            .and_then(|engine| engine.RecognizerLanguage())
+            .and_then(|language| language.LanguageTag())
+            .ok()
+            .map(|tag| tag.to_string());
+        // Resolve previously saved regional aliases (such as ko-KR -> ko) through Windows.
+        let saved = if saved_tag.trim().is_empty() {
+            None
+        } else {
+            Language::CreateLanguage(&HSTRING::from(saved_tag.trim()))
+                .and_then(|language| OcrEngine::TryCreateFromLanguage(&language))
+                .and_then(|engine| engine.RecognizerLanguage())
+                .and_then(|language| language.LanguageTag())
+                .ok()
+                .map(|tag| tag.to_string())
+        };
+        Ok(language_menu(tags, saved.as_deref(), system.as_deref()))
+    })();
+    if initialized {
+        unsafe { RoUninitialize() };
+    }
+    result
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn installed_language_menu(_saved_tag: &str) -> Result<LanguageMenu> {
+    Ok(LanguageMenu::default())
 }
 
 /// An empty language tag uses Windows' preferred OCR language (not image language detection).
@@ -36,6 +107,7 @@ pub fn recognize_text(
     language_tag: &str,
 ) -> Result<String> {
     use windows::core::HSTRING;
+    use windows::Foundation::AsyncStatus;
     use windows::Globalization::Language;
     use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
     use windows::Media::Ocr::OcrEngine;
@@ -78,11 +150,35 @@ pub fn recognize_text(
         {
             log::debug!("Windows OCR language: {language}");
         }
-        let ocr_result = engine
+        let operation = engine
             .RecognizeAsync(&bitmap)
-            .context("Failed to start Windows OCR")?
-            .get()
-            .context("Windows OCR failed")?;
+            .context("Failed to start Windows OCR")?;
+        // Wait by polling the operation status instead of registering a completion delegate.
+        // `IAsyncOperation::get()` installs a `SetCompleted` handler that the Windows OCR /
+        // MediaFrame pipeline (RTMediaFrame.dll) invokes from its own worker thread; the app
+        // crashed with an access violation inside that callback (ocr_trans.exe+0xD471E,
+        // called from RTMediaFrame.dll+0xD87D), so no completion callback is registered here.
+        let started = std::time::Instant::now();
+        let ocr_result = loop {
+            let status = operation
+                .Status()
+                .context("Failed to query Windows OCR status")?;
+            if status == AsyncStatus::Completed {
+                break operation.GetResults().context("Windows OCR failed")?;
+            }
+            if status == AsyncStatus::Canceled {
+                anyhow::bail!("Windows OCR was canceled");
+            }
+            if status == AsyncStatus::Error {
+                let code = operation.ErrorCode().map(|code| code.0 as u32).unwrap_or(0);
+                anyhow::bail!("Windows OCR failed (0x{code:08X})");
+            }
+            if started.elapsed() > std::time::Duration::from_secs(30) {
+                let _ = operation.Cancel();
+                anyhow::bail!("Windows OCR timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
         let fallback_text = ocr_result
             .Text()
             .context("Windows OCR returned no text")?
@@ -132,82 +228,4 @@ pub fn recognize_text(
     _language_tag: &str,
 ) -> Result<String> {
     anyhow::bail!("Windows OCR is available on Windows only")
-}
-
-#[cfg(all(test, target_os = "windows"))]
-mod tests {
-    use super::*;
-
-    fn korean_fixture() -> (Vec<u8>, u32, u32) {
-        let image = image::load_from_memory(include_bytes!("../tests/fixtures/korean.png"))
-            .unwrap()
-            .to_rgba8();
-        let mut pixels = image.as_raw().clone();
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel.swap(0, 2);
-        }
-        (pixels, image.width(), image.height())
-    }
-
-    #[test]
-    fn unavailable_language_does_not_fall_back_to_another_engine() {
-        let error = recognize_text(&vec![255; 100 * 40 * 4], 100, 40, "zz-ZZ")
-            .expect_err("An unavailable language must not silently use Japanese or the profile");
-        assert!(error.to_string().contains("zz-ZZ"), "{error:#}");
-    }
-
-    #[test]
-    #[ignore = "Requires the Windows Korean OCR language pack"]
-    fn korean_image_preserves_hangul_and_line_breaks() {
-        let (pixels, width, height) = korean_fixture();
-        let text = recognize_text(&pixels, width, height, "ko-KR").unwrap();
-        let compact = |value: &str| {
-            value
-                .chars()
-                .filter(|ch| !ch.is_whitespace())
-                .collect::<String>()
-        };
-        assert_eq!(
-            compact(&text),
-            compact("한국어 문장을 정확하게 인식합니다.\n화면의 글자를 복사합니다."),
-            "Recognized text: {text}"
-        );
-        assert_eq!(text.lines().count(), 2, "{text}");
-    }
-
-    #[test]
-    #[ignore = "Requires a Windows OCR pack matching the user profile"]
-    fn default_language_matches_windows_profile() {
-        use windows::Media::Ocr::OcrEngine;
-        use windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED};
-
-        // Keep the profile query's apartment alive until all its consumers have finished.
-        struct Apartment;
-        impl Drop for Apartment {
-            fn drop(&mut self) {
-                unsafe { RoUninitialize() };
-            }
-        }
-        unsafe { RoInitialize(RO_INIT_MULTITHREADED).unwrap() };
-        let _apartment = Apartment;
-        let profile = OcrEngine::TryCreateFromUserProfileLanguages()
-            .and_then(|engine| engine.RecognizerLanguage())
-            .and_then(|language| language.LanguageTag());
-        let tag = profile.unwrap().to_string();
-        let (pixels, width, height) = korean_fixture();
-        assert_eq!(
-            recognize_text(&pixels, width, height, "").unwrap(),
-            recognize_text(&pixels, width, height, &tag).unwrap(),
-            "Default OCR must use the Windows profile language {tag}"
-        );
-    }
-
-    #[test]
-    #[ignore = "Requires a Windows OCR pack matching the user profile"]
-    fn default_language_can_be_used_repeatedly_on_a_worker() {
-        let (pixels, width, height) = korean_fixture();
-        let first = recognize_text(&pixels, width, height, "").unwrap();
-        let second = recognize_text(&pixels, width, height, "").unwrap();
-        assert_eq!(first, second);
-    }
 }

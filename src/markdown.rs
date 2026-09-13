@@ -3,7 +3,7 @@ use slint::{ComponentHandle, ModelRc, StyledText, VecModel};
 use std::rc::Rc;
 use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
 
-use crate::{MarkdownBlock, MarkdownCell, TextboxWindow};
+use crate::{MarkdownBlock, MarkdownCell, MarkdownRow, TextboxWindow};
 
 pub(crate) fn initialize(window: &TextboxWindow) {
     window.on_render_markdown(|source| ModelRc::from(Rc::new(VecModel::from(render(&source)))));
@@ -36,15 +36,22 @@ impl Inline {
         }
     }
 
-    fn cell(&mut self, code: bool) -> MarkdownCell {
+    fn cell(&mut self, code: bool, heading: bool) -> MarkdownCell {
         let inline = std::mem::take(self);
         let content = if code {
             StyledText::from_plain_text(&inline.plain)
         } else {
-            StyledText::from_markdown(&inline.markdown)
+            // Bold header cells through the same inline markdown pipeline: the
+            // escaped source is wrapped as-is, so stray markup stays literal.
+            let markdown = if heading && !inline.markdown.trim().is_empty() {
+                format!("**{}**", inline.markdown.trim())
+            } else {
+                inline.markdown
+            };
+            StyledText::from_markdown(&markdown)
                 .unwrap_or_else(|_| StyledText::from_plain_text(&inline.plain))
         };
-        MarkdownCell { content }
+        MarkdownCell { content, heading }
     }
 
     fn start_style(&mut self, open: &'static str, close: &'static str) {
@@ -77,8 +84,8 @@ fn block() -> MarkdownBlock {
     }
 }
 
-fn model(cells: Vec<MarkdownCell>) -> ModelRc<MarkdownCell> {
-    ModelRc::from(Rc::new(VecModel::from(cells)))
+fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
+    ModelRc::from(Rc::new(VecModel::from(items)))
 }
 
 /// CommonMark rejects closing emphasis between punctuation and a CJK suffix, e.g.
@@ -147,23 +154,215 @@ fn cjk_emphasis(source: &str) -> String {
     output
 }
 
+/// Arrow commands from LaTeX math (`$\leftarrow$` and friends) mapped to Unicode arrows.
+/// OCR and translation results often contain them, but the textbox only understands inline
+/// markdown, so they would otherwise be shown verbatim.
+fn latex_arrow(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "leftarrow" | "gets" => "←",
+        "rightarrow" | "to" => "→",
+        "leftrightarrow" => "↔",
+        "Leftarrow" => "⇐",
+        "Rightarrow" => "⇒",
+        "Leftrightarrow" => "⇔",
+        "Longleftarrow" => "⟸",
+        "Longrightarrow" | "implies" => "⟹",
+        "Longleftrightarrow" | "iff" => "⟺",
+        "uparrow" => "↑",
+        "downarrow" => "↓",
+        "updownarrow" => "↕",
+        "Uparrow" => "⇑",
+        "Downarrow" => "⇓",
+        "Updownarrow" => "⇕",
+        "mapsto" => "↦",
+        "longmapsto" => "⟼",
+        "longleftarrow" => "⟵",
+        "longrightarrow" => "⟶",
+        "longleftrightarrow" => "⟷",
+        "nearrow" => "↗",
+        "searrow" => "↘",
+        "swarrow" => "↙",
+        "nwarrow" => "↖",
+        "hookleftarrow" => "↩",
+        "hookrightarrow" => "↪",
+        "leftarrowtail" => "↢",
+        "rightarrowtail" => "↣",
+        "twoheadleftarrow" => "↞",
+        "twoheadrightarrow" => "↠",
+        "leftleftarrows" => "⇇",
+        "rightrightarrows" => "⇉",
+        "upuparrows" => "⇈",
+        "downdownarrows" => "⇊",
+        "leftrightarrows" => "⇆",
+        "rightleftarrows" => "⇄",
+        "leftrightharpoons" => "⇋",
+        "rightleftharpoons" => "⇌",
+        "leftharpoonup" => "↼",
+        "leftharpoondown" => "↽",
+        "rightharpoonup" => "⇀",
+        "rightharpoondown" => "⇁",
+        "upharpoonleft" => "↿",
+        "upharpoonright" => "↾",
+        "downharpoonleft" => "⇃",
+        "downharpoonright" => "⇂",
+        "rightsquigarrow" | "leadsto" => "↝",
+        "leftrightsquigarrow" => "↭",
+        "curvearrowleft" => "↶",
+        "curvearrowright" => "↷",
+        "circlearrowleft" => "↺",
+        "circlearrowright" => "↻",
+        "dashleftarrow" => "⇠",
+        "dashrightarrow" => "⇢",
+        "Lleftarrow" => "⇚",
+        "Rrightarrow" => "⇛",
+        "Lsh" => "↰",
+        "Rsh" => "↱",
+        "looparrowleft" => "↫",
+        "looparrowright" => "↬",
+        "nleftarrow" => "↚",
+        "nrightarrow" => "↛",
+        "nleftrightarrow" => "↮",
+        "nLeftarrow" => "⇍",
+        "nRightarrow" => "⇏",
+        "nLeftrightarrow" => "⇎",
+        _ => return None,
+    })
+}
+
+/// Replace every known `\command` arrow with its Unicode symbol.
+fn replace_latex_arrows(text: &str) -> String {
+    if !text.contains('\\') {
+        return text.to_string();
+    }
+    let mut output = String::with_capacity(text.len());
+    let mut index = 0;
+    while index < text.len() {
+        let character = text[index..].chars().next().unwrap();
+        if character != '\\' {
+            output.push(character);
+            index += character.len_utf8();
+            continue;
+        }
+        let start = index + 1;
+        let end = start + text[start..].bytes().take_while(u8::is_ascii_alphabetic).count();
+        match latex_arrow(&text[start..end]) {
+            Some(symbol) => {
+                output.push_str(symbol);
+                index = end;
+            }
+            None => {
+                output.push('\\');
+                index += 1;
+            }
+        }
+    }
+    output
+}
+
+/// Display-only pass: render LaTeX arrows as Unicode symbols and drop the `$` delimiters of
+/// the math spans that contain them, so `$\leftarrow$` becomes `←`. Code spans, code blocks,
+/// links, unknown commands and currency keep their literal text; copying uses the source.
+fn latex_arrows(source: &str) -> String {
+    if !source.contains('\\') {
+        return source.to_string();
+    }
+    let mut protected = vec![false; source.len()];
+    for (event, range) in Parser::new(source).into_offset_iter() {
+        if matches!(
+            event,
+            Event::Code(_)
+                | Event::Html(_)
+                | Event::InlineHtml(_)
+                | Event::Start(Tag::CodeBlock(_) | Tag::Link { .. } | Tag::Image { .. })
+        ) {
+            protected[range].fill(true);
+        }
+    }
+
+    let mut output = String::with_capacity(source.len());
+    let mut index = 0;
+    while index < source.len() {
+        let character = source[index..].chars().next().unwrap();
+        if protected[index] {
+            output.push(character);
+            index += character.len_utf8();
+            continue;
+        }
+        match character {
+            '$' => {
+                // Pair the delimiters on the same line so stray currency dollars stay intact.
+                let line_end = source[index + 1..]
+                    .find('\n')
+                    .map_or(source.len(), |offset| index + 1 + offset);
+                let closer = source[index + 1..line_end]
+                    .match_indices('$')
+                    .map(|(offset, _)| index + 1 + offset)
+                    .find(|position| !protected[*position]);
+                match closer {
+                    // `$$` opens nothing: keep the first dollar and rescan from the next one.
+                    Some(end) if end == index + 1 => {
+                        output.push('$');
+                        index += 1;
+                    }
+                    Some(end) => {
+                        let inner = &source[index + 1..end];
+                        let converted = replace_latex_arrows(inner);
+                        if converted == inner {
+                            output.push_str(&source[index..=end]);
+                        } else {
+                            output.push_str(&converted);
+                        }
+                        index = end + 1;
+                    }
+                    None => {
+                        output.push('$');
+                        index += 1;
+                    }
+                }
+            }
+            '\\' => {
+                let start = index + 1;
+                let end =
+                    start + source[start..].bytes().take_while(u8::is_ascii_alphabetic).count();
+                match latex_arrow(&source[start..end]) {
+                    Some(symbol) => {
+                        output.push_str(symbol);
+                        index = end;
+                    }
+                    None => {
+                        output.push('\\');
+                        index += 1;
+                    }
+                }
+            }
+            _ => {
+                output.push(character);
+                index += character.len_utf8();
+            }
+        }
+    }
+    output
+}
+
 /// Parse blocks separately because Slint's inline renderer does not support headings,
 /// fenced code, tables or quotes. The source string is never changed or used for copying.
 fn render(source: &str) -> Vec<MarkdownBlock> {
-    let display_source = cjk_emphasis(source);
+    let display_source = cjk_emphasis(&latex_arrows(source));
     let options =
         Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS;
     let mut blocks = Vec::new();
     let mut current = block();
     let mut inline = Inline::default();
     let mut cells = Vec::new();
+    let mut table_rows: Vec<Vec<MarkdownCell>> = Vec::new();
     let mut lists: Vec<Option<u64>> = Vec::new();
     let mut quote_depth = 0;
     let mut in_table = false;
+    let mut in_table_head = false;
 
     fn flush(blocks: &mut Vec<MarkdownBlock>, current: &mut MarkdownBlock, inline: &mut Inline) {
         if !inline.plain.is_empty() || current.code {
-            current.cells = model(vec![inline.cell(current.code)]);
+            current.cells = model(vec![inline.cell(current.code, false)]);
             blocks.push(current.clone());
         }
         // Keep the container context for continuation paragraphs and nested blocks.
@@ -171,6 +370,34 @@ fn render(source: &str) -> Vec<MarkdownBlock> {
         current.font_scale = 1.0;
         current.heading = false;
         current.code = false;
+    }
+
+    // Renders a whole table as one block: every row shares a single grid so the
+    // column widths line up, and short rows are padded to the header's columns.
+    fn finish_table(
+        blocks: &mut Vec<MarkdownBlock>,
+        current: &mut MarkdownBlock,
+        rows: &mut Vec<Vec<MarkdownCell>>,
+    ) {
+        let columns = rows.iter().map(|row| row.len()).max().unwrap_or(0).max(1);
+        let table_rows: Vec<MarkdownRow> = rows
+            .drain(..)
+            .map(|mut row| {
+                row.resize_with(columns, || MarkdownCell {
+                    content: StyledText::from_plain_text(""),
+                    heading: false,
+                });
+                MarkdownRow { cells: model(row) }
+            })
+            .collect();
+        if !table_rows.is_empty() {
+            current.columns = columns as i32;
+            current.rows = model(table_rows);
+            blocks.push(current.clone());
+        }
+        current.table = false;
+        current.columns = 0;
+        current.rows = Default::default();
     }
 
     for event in Parser::new_ext(&display_source, options) {
@@ -224,18 +451,17 @@ fn render(source: &str) -> Vec<MarkdownBlock> {
             Event::Start(Tag::Table(_)) => {
                 flush(&mut blocks, &mut current, &mut inline);
                 in_table = true;
-                current.table_row = true;
+                current.table = true;
             }
-            Event::Start(Tag::TableHead) => current.heading = true,
-            Event::End(TagEnd::TableCell) => cells.push(inline.cell(false)),
+            Event::Start(Tag::TableHead) => in_table_head = true,
+            Event::End(TagEnd::TableCell) => cells.push(inline.cell(false, in_table_head)),
             Event::End(TagEnd::TableHead | TagEnd::TableRow) => {
-                current.cells = model(std::mem::take(&mut cells));
-                blocks.push(current.clone());
-                current.heading = false;
+                table_rows.push(std::mem::take(&mut cells));
+                in_table_head = false;
             }
             Event::End(TagEnd::Table) => {
                 in_table = false;
-                current.table_row = false;
+                finish_table(&mut blocks, &mut current, &mut table_rows);
             }
             Event::Rule => {
                 flush(&mut blocks, &mut current, &mut inline);
@@ -266,7 +492,9 @@ fn render(source: &str) -> Vec<MarkdownBlock> {
             _ => {}
         }
     }
-    if !in_table {
+    if in_table {
+        finish_table(&mut blocks, &mut current, &mut table_rows);
+    } else {
         flush(&mut blocks, &mut current, &mut inline);
     }
     blocks
@@ -321,13 +549,41 @@ mod tests {
             content(&blocks[4], 0),
             StyledText::from_markdown("☑ done").unwrap()
         );
-        assert!(blocks[5].table_row && blocks[5].heading);
-        assert_eq!(blocks[5].cells.row_count(), 2);
+        // A table becomes a single block: its rows share one grid so the columns
+        // line up, and the header cells carry bold content and the heading flag.
+        let table = &blocks[5];
+        assert!(table.table);
+        assert_eq!(table.columns, 2);
+        assert_eq!(table.rows.row_count(), 2);
+        let header = table.rows.row_data(0).unwrap();
+        assert!(header.cells.row_data(0).unwrap().heading);
         assert_eq!(
-            content(&blocks[6], 0),
+            header.cells.row_data(0).unwrap().content,
+            StyledText::from_markdown("**A**").unwrap()
+        );
+        let body = table.rows.row_data(1).unwrap();
+        assert!(!body.cells.row_data(0).unwrap().heading);
+        assert_eq!(
+            body.cells.row_data(0).unwrap().content,
             StyledText::from_markdown("**one**").unwrap()
         );
-        assert!(blocks[7].rule);
+        assert_eq!(
+            body.cells.row_data(1).unwrap().content,
+            StyledText::from_markdown("two").unwrap()
+        );
+        assert!(blocks[6].rule);
+    }
+
+    #[test]
+    fn table_rows_are_padded_to_the_header_column_count() {
+        let blocks = render("| A | B |
+| - | - |
+| only |");
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].table);
+        assert_eq!(blocks[0].columns, 2);
+        assert_eq!(blocks[0].rows.row_count(), 2);
+        assert_eq!(blocks[0].rows.row_data(1).unwrap().cells.row_count(), 2);
     }
 
     #[test]
@@ -446,8 +702,68 @@ mod tests {
             .unwrap();
             assert_eq!(window.get_text(), source);
         }
+        // Long results must scroll: the block rows clamp their minimum height to 0px, which
+        // defeats the flickable's automatic viewport sizing, so the ScrollView binds its
+        // viewport-height to the wrapped content height.
+        {
+            let (width, height) = (600u32, 260u32);
+            surface.set_size(slint::PhysicalSize::new(width, height));
+            let render = |window: &TextboxWindow| {
+                window.window().request_redraw();
+                let mut pixels = vec![slint::Rgb8Pixel::default(); (width * height) as usize];
+                assert!(surface.draw_if_needed(|renderer| {
+                    renderer.render(&mut pixels, width as usize);
+                }));
+                pixels
+            };
+            let before = render(&window);
+            window.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(300., 150.),
+                delta_x: 0.,
+                delta_y: -120.,
+            });
+            let after = render(&window);
+            let moved = before.iter().zip(after.iter()).filter(|(a, b)| a != b).count();
+            assert!(moved > 0, "the mouse wheel must scroll the result window");
+        }
         window.set_text("".into());
         assert_eq!(window.get_text(), "");
         window.hide().unwrap();
     }
+
+    #[test]
+    fn latex_arrows_in_math_spans_become_unicode_arrows() {
+        for (source, expected) in [
+            (r"$\leftarrow$", "←"),
+            (r"$\rightarrow$", "→"),
+            (r"$\to$와 $\gets$", "→와 ←"),
+            (r"$\Leftrightarrow$", "⇔"),
+            (r"$\Longrightarrow$", "⟹"),
+            (r"$\mapsto$", "↦"),
+            (r"$\uparrow \downarrow$", "↑ ↓"),
+            (r"$x \to y$", "x → y"),
+            (r"A \rightarrow B", "A → B"),
+        ] {
+            assert_eq!(latex_arrows(source), expected, "{source}");
+        }
+        assert_eq!(
+            content(&render(r"A $\leftarrow$ B")[0], 0),
+            StyledText::from_plain_text("A ← B")
+        );
+    }
+
+    #[test]
+    fn latex_arrows_leave_code_currency_and_unknown_commands_alone() {
+        for source in [
+            r"가격은 $5",
+            r"$5 and $10",
+            r"`$\leftarrow$`",
+            "```\n$\\leftarrow$\n```",
+            r"$\alpha$",
+            r"\leftarrowX",
+        ] {
+            assert_eq!(latex_arrows(source), source);
+        }
+    }
+
 }

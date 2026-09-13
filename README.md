@@ -16,7 +16,7 @@ Capture toolbar (dark theme)
 - **Change Detection**: Intelligent logic avoids redundant API calls by detecting screen changes.
 - **Customizable Overlay**: Instantly change background color, text color, transparency, and separate textbox to match your preference.
 - **Textbox mode & Click-Through**: Enable Textbox mode to hide the overlay's close button and allow **Click-Through Interaction**, letting you click applications behind the capture area while still seeing the translation boundary.
-- **Markdown results**: The textbox renders headings, emphasis (including quoted Korean text followed by particles), lists, quotes, code blocks, and tables. Automatic clipboard sync, **Copy original**, and **Ctrl+C** retain the original Markdown text. Links display their labels; images display their alternative text.
+- **Markdown results**: The textbox renders headings, emphasis (including quoted Korean text followed by particles), lists, quotes, code blocks, and tables. Automatic clipboard sync and **Ctrl+C** retain the original Markdown text. Links display their labels; images display their alternative text.
 - **Dynamic scaling**: Font size automatically adjusts to fit the text within your selected area.
 - **Clipboard Sync**: Translated text is automatically copied to the system clipboard for easy use elsewhere.
 - **Multi-API Support**: 
@@ -32,7 +32,7 @@ Capture toolbar (dark theme)
   - Frame mode opens a movable, resizable transparent capture frame with its own Capture and Record controls.
   - Fullscreen / Window / Scrolling (Windows only) / Region (`Esc` to cancel).
   - One-shot OCR, OCR+Translate, VLM, color picker, ruler.
-  - For one-shot OCR and OCR+Translate, select the source language in the toolbar's **OCR** dropdown (e.g. **OCR: 한국어** for Korean). The selection is saved across restarts. **OCR: Windows** uses your Windows preferred OCR language; it does not detect the image language. Install the matching Windows OCR language pack if it is unavailable. VLM uses the selected vision model independently.
+  - For one-shot OCR and OCR+Translate, the language dropdown lists only installed Windows OCR packs with short labels such as **KO**, **JP**, and **EN**.
   - PNG/MP4 saved as `YYYY-MM-DD_001...` + clipboard copy; recording needs `ffmpeg`.
 
 ## Prerequisites

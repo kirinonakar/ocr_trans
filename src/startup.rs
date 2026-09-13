@@ -25,22 +25,24 @@ pub(crate) fn initialize_ui(
         .window()
         .set_size(slint::LogicalSize::new(CAPTURE_TOOLBAR_WIDTH, 48.0));
     let mut initial_settings = load_app_settings();
-    let language_label = crate::ocr::language_label(initial_settings.ocr_language.trim());
-    let mut language_options: Vec<slint::SharedString> = crate::ocr::LANGUAGE_OPTIONS
-        .iter()
-        .map(|(_, label)| (*label).into())
+    let language_menu = crate::ocr::installed_language_menu(&initial_settings.ocr_language)
+        .unwrap_or_else(|error| {
+            log::warn!("Unable to initialize OCR languages: {error:#}");
+            Default::default()
+        });
+    let language_options: Vec<slint::SharedString> = language_menu.languages.iter()
+        .map(|language| language.label.as_str().into())
         .collect();
-    // Preserve custom BCP-47 language tags configured in the INI file.
-    if !language_options
-        .iter()
-        .any(|label| label.as_str() == language_label)
-    {
-        language_options.push(language_label.into());
-    }
+    let language_tags: Vec<slint::SharedString> = language_menu.languages.iter()
+        .map(|language| language.tag.as_str().into())
+        .collect();
     capture_toolbar.set_ocr_language_options(
         std::rc::Rc::new(slint::VecModel::from(language_options)).into(),
     );
-    capture_toolbar.set_ocr_language(language_label.into());
+    capture_toolbar.set_ocr_language_tags(
+        std::rc::Rc::new(slint::VecModel::from(language_tags)).into(),
+    );
+    capture_toolbar.set_ocr_language_index(language_menu.selected.map_or(-1, |index| index as i32));
     let initial_capture_folder = if !initial_settings.capture_folder.trim().is_empty()
         && Path::new(initial_settings.capture_folder.trim()).is_dir()
     {

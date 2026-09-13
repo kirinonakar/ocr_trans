@@ -9,6 +9,45 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HTCAPTION, LWA_ALPHA, WM_NCLBUTTONDOWN, WS_EX_LAYERED, WS_EX_TRANSPARENT,
 };
 
+/// Shows an OS-owned menu, which is not clipped to the Slint toolbar's client area.
+/// `screen_x`/`screen_y` locate the menu's top-left corner in screen coordinates.
+#[cfg(target_os = "windows")]
+pub fn choose_popup_item(
+    hwnd: HWND,
+    labels: &[String],
+    selected: i32,
+    screen_x: i32,
+    screen_y: i32,
+) -> windows::core::Result<Option<usize>> {
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, DestroyMenu, PostMessageW, SetForegroundWindow,
+        TrackPopupMenu, HMENU, MF_CHECKED, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD, WM_NULL,
+    };
+
+    struct Menu(HMENU);
+    impl Drop for Menu {
+        fn drop(&mut self) {
+            unsafe { let _ = DestroyMenu(self.0); }
+        }
+    }
+
+    unsafe {
+        let menu = Menu(CreatePopupMenu()?);
+        for (index, label) in labels.iter().enumerate() {
+            let label: Vec<u16> = label.encode_utf16().chain(Some(0)).collect();
+            let flags = if index as i32 == selected { MF_STRING | MF_CHECKED } else { MF_STRING };
+            AppendMenuW(menu.0, flags, index + 1, PCWSTR(label.as_ptr()))?;
+        }
+        let _ = SetForegroundWindow(hwnd);
+        let command = TrackPopupMenu(menu.0, TPM_RETURNCMD | TPM_NONOTIFY,
+            screen_x, screen_y, 0, hwnd, None).0;
+        // Ensure a subsequent opening also dismisses correctly on an outside click.
+        let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+        Ok((command > 0).then(|| command as usize - 1).filter(|index| *index < labels.len()))
+    }
+}
+
 /// Sets the window to be click-through by applying WS_EX_TRANSPARENT and WS_EX_LAYERED styles.
 #[allow(dead_code)]
 pub fn set_click_through(hwnd: HWND, enable: bool) {

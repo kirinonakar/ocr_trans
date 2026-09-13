@@ -32,9 +32,46 @@ pub(crate) fn register_callbacks(
 ) {
     let frame_initialized = Arc::new(Mutex::new(false));
 
-    capture_toolbar.on_ocr_language_changed(move |label| {
-        crate::settings::save_ocr_language(crate::ocr::language_tag(label.as_str()));
-    });
+    #[cfg(target_os = "windows")]
+    {
+        let toolbar_weak = capture_toolbar.as_weak();
+        capture_toolbar.on_ocr_language_menu_requested(move |offset_x, offset_bottom| {
+            let toolbar_weak = toolbar_weak.clone();
+            // The cursor is on the button while it is clicked. Deriving the anchor from that
+            // screen point keeps the menu right below the button on every monitor and DPI setup.
+            let (cursor_x, cursor_y) = capture::cursor_position();
+            // Let Slint finish the button event before entering the native menu's message loop.
+            slint::Timer::single_shot(Duration::from_millis(1), move || {
+                use slint::Model;
+                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                let Some(toolbar) = toolbar_weak.upgrade() else { return; };
+                let labels: Vec<String> = toolbar.get_ocr_language_options().iter()
+                    .map(|label| label.to_string()).collect();
+                if labels.is_empty() || toolbar.get_recording() { return; }
+                let selected = toolbar.get_ocr_language_index();
+                let result = toolbar.window().with_winit_window(|window| {
+                    let handle = window.window_handle().ok()?;
+                    let RawWindowHandle::Win32(handle) = handle.as_raw() else { return None; };
+                    let hwnd = windows::Win32::Foundation::HWND(handle.hwnd.get() as _);
+                    let scale = window.scale_factor();
+                    let anchor_x = cursor_x - (offset_x as f64 * scale).round() as i32;
+                    let anchor_y = cursor_y + (offset_bottom as f64 * scale).round() as i32;
+                    Some(win_utils::choose_popup_item(hwnd, &labels, selected, anchor_x, anchor_y))
+                }).flatten();
+                match result {
+                    Some(Ok(Some(index))) => {
+                        if let Some(tag) = toolbar.get_ocr_language_tags().row_data(index) {
+                            toolbar.set_ocr_language_index(index as i32);
+                            crate::settings::save_ocr_language(tag.as_str());
+                        }
+                    }
+                    Some(Err(error)) => set_capture_toolbar_status(&toolbar,
+                        format!("Unable to open OCR language menu: {error}")),
+                    _ => {}
+                }
+            });
+        });
+    }
 
     let toolbar_weak_textbox_toggle = capture_toolbar.as_weak();
     let textbox_weak_toggle = textbox_window.as_weak();
