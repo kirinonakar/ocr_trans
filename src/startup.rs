@@ -25,11 +25,24 @@ pub(crate) fn initialize_ui(
         .window()
         .set_size(slint::LogicalSize::new(CAPTURE_TOOLBAR_WIDTH, 48.0));
     let mut initial_settings = load_app_settings();
-    let language_menu = crate::ocr::installed_language_menu(&initial_settings.ocr_language)
-        .unwrap_or_else(|error| {
+    // Windows OCR is enumerated on a worker thread: the `windows` crate initializes the caller
+    // into the MTA, which makes Winit's later `OleInitialize` on the main thread fail.
+    let language_menu = match std::thread::spawn({
+        let saved_language = initial_settings.ocr_language.clone();
+        move || crate::ocr::installed_language_menu(&saved_language)
+    })
+    .join()
+    {
+        Ok(Ok(menu)) => menu,
+        Ok(Err(error)) => {
             log::warn!("Unable to initialize OCR languages: {error:#}");
             Default::default()
-        });
+        }
+        Err(_) => {
+            log::warn!("The OCR language worker panicked");
+            Default::default()
+        }
+    };
     let language_options: Vec<slint::SharedString> = language_menu.languages.iter()
         .map(|language| language.label.as_str().into())
         .collect();

@@ -55,12 +55,44 @@ fn language_menu(tags: Vec<String>, saved: Option<&str>, system: Option<&str>) -
 }
 
 #[cfg(target_os = "windows")]
+pub(crate) fn enter_mta_apartment() {
+    use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
+
+    pin_process_mta();
+    thread_local! {
+        // Joining the apartment is intentionally never undone. COM tears down the process MTA when
+        // the last thread uninitializes it, and that teardown unloads the WinRT implementation
+        // DLLs behind activation factories already cached by the `windows` crate. Later OCR calls
+        // then dereference an unmapped vtable and crash.
+        static APARTMENT: () = {
+            let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
+        };
+    }
+    APARTMENT.with(|_| ());
+}
+
+/// Pins an MTA for the whole process lifetime. `CoIncrementMTAUsage` only ever increments the
+/// usage count, so the MTA and the DLLs hosting cached activation factories stay alive even
+/// after the thread that created them exits. Must not run on Winit's main thread before its
+/// `OleInitialize` call, which would fail with `RPC_E_CHANGED_MODE`.
+#[cfg(target_os = "windows")]
+fn pin_process_mta() {
+    use windows::Win32::System::Com::CoIncrementMTAUsage;
+
+    static PINNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    PINNED.get_or_init(|| {
+        // The cookie is never decremented: reusing the process MTA is what keeps the cached
+        // factory vtables mapped.
+        let _ = unsafe { CoIncrementMTAUsage() };
+    });
+}
+
+#[cfg(target_os = "windows")]
 pub(crate) fn installed_language_menu(saved_tag: &str) -> Result<LanguageMenu> {
-    use windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED};
     use windows::{core::HSTRING, Globalization::Language, Media::Ocr::OcrEngine};
 
-    let initialized = unsafe { RoInitialize(RO_INIT_MULTITHREADED).is_ok() };
-    let result = (|| {
+    enter_mta_apartment();
+    (|| {
         let available = OcrEngine::AvailableRecognizerLanguages()
             .context("Unable to read installed Windows OCR languages")?;
         let mut tags = Vec::new();
@@ -84,11 +116,7 @@ pub(crate) fn installed_language_menu(saved_tag: &str) -> Result<LanguageMenu> {
                 .map(|tag| tag.to_string())
         };
         Ok(language_menu(tags, saved.as_deref(), system.as_deref()))
-    })();
-    if initialized {
-        unsafe { RoUninitialize() };
-    }
-    result
+    })()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -112,14 +140,13 @@ pub fn recognize_text(
     use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
     use windows::Media::Ocr::OcrEngine;
     use windows::Security::Cryptography::CryptographicBuffer;
-    use windows::Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED};
 
     if width == 0 || height == 0 || bgra_pixels.len() < (width as usize * height as usize * 4) {
         anyhow::bail!("The OCR image buffer is invalid");
     }
 
-    let ro_initialized = unsafe { RoInitialize(RO_INIT_MULTITHREADED).is_ok() };
-    let result = (|| {
+    enter_mta_apartment();
+    (|| {
         let buffer = CryptographicBuffer::CreateFromByteArray(bgra_pixels)
             .context("Failed to create the Windows OCR buffer")?;
         let bitmap = SoftwareBitmap::CreateCopyFromBuffer(
@@ -211,13 +238,7 @@ pub fn recognize_text(
         } else {
             Ok(text)
         }
-    })();
-    if ro_initialized {
-        unsafe {
-            RoUninitialize();
-        }
-    }
-    result
+    })()
 }
 
 #[cfg(not(target_os = "windows"))]
