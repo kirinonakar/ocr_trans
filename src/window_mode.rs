@@ -5,7 +5,8 @@ use crate::capture_workflow::{
 use crate::settings::{save_app_mode, save_capture_folder, save_dark_theme, save_system_prompt};
 use crate::state::AppState;
 use crate::{
-    win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow, OverlayWindow, TextboxWindow,
+    win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow, OverlayWindow,
+    ShortcutSettingsWindow, TextboxWindow,
 };
 use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
@@ -17,6 +18,7 @@ pub(crate) fn register_callbacks(
     capture_frame_window: &CaptureFrameWindow,
     overlay_window: &OverlayWindow,
     textbox_window: &TextboxWindow,
+    shortcut_window: &ShortcutSettingsWindow,
     state: Arc<Mutex<AppState>>,
     folder_owner: Option<isize>,
     initial_dark_theme: bool,
@@ -70,6 +72,7 @@ pub(crate) fn register_callbacks(
     let toolbar_weak_main_theme = capture_toolbar.as_weak();
     let frame_weak_main_theme = capture_frame_window.as_weak();
     let textbox_weak_main_theme = textbox_window.as_weak();
+    let shortcut_weak_main_theme = shortcut_window.as_weak();
     main_window.on_theme_toggle_clicked(move || {
         let Some(main) = main_weak_main_theme.upgrade() else {
             return;
@@ -86,6 +89,9 @@ pub(crate) fn register_callbacks(
             textbox.set_dark_theme(dark_theme);
             #[cfg(target_os = "windows")]
             schedule_textbox_native_theme(textbox.as_weak(), 0);
+        }
+        if let Some(window) = shortcut_weak_main_theme.upgrade() {
+            window.set_dark_theme(dark_theme);
         }
         #[cfg(target_os = "windows")]
         {
@@ -172,6 +178,7 @@ pub(crate) fn register_callbacks(
     let toolbar_weak_toolbar_theme = capture_toolbar.as_weak();
     let frame_weak_toolbar_theme = capture_frame_window.as_weak();
     let textbox_weak_toolbar_theme = textbox_window.as_weak();
+    let shortcut_weak_toolbar_theme = shortcut_window.as_weak();
     capture_toolbar.on_theme_toggle_clicked(move || {
         let Some(toolbar) = toolbar_weak_toolbar_theme.upgrade() else {
             return;
@@ -185,6 +192,9 @@ pub(crate) fn register_callbacks(
             textbox.set_dark_theme(dark_theme);
             #[cfg(target_os = "windows")]
             schedule_textbox_native_theme(textbox.as_weak(), 0);
+        }
+        if let Some(window) = shortcut_weak_toolbar_theme.upgrade() {
+            window.set_dark_theme(dark_theme);
         }
         if let Some(main) = main_weak_toolbar_theme.upgrade() {
             main.set_dark_theme(dark_theme);

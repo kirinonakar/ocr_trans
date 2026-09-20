@@ -1,6 +1,7 @@
 use crate::state::AppState;
 use crate::text_layout::{calculate_font_size, clean_text};
-use crate::{api, capture, MainWindow, OverlayWindow, SelectionWindow, TextboxWindow};
+use crate::shortcuts::{HotkeyState, ToolbarAction};
+use crate::{api, capture, CaptureToolbarWindow, MainWindow, OverlayWindow, SelectionWindow, TextboxWindow};
 use global_hotkey::{hotkey::HotKey, GlobalHotKeyEvent};
 use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
@@ -11,10 +12,10 @@ pub(crate) fn start(
     overlay_window: &OverlayWindow,
     selection_window: &SelectionWindow,
     textbox_window: &TextboxWindow,
+    capture_toolbar: &CaptureToolbarWindow,
     state: Arc<Mutex<AppState>>,
     http_client: reqwest::Client,
-    hotkey_capture: HotKey,
-    hotkey_start_stop: HotKey,
+    hotkey_state: Arc<Mutex<HotkeyState>>,
     esc_hotkey: HotKey,
 ) {
     let state_for_worker = state.clone();
@@ -273,35 +274,81 @@ pub(crate) fn start(
     // Hotkey Event Loop - Dedicated Thread for Responsiveness
     let main_weak_hk = main_window.as_weak();
     let selection_weak_hk = selection_window.as_weak();
-    let hk_id = hotkey_capture.id();
-    let ss_id = hotkey_start_stop.id();
+    let toolbar_weak_hk = capture_toolbar.as_weak();
+    let state_hk = hotkey_state;
     let esc_id = esc_hotkey.id();
     std::thread::spawn(move || loop {
-        if let Ok(event) = GlobalHotKeyEvent::receiver().recv() {
-            if event.state == global_hotkey::HotKeyState::Pressed {
-                if event.id == hk_id {
-                    let main_weak = main_weak_hk.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(main) = main_weak.upgrade() {
-                            main.invoke_select_area_clicked();
-                        }
-                    });
-                } else if event.id == ss_id {
-                    let main_weak = main_weak_hk.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(main) = main_weak.upgrade() {
-                            main.invoke_start_stop_clicked();
-                        }
-                    });
-                } else if event.id == esc_id {
-                    let selection_weak = selection_weak_hk.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(selection) = selection_weak.upgrade() {
-                            selection.invoke_closed();
-                        }
-                    });
+        let Ok(event) = GlobalHotKeyEvent::receiver().recv() else {
+            continue;
+        };
+        if event.state != global_hotkey::HotKeyState::Pressed {
+            continue;
+        }
+
+        // Resolve the current bindings on every event so shortcuts stay in sync after the
+        // settings window re-registers them.
+        let (select_id, start_id, tool1, tool1_action, tool2, tool2_action) = {
+            let state = state_hk.lock().unwrap();
+            (
+                state.registered.select_area.map(|hotkey| hotkey.id()),
+                state.registered.start.map(|hotkey| hotkey.id()),
+                state.registered.toolbar1.map(|hotkey| hotkey.id()),
+                ToolbarAction::from_token(&state.config.toolbar1_action),
+                state.registered.toolbar2.map(|hotkey| hotkey.id()),
+                ToolbarAction::from_token(&state.config.toolbar2_action),
+            )
+        };
+
+        if Some(event.id) == select_id {
+            let main_weak = main_weak_hk.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(main) = main_weak.upgrade() {
+                    main.invoke_select_area_clicked();
                 }
+            });
+        } else if Some(event.id) == start_id {
+            let main_weak = main_weak_hk.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(main) = main_weak.upgrade() {
+                    main.invoke_start_stop_clicked();
+                }
+            });
+        } else if Some(event.id) == tool1 {
+            if let Some(action) = tool1_action {
+                dispatch_toolbar_action(&toolbar_weak_hk, action);
             }
+        } else if Some(event.id) == tool2 {
+            if let Some(action) = tool2_action {
+                dispatch_toolbar_action(&toolbar_weak_hk, action);
+            }
+        } else if event.id == esc_id {
+            let selection_weak = selection_weak_hk.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(selection) = selection_weak.upgrade() {
+                    selection.invoke_closed();
+                }
+            });
+        }
+    });
+}
+
+/// Runs a capture-toolbar action from a global shortcut by invoking the same callback that the
+/// toolbar button uses, so the behavior stays identical.
+fn dispatch_toolbar_action(toolbar: &slint::Weak<CaptureToolbarWindow>, action: ToolbarAction) {
+    let toolbar = toolbar.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(toolbar) = toolbar.upgrade() else {
+            return;
+        };
+        match action {
+            ToolbarAction::Fullscreen => toolbar.invoke_fullscreen_clicked(),
+            ToolbarAction::Window => toolbar.invoke_window_clicked(),
+            ToolbarAction::Region => toolbar.invoke_region_clicked(),
+            ToolbarAction::Ocr => toolbar.invoke_ocr_clicked(),
+            ToolbarAction::OcrTranslate => toolbar.invoke_translate_clicked(),
+            ToolbarAction::Vlm => toolbar.invoke_vlm_clicked(),
+            ToolbarAction::ColorPicker => toolbar.invoke_color_picker_clicked(),
+            ToolbarAction::Ruler => toolbar.invoke_ruler_clicked(),
         }
     });
 }

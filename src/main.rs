@@ -14,6 +14,8 @@ mod provider_ui;
 mod runtime_workers;
 mod selection_ui;
 mod settings;
+mod shortcuts;
+mod shortcuts_ui;
 mod startup;
 mod state;
 mod text_layout;

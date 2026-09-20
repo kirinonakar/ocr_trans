@@ -1,11 +1,11 @@
 use crate::{
     capture, win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow, OverlayWindow,
-    RecordingBorderWindow, SelectionWindow, TextboxWindow,
+    RecordingBorderWindow, SelectionWindow, ShortcutSettingsWindow, TextboxWindow,
 };
 
 use anyhow::Result;
 use global_hotkey::{
-    hotkey::{Code, HotKey, Modifiers},
+    hotkey::{Code, HotKey},
     GlobalHotKeyManager,
 };
 use slint::ComponentHandle;
@@ -29,6 +29,7 @@ pub(crate) async fn run() -> Result<()> {
     let capture_toolbar = CaptureToolbarWindow::new()?;
     let capture_frame_window = CaptureFrameWindow::new()?;
     let recording_border_window = RecordingBorderWindow::new()?;
+    let shortcut_window = ShortcutSettingsWindow::new()?;
 
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
@@ -45,6 +46,7 @@ pub(crate) async fn run() -> Result<()> {
     let initial_dark_theme = startup.dark_theme;
     let initial_app_mode = startup.app_mode;
     capture_frame_window.set_dark_theme(initial_dark_theme);
+    shortcut_window.set_dark_theme(initial_dark_theme);
 
     let state = Arc::new(Mutex::new(AppState {
         api_endpoint: main_window.get_api_endpoint().to_string(),
@@ -68,19 +70,14 @@ pub(crate) async fn run() -> Result<()> {
 
     // Global Hotkey Setup - Initialize safely without panicking on failure
     let hotkey_manager = GlobalHotKeyManager::new().ok().map(Arc::new);
-
-    let hotkey_capture = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyA);
-    let hotkey_start_stop = HotKey::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyP);
     let esc_hotkey = HotKey::new(None, Code::Escape);
 
-    if let Some(ref mgr) = hotkey_manager {
-        if let Err(e) = mgr.register(hotkey_capture) {
-            log::error!("Failed to register capture hotkey: {:?}", e);
-        }
-        if let Err(e) = mgr.register(hotkey_start_stop) {
-            log::error!("Failed to register start/stop hotkey: {:?}", e);
-        }
-    }
+    // Shortcut bindings live in the settings file so the shortcut card can re-register them at
+    // runtime. The shared runtime lets the hotkey thread resolve event ids to live bindings.
+    let shortcut_config = crate::settings::load_shortcut_config();
+    // The OS manager is not `Send`, so only this `Send` state is shared with the hotkey thread.
+    let hotkey_state = Arc::new(Mutex::new(crate::shortcuts::HotkeyState::default()));
+    crate::shortcuts::apply_config(hotkey_manager.as_deref(), &hotkey_state, shortcut_config);
 
     // Setup Transparency and Windows Specifics
     // Setup Transparency and Windows Specifics
@@ -117,6 +114,7 @@ pub(crate) async fn run() -> Result<()> {
         &capture_frame_window,
         &overlay_window,
         &textbox_window,
+        &shortcut_window,
         state.clone(),
         folder_owner,
         initial_dark_theme,
@@ -175,11 +173,18 @@ pub(crate) async fn run() -> Result<()> {
         &overlay_window,
         &selection_window,
         &textbox_window,
+        &capture_toolbar,
         state,
         http_client,
-        hotkey_capture,
-        hotkey_start_stop,
+        hotkey_state.clone(),
         esc_hotkey,
+    );
+
+    crate::shortcuts_ui::register_callbacks(
+        &main_window,
+        &shortcut_window,
+        hotkey_manager.clone(),
+        hotkey_state,
     );
 
     if let Err(error) = main_window.run() {

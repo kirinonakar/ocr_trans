@@ -1,4 +1,5 @@
 use crate::credentials;
+use crate::shortcuts::ShortcutConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -282,6 +283,7 @@ pub(crate) struct AppSettings {
     pub(crate) app_mode: String,
     pub(crate) dark_theme: bool,
     pub(crate) ocr_language: String,
+    pub(crate) shortcuts: ShortcutConfig,
 }
 
 fn settings_read_path() -> Option<PathBuf> {
@@ -464,6 +466,7 @@ pub(crate) fn load_app_settings() -> AppSettings {
         app_mode: "ocr".to_string(),
         dark_theme: false,
         ocr_language: String::new(),
+        shortcuts: ShortcutConfig::default(),
     };
 
     if let Some(path) = settings_read_path() {
@@ -528,6 +531,12 @@ pub(crate) fn load_app_settings() -> AppSettings {
             settings.app_mode = ini_value(&values, "app", "app_mode", settings.app_mode);
             settings.dark_theme = ini_bool(&values, "app", "dark_theme", settings.dark_theme);
             settings.ocr_language = ini_value(&values, "app", "ocr_language", settings.ocr_language);
+            settings.shortcuts.select_area = ini_value(&values, "shortcuts", "select_area", settings.shortcuts.select_area);
+            settings.shortcuts.start = ini_value(&values, "shortcuts", "start", settings.shortcuts.start);
+            settings.shortcuts.toolbar1_action = ini_value(&values, "shortcuts", "toolbar1_action", settings.shortcuts.toolbar1_action);
+            settings.shortcuts.toolbar1_key = ini_value(&values, "shortcuts", "toolbar1_key", settings.shortcuts.toolbar1_key);
+            settings.shortcuts.toolbar2_action = ini_value(&values, "shortcuts", "toolbar2_action", settings.shortcuts.toolbar2_action);
+            settings.shortcuts.toolbar2_key = ini_value(&values, "shortcuts", "toolbar2_key", settings.shortcuts.toolbar2_key);
         }
     }
     settings
@@ -535,7 +544,7 @@ pub(crate) fn load_app_settings() -> AppSettings {
 
 pub(crate) fn save_app_settings(settings: &AppSettings) {
     let contents = format!(
-        "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\napp_mode={}\ndark_theme={}\nocr_language={}\n",
+        "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\n",
         ini_escape(&settings.provider.provider),
         ini_escape(&settings.provider.lm_model),
         ini_escape(&settings.provider.gemini_model),
@@ -551,6 +560,12 @@ pub(crate) fn save_app_settings(settings: &AppSettings) {
         ini_escape(&settings.app_mode),
         if settings.dark_theme { "true" } else { "false" },
         ini_escape(settings.ocr_language.trim()),
+        ini_escape(&settings.shortcuts.select_area),
+        ini_escape(&settings.shortcuts.start),
+        ini_escape(&settings.shortcuts.toolbar1_action),
+        ini_escape(&settings.shortcuts.toolbar1_key),
+        ini_escape(&settings.shortcuts.toolbar2_action),
+        ini_escape(&settings.shortcuts.toolbar2_key),
     );
     if let Some(path) = settings_write_path() {
         if let Err(error) = std::fs::write(path, contents) {
@@ -608,5 +623,17 @@ pub(crate) fn save_dark_theme(dark_theme: bool) {
 pub(crate) fn save_ocr_language(language: &str) {
     let mut settings = load_app_settings();
     settings.ocr_language = language.trim().to_string();
+    save_app_settings(&settings);
+}
+
+/// Loads just the shortcut configuration.
+pub(crate) fn load_shortcut_config() -> ShortcutConfig {
+    load_app_settings().shortcuts
+}
+
+/// Persists the shortcut configuration while preserving every other setting.
+pub(crate) fn save_shortcut_config(config: &ShortcutConfig) {
+    let mut settings = load_app_settings();
+    settings.shortcuts = config.clone();
     save_app_settings(&settings);
 }

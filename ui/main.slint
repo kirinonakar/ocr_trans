@@ -120,6 +120,8 @@ export component MainWindow inherits Window {
     in-out property <string> last_translated_text: "";
     in-out property <string> app_mode: "ocr";
     in-out property <string> capture_folder: "";
+    in-out property <string> select_area_shortcut_label: "Win + Alt + A";
+    in-out property <string> start_shortcut_label: "Win + Alt + P";
 
     
     
@@ -140,6 +142,7 @@ export component MainWindow inherits Window {
     callback thinking_level_changed(string);
     callback theme_toggle_clicked();
     callback mode_toggle_clicked(string);
+    callback shortcut_settings_clicked();
     VerticalLayout {
         alignment: start;
         padding: 14px;
@@ -313,7 +316,25 @@ export component MainWindow inherits Window {
             VerticalLayout {
                 spacing: 8px;
                 padding: 10px;
-                Text { text: "CAPTURE SETTINGS"; font-weight: 700; color: dark_theme ? #45b8ed : #2563eb; font-size: 14px; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "CAPTURE SETTINGS";
+                        font-weight: 700;
+                        color: dark_theme ? #45b8ed : #2563eb;
+                        font-size: 14px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { } // Flexible spacer keeps the shortcut button on the right
+                    ToolbarButton {
+                        icon: @image-url("icons/keyboard.svg");
+                        dark_theme: dark_theme;
+                        width: 26px;
+                        height: 26px;
+                        icon_size: 16px;
+                        pressed => { shortcut_settings_clicked(); }
+                    }
+                }
                 
                 HorizontalLayout {
                     spacing: 4px;
@@ -492,7 +513,7 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     spacing: 8px;
                     Button {
-                        text: "SELECT AREA (Win + Alt + A)";
+                        text: "SELECT AREA (" + select_area_shortcut_label + ")";
                         clicked => { select_area_clicked(); }
                     }
                     Rectangle {
@@ -521,7 +542,7 @@ export component MainWindow inherits Window {
             spacing: 6px; // Keep the Idle marker clear of the bottom edge
             
             Button {
-                text: is_running ? "STOP (Win+Alt+P)" : "START (Win+Alt+P)";
+                text: is_running ? "STOP (" + start_shortcut_label + ")" : "START (" + start_shortcut_label + ")";
                 height: 42px;
                 primary: true;
                 clicked => { start_stop_clicked(); }
@@ -558,8 +579,8 @@ export component CaptureToolbarWindow inherits Window {
     in-out property <string> recording_elapsed: "00:00";
     in-out property <string> status_text: "";
     in-out property <string> active_tooltip: "";
-    in-out property <string> color_picker_tooltip: "Pick color";
-    in-out property <string> ruler_tooltip: "Measure region";
+    in-out property <string> color_picker_tooltip: "Color Picker";
+    in-out property <string> ruler_tooltip: "Ruler";
     in property <[string]> ocr_language_options;
     in property <[string]> ocr_language_tags;
     in-out property <int> ocr_language_index: -1;
@@ -818,7 +839,7 @@ export component CaptureToolbarWindow inherits Window {
                         icon: @image-url("icons/vlm.svg");
                         dark_theme: dark_theme;
                         width: 30px;
-                        tooltip: "Vision model capture";
+                        tooltip: "VLM";
                         hovered_tooltip_changed(value) => {
                             active_tooltip = value;
                             tooltip_visibility_changed(value);
@@ -1770,6 +1791,211 @@ export component SelectionWindow inherits Window {
             font-weight: 700;
             horizontal-alignment: center;
             opacity: color_picker_mode || selecting || (window_mode && hover_w > 0px) ? 0 : 1; // Use opacity for smoother transition
+        }
+    }
+}
+
+// Shortcut settings for the OCR window's capture settings card. Four slots are editable:
+// Select area, Start, and two capture-toolbar shortcuts; the two toolbar slots also pick the
+// capture/record/OCR action they trigger.
+export component ShortcutSettingsWindow inherits Window {
+    title: "Shortcut settings";
+    icon: @image-url("../app.ico");
+    preferred-width: 470px;
+    preferred-height: 700px;
+    min-width: 470px;
+    min-height: 700px;
+    max-width: 470px;
+    max-height: 700px;
+    background: dark_theme ? #2b2b31 : @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+    default-font-family: "Yu Gothic UI";
+
+    in-out property <bool> dark_theme: false;
+
+    // Filled from Rust so the combo-box indices match the stored bindings.
+    in property <[string]> key_options: [];
+    in property <[string]> action_options: [];
+
+    in-out property <bool> select_win: true;
+    in-out property <bool> select_alt: true;
+    in-out property <bool> select_ctrl: false;
+    in-out property <bool> select_shift: false;
+    in-out property <int> select_key_index: 0;
+
+    in-out property <bool> start_win: true;
+    in-out property <bool> start_alt: true;
+    in-out property <bool> start_ctrl: false;
+    in-out property <bool> start_shift: false;
+    in-out property <int> start_key_index: 15;
+
+    in-out property <int> tool1_action_index: 0;
+    in-out property <bool> tool1_win: false;
+    in-out property <bool> tool1_alt: true;
+    in-out property <bool> tool1_ctrl: false;
+    in-out property <bool> tool1_shift: false;
+    in-out property <int> tool1_key_index: -1;
+
+    in-out property <int> tool2_action_index: 0;
+    in-out property <bool> tool2_win: false;
+    in-out property <bool> tool2_alt: true;
+    in-out property <bool> tool2_ctrl: false;
+    in-out property <bool> tool2_shift: false;
+    in-out property <int> tool2_key_index: -1;
+
+    in-out property <string> status_text: "";
+    in-out property <bool> status_error: false;
+
+    callback save_clicked();
+    callback close_clicked();
+
+    init => {
+        Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light;
+    }
+    changed dark_theme => {
+        Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+
+        Text {
+            text: "SHORTCUT SETTINGS";
+            font-weight: 700;
+            color: dark_theme ? #45b8ed : #2563eb;
+            font-size: 14px;
+        }
+
+        Text {
+            text: "Pick Win / Alt / Ctrl / Shift plus a key, then press Save. Only Select area and Start have defaults.";
+            color: dark_theme ? #94a3b8 : #64748b;
+            font-size: 11px;
+            wrap: word-wrap;
+        }
+
+        // Select area
+        Rectangle {
+            background: dark_theme ? #37373f : #ffffff;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: dark_theme ? transparent : #e2e8f0;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+                Text { text: "Select area"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 2px;
+                    CheckBox { checked <=> select_win; text: "Win"; }
+                    CheckBox { checked <=> select_alt; text: "Alt"; }
+                    CheckBox { checked <=> select_ctrl; text: "Ctrl"; }
+                    CheckBox { checked <=> select_shift; text: "Shift"; }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                    ComboBox { model: key_options; current-index <=> select_key_index; }
+                }
+            }
+        }
+
+        // Start / stop continuous OCR
+        Rectangle {
+            background: dark_theme ? #37373f : #ffffff;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: dark_theme ? transparent : #e2e8f0;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+                Text { text: "Start"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 2px;
+                    CheckBox { checked <=> start_win; text: "Win"; }
+                    CheckBox { checked <=> start_alt; text: "Alt"; }
+                    CheckBox { checked <=> start_ctrl; text: "Ctrl"; }
+                    CheckBox { checked <=> start_shift; text: "Shift"; }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                    ComboBox { model: key_options; current-index <=> start_key_index; }
+                }
+            }
+        }
+
+        // Capture toolbar shortcut 1
+        Rectangle {
+            background: dark_theme ? #37373f : #ffffff;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: dark_theme ? transparent : #e2e8f0;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+                Text { text: "Capture toolbar shortcut 1"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                    ComboBox { model: action_options; current-index <=> tool1_action_index; }
+                }
+                HorizontalLayout {
+                    spacing: 2px;
+                    CheckBox { checked <=> tool1_win; text: "Win"; }
+                    CheckBox { checked <=> tool1_alt; text: "Alt"; }
+                    CheckBox { checked <=> tool1_ctrl; text: "Ctrl"; }
+                    CheckBox { checked <=> tool1_shift; text: "Shift"; }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                    ComboBox { model: key_options; current-index <=> tool1_key_index; }
+                }
+            }
+        }
+
+        // Capture toolbar shortcut 2
+        Rectangle {
+            background: dark_theme ? #37373f : #ffffff;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: dark_theme ? transparent : #e2e8f0;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+                Text { text: "Capture toolbar shortcut 2"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                    ComboBox { model: action_options; current-index <=> tool2_action_index; }
+                }
+                HorizontalLayout {
+                    spacing: 2px;
+                    CheckBox { checked <=> tool2_win; text: "Win"; }
+                    CheckBox { checked <=> tool2_alt; text: "Alt"; }
+                    CheckBox { checked <=> tool2_ctrl; text: "Ctrl"; }
+                    CheckBox { checked <=> tool2_shift; text: "Shift"; }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                    ComboBox { model: key_options; current-index <=> tool2_key_index; }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Button { text: "Save"; primary: true; width: 96px; height: 32px; clicked => { save_clicked(); } }
+            Button { text: "Close"; width: 96px; height: 32px; clicked => { close_clicked(); } }
+            Rectangle { } // Flexible spacer keeps the buttons on the left
+        }
+
+        Text {
+            text: status_text;
+            color: status_error ? #ef4444 : (dark_theme ? #4ade80 : #16a34a);
+            font-size: 12px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
         }
     }
 }

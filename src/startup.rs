@@ -80,6 +80,13 @@ pub(crate) fn initialize_ui(
     // Migrate the former JSON/TXT settings on startup and keep subsequent writes in one INI file.
     save_app_settings(&initial_settings);
     main_window.set_capture_folder(initial_capture_folder.clone().into());
+    // Reflect the stored shortcut bindings on the OCR window's action buttons.
+    main_window.set_select_area_shortcut_label(
+        crate::shortcuts::binding_label(&initial_settings.shortcuts.select_area).into(),
+    );
+    main_window.set_start_shortcut_label(
+        crate::shortcuts::binding_label(&initial_settings.shortcuts.start).into(),
+    );
     main_window.set_dark_theme(initial_dark_theme);
     textbox_window.set_dark_theme(initial_dark_theme);
     capture_toolbar.set_dark_theme(initial_dark_theme);
