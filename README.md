@@ -25,15 +25,34 @@ Capture toolbar (dark theme)
   - **Local Providers**:
     - **Ollama, Unsloth Desktop, LMStudio / Custom**
 - **Adjustable Creativity**: Use the **Temperature** slider (0.0 - 1.0) to control translation consistency vs. creativity.
-- **Global Hotkeys**: 
-  - **Win + Alt + A**: Trigger area selection.
-  - **Win + Alt + P**: Start or Stop the translation process.
+- **Configurable Global Hotkeys**: 
+  - **Win + Alt + A**: Trigger area selection (default).
+  - **Win + Alt + P**: Start or Stop the translation process (default).
+  - Up to **three capture-toolbar shortcuts** can run Fullscreen / Window / Region capture, OCR, OCR + Translate, VLM, color picker, or ruler. Every binding is remappable from the keyboard button next to the **CAPTURE SETTINGS** title.
 - **Capture Mode**: Compact always-on-top toolbar (`Capture` ↔ `OCR` toggle).
   - Frame mode opens a movable, resizable transparent capture frame with its own Capture and Record controls.
   - Fullscreen / Window / Scrolling (Windows only) / Region (`Esc` to cancel).
   - One-shot OCR, OCR+Translate, VLM, color picker, ruler.
   - For one-shot OCR and OCR+Translate, the language dropdown lists only installed Windows OCR packs with short labels such as **KO**, **JP**, and **EN**.
   - PNG/MP4 saved as `YYYY-MM-DD_001...` + clipboard copy; recording needs `ffmpeg`.
+
+## Shortcuts
+
+All global shortcuts are configurable. Click the keyboard icon on the right side of the **CAPTURE SETTINGS** card to open the **Shortcut settings** window, edit the slots, and press **Save**. Bindings are written to `ocr_trans.ini` under `[shortcuts]` and are restored on the next launch.
+
+| Slot | Default | Purpose |
+| --- | --- | --- |
+| Select area | `Win + Alt + A` | Open the region selector |
+| Start | `Win + Alt + P` | Start / stop the translation process |
+| Capture toolbar 1 | *(not set)* | Run a chosen capture-toolbar action |
+| Capture toolbar 2 | *(not set)* | Run a chosen capture-toolbar action |
+| Capture toolbar 3 | *(not set)* | Run a chosen capture-toolbar action |
+
+- Each slot combines **Win / Alt / Ctrl / Shift** with a single key (`A-Z`, `0-9`, `F1-F12`).
+- Only **Select area** and **Start** come with defaults; the three capture-toolbar slots start empty.
+- A capture-toolbar slot also selects the action to run: **Fullscreen**, **Window**, or **Region** capture, **OCR**, **OCR + Translate**, **VLM**, **Color picker**, or **Ruler**.
+- At least one modifier and one key are required. A slot that has an action but no key is rejected instead of saved.
+- Shortcuts are registered globally, so they keep working while the application is in the background.
 
 ## Prerequisites
 - **Rust**: [Install Rust](https://www.rust-lang.org/tools/install)

@@ -1795,18 +1795,18 @@ export component SelectionWindow inherits Window {
     }
 }
 
-// Shortcut settings for the OCR window's capture settings card. Four slots are editable:
-// Select area, Start, and two capture-toolbar shortcuts; the two toolbar slots also pick the
+// Shortcut settings for the OCR window's capture settings card. Five slots are editable:
+// Select area, Start, and three capture-toolbar shortcuts; the toolbar slots also pick the
 // capture/record/OCR action they trigger.
 export component ShortcutSettingsWindow inherits Window {
     title: "Shortcut settings";
     icon: @image-url("../app.ico");
     preferred-width: 470px;
-    preferred-height: 700px;
+    preferred-height: 850px;
     min-width: 470px;
-    min-height: 700px;
+    min-height: 850px;
     max-width: 470px;
-    max-height: 700px;
+    max-height: 850px;
     background: dark_theme ? #2b2b31 : @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
     default-font-family: "Yu Gothic UI";
 
@@ -1841,6 +1841,13 @@ export component ShortcutSettingsWindow inherits Window {
     in-out property <bool> tool2_ctrl: false;
     in-out property <bool> tool2_shift: false;
     in-out property <int> tool2_key_index: -1;
+
+    in-out property <int> tool3_action_index: 0;
+    in-out property <bool> tool3_win: false;
+    in-out property <bool> tool3_alt: true;
+    in-out property <bool> tool3_ctrl: false;
+    in-out property <bool> tool3_shift: false;
+    in-out property <int> tool3_key_index: -1;
 
     in-out property <string> status_text: "";
     in-out property <bool> status_error: false;
@@ -1979,6 +1986,36 @@ export component ShortcutSettingsWindow inherits Window {
                     spacing: 6px;
                     Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                     ComboBox { model: key_options; current-index <=> tool2_key_index; }
+                }
+            }
+        }
+
+        // Capture toolbar shortcut 3
+        Rectangle {
+            background: dark_theme ? #37373f : #ffffff;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: dark_theme ? transparent : #e2e8f0;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+                Text { text: "Capture toolbar shortcut 3"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                    ComboBox { model: action_options; current-index <=> tool3_action_index; }
+                }
+                HorizontalLayout {
+                    spacing: 2px;
+                    CheckBox { checked <=> tool3_win; text: "Win"; }
+                    CheckBox { checked <=> tool3_alt; text: "Alt"; }
+                    CheckBox { checked <=> tool3_ctrl; text: "Ctrl"; }
+                    CheckBox { checked <=> tool3_shift; text: "Shift"; }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                    ComboBox { model: key_options; current-index <=> tool3_key_index; }
                 }
             }
         }

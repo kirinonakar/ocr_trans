@@ -146,6 +146,18 @@ fn populate_window(window: &ShortcutSettingsWindow, config: &ShortcutConfig) {
             .map(ToolbarAction::option_index)
             .unwrap_or(0),
     );
+
+    let (win, alt, ctrl, shift, key) = split_binding(&config.toolbar3_key);
+    window.set_tool3_win(win);
+    window.set_tool3_alt(alt);
+    window.set_tool3_ctrl(ctrl);
+    window.set_tool3_shift(shift);
+    window.set_tool3_key_index(key_index(&key));
+    window.set_tool3_action_index(
+        ToolbarAction::from_token(&config.toolbar3_action)
+            .map(ToolbarAction::option_index)
+            .unwrap_or(0),
+    );
 }
 
 /// Reads and validates the editing properties.
@@ -191,6 +203,17 @@ fn read_config(window: &ShortcutSettingsWindow) -> Result<ShortcutConfig, String
         tool2_action.is_some(),
     )?;
 
+    let tool3_action = ToolbarAction::from_option_index(window.get_tool3_action_index());
+    let toolbar3_key = slot_binding(
+        window.get_tool3_win(),
+        window.get_tool3_alt(),
+        window.get_tool3_ctrl(),
+        window.get_tool3_shift(),
+        window.get_tool3_key_index(),
+        "Capture toolbar shortcut 3",
+        tool3_action.is_some(),
+    )?;
+
     Ok(ShortcutConfig {
         select_area,
         start,
@@ -198,6 +221,8 @@ fn read_config(window: &ShortcutSettingsWindow) -> Result<ShortcutConfig, String
         toolbar1_key,
         toolbar2_action: tool2_action.map(|action| action.token().to_string()).unwrap_or_default(),
         toolbar2_key,
+        toolbar3_action: tool3_action.map(|action| action.token().to_string()).unwrap_or_default(),
+        toolbar3_key,
     })
 }
 

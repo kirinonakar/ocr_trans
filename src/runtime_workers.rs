@@ -287,7 +287,7 @@ pub(crate) fn start(
 
         // Resolve the current bindings on every event so shortcuts stay in sync after the
         // settings window re-registers them.
-        let (select_id, start_id, tool1, tool1_action, tool2, tool2_action) = {
+        let (select_id, start_id, tool1, tool1_action, tool2, tool2_action, tool3, tool3_action) = {
             let state = state_hk.lock().unwrap();
             (
                 state.registered.select_area.map(|hotkey| hotkey.id()),
@@ -296,6 +296,8 @@ pub(crate) fn start(
                 ToolbarAction::from_token(&state.config.toolbar1_action),
                 state.registered.toolbar2.map(|hotkey| hotkey.id()),
                 ToolbarAction::from_token(&state.config.toolbar2_action),
+                state.registered.toolbar3.map(|hotkey| hotkey.id()),
+                ToolbarAction::from_token(&state.config.toolbar3_action),
             )
         };
 
@@ -319,6 +321,10 @@ pub(crate) fn start(
             }
         } else if Some(event.id) == tool2 {
             if let Some(action) = tool2_action {
+                dispatch_toolbar_action(&toolbar_weak_hk, action);
+            }
+        } else if Some(event.id) == tool3 {
+            if let Some(action) = tool3_action {
                 dispatch_toolbar_action(&toolbar_weak_hk, action);
             }
         } else if event.id == esc_id {

@@ -1,13 +1,14 @@
 //! Global shortcut configuration and (re)registration.
 //!
-//! The OCR window exposes four configurable shortcuts:
+//! The OCR window exposes five configurable shortcuts:
 //! * `select_area`  - opens the capture-area selector (default `win+alt+A`)
 //! * `start`        - starts/stops the continuous OCR loop (default `win+alt+P`)
 //! * `toolbar1`     - runs one capture-toolbar action
 //! * `toolbar2`     - runs a second capture-toolbar action
+//! * `toolbar3`     - runs a third capture-toolbar action
 //!
 //! Bindings are stored as `modifier+modifier+KEY` strings (for example `win+alt+A`) so they can
-//! live in the plain-text settings file. The two toolbar slots additionally carry an action token.
+//! live in the plain-text settings file. The toolbar slots additionally carry an action token.
 
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::GlobalHotKeyManager;
@@ -31,6 +32,8 @@ pub(crate) struct ShortcutConfig {
     pub(crate) toolbar1_key: String,
     pub(crate) toolbar2_action: String,
     pub(crate) toolbar2_key: String,
+    pub(crate) toolbar3_action: String,
+    pub(crate) toolbar3_key: String,
 }
 
 impl Default for ShortcutConfig {
@@ -42,6 +45,8 @@ impl Default for ShortcutConfig {
             toolbar1_key: String::new(),
             toolbar2_action: String::new(),
             toolbar2_key: String::new(),
+            toolbar3_action: String::new(),
+            toolbar3_key: String::new(),
         }
     }
 }
@@ -137,6 +142,7 @@ pub(crate) struct RegisteredHotkeys {
     pub(crate) start: Option<HotKey>,
     pub(crate) toolbar1: Option<HotKey>,
     pub(crate) toolbar2: Option<HotKey>,
+    pub(crate) toolbar3: Option<HotKey>,
 }
 
 /// Shared, `Send` state describing the currently registered shortcuts. The OS manager itself is
@@ -365,6 +371,7 @@ pub(crate) fn apply_config(
             state.registered.start,
             state.registered.toolbar1,
             state.registered.toolbar2,
+            state.registered.toolbar3,
         ]
         .into_iter()
         .flatten()
@@ -380,6 +387,9 @@ pub(crate) fn apply_config(
         }
         if ToolbarAction::from_token(&config.toolbar2_action).is_some() {
             registered.toolbar2 = register_one(manager, &config.toolbar2_key, "Toolbar shortcut 2");
+        }
+        if ToolbarAction::from_token(&config.toolbar3_action).is_some() {
+            registered.toolbar3 = register_one(manager, &config.toolbar3_key, "Toolbar shortcut 3");
         }
         state.registered = registered;
     }

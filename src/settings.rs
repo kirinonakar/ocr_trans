@@ -537,6 +537,8 @@ pub(crate) fn load_app_settings() -> AppSettings {
             settings.shortcuts.toolbar1_key = ini_value(&values, "shortcuts", "toolbar1_key", settings.shortcuts.toolbar1_key);
             settings.shortcuts.toolbar2_action = ini_value(&values, "shortcuts", "toolbar2_action", settings.shortcuts.toolbar2_action);
             settings.shortcuts.toolbar2_key = ini_value(&values, "shortcuts", "toolbar2_key", settings.shortcuts.toolbar2_key);
+            settings.shortcuts.toolbar3_action = ini_value(&values, "shortcuts", "toolbar3_action", settings.shortcuts.toolbar3_action);
+            settings.shortcuts.toolbar3_key = ini_value(&values, "shortcuts", "toolbar3_key", settings.shortcuts.toolbar3_key);
         }
     }
     settings
@@ -544,7 +546,7 @@ pub(crate) fn load_app_settings() -> AppSettings {
 
 pub(crate) fn save_app_settings(settings: &AppSettings) {
     let contents = format!(
-        "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\n",
+        "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
         ini_escape(&settings.provider.provider),
         ini_escape(&settings.provider.lm_model),
         ini_escape(&settings.provider.gemini_model),
@@ -566,6 +568,8 @@ pub(crate) fn save_app_settings(settings: &AppSettings) {
         ini_escape(&settings.shortcuts.toolbar1_key),
         ini_escape(&settings.shortcuts.toolbar2_action),
         ini_escape(&settings.shortcuts.toolbar2_key),
+        ini_escape(&settings.shortcuts.toolbar3_action),
+        ini_escape(&settings.shortcuts.toolbar3_key),
     );
     if let Some(path) = settings_write_path() {
         if let Err(error) = std::fs::write(path, contents) {
