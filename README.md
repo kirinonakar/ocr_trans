@@ -48,7 +48,7 @@ All global shortcuts are configurable. Click the keyboard icon on the right side
 | Capture toolbar 2 | *(not set)* | Run a chosen capture-toolbar action |
 | Capture toolbar 3 | *(not set)* | Run a chosen capture-toolbar action |
 
-- Each slot combines **Win / Alt / Ctrl / Shift** with a single key (`A-Z`, `0-9`, `F1-F12`).
+- Each slot combines **Win / Alt / Ctrl / Shift** with a single key: **A-Z**, **0-9**, **F1-F12**, **PrintScreen**, and the punctuation keys **` , . / ; ' [ ] \ - =**.
 - Only **Select area** and **Start** come with defaults; the three capture-toolbar slots start empty.
 - A capture-toolbar slot also selects the action to run: **Fullscreen**, **Window**, or **Region** capture, **OCR**, **OCR + Translate**, **VLM**, **Color picker**, or **Ruler**.
 - At least one modifier and one key are required. A slot that has an action but no key is rejected instead of saved.

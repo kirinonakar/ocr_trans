@@ -16,10 +16,11 @@ use std::sync::{Arc, Mutex};
 
 /// Key tokens offered in the shortcut settings UI. The order is also the combo-box order and the
 /// index that the Slint properties encode.
-pub(crate) const KEY_TOKENS: [&str; 48] = [
+pub(crate) const KEY_TOKENS: [&str; 60] = [
     "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
     "T", "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "F1", "F2",
-    "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+    "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "`", ",", ".", "/", ";", "'",
+    "[", "]", "\\", "-", "=", "PrintScreen",
 ];
 
 /// Persisted shortcut configuration. `Default` intentionally enables only the two original
@@ -257,6 +258,18 @@ pub(crate) fn key_code_from_token(token: &str) -> Option<Code> {
         "F10" => Code::F10,
         "F11" => Code::F11,
         "F12" => Code::F12,
+        "`" => Code::Backquote,
+        "," => Code::Comma,
+        "." => Code::Period,
+        "/" => Code::Slash,
+        ";" => Code::Semicolon,
+        "'" => Code::Quote,
+        "[" => Code::BracketLeft,
+        "]" => Code::BracketRight,
+        "\\" => Code::Backslash,
+        "-" => Code::Minus,
+        "=" => Code::Equal,
+        "PRINTSCREEN" => Code::PrintScreen,
         _ => return None,
     })
 }
@@ -308,10 +321,12 @@ pub(crate) fn build_binding(win: bool, alt: bool, ctrl: bool, shift: bool, key: 
 
 /// Index of a key token inside [`KEY_TOKENS`], or -1 when unknown.
 pub(crate) fn key_index(token: &str) -> i32 {
-    let token = token.trim().to_ascii_uppercase();
+    // Compare without case so mixed-case tokens such as `PrintScreen` round-trip through the
+    // stored binding (which is upper-cased by `build_binding`).
+    let token = token.trim();
     KEY_TOKENS
         .iter()
-        .position(|candidate| *candidate == token)
+        .position(|candidate| (*candidate).eq_ignore_ascii_case(token))
         .map(|index| index as i32)
         .unwrap_or(-1)
 }
