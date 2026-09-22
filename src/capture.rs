@@ -675,8 +675,15 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
         .min((80_000_000u64 / scroll_bounds.width as u64) as u32)
         .max(total_height);
     let mut unchanged_steps = 0;
+    // 실제 스크롤 한 번이 만드는 픽셀 이동량은 같은 앱 안에서 거의 일정하다.
+    // shift 측정이 실패해도 마지막으로 측정한 값을 재사용하면 바닥까지 계속
+    // 진행할 수 있다. 측정 실패를 이유로 캡처를 끝내면 바닥에 닿기 전에 멈춘다.
+    let mut last_shift = 0u32;
+    // 180 스텝 상한은 세로로 긴 문서에서 바닥에 닿기 전에 소진된다. 높이 상한에
+    // 도달할 때까지 계속하되, 스크롤이 전혀 먹지 않는 경우에만 멈추도록 안전 상한을 둔다.
+    let maximum_steps = (maximum_height / 24).clamp(180, 600);
 
-    for _ in 0..180 {
+    for _ in 0..maximum_steps {
         if total_height >= maximum_height {
             break;
         }
@@ -686,17 +693,29 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
         thread::sleep(Duration::from_millis(160));
         let current = stable_capture(scroll_bounds)?;
         if equivalent(&previous, &current) {
+            // 한두 번의 변화 없음은 스크롤 이벤트 유실이나 지연 렌더링일 수 있다.
+            // 곧바로 끝내지 않고 몇 번 더 확인한 뒤에만 바닥으로 판단한다.
             unchanged_steps += 1;
-            if unchanged_steps >= 2 {
-                break;
+            if unchanged_steps < 3 {
+                continue;
             }
-            continue;
+            break;
         }
         unchanged_steps = 0;
-        let mut shift = find_vertical_shift(&previous, &current);
+        let mut shift = find_vertical_shift(&previous, &current, false);
+        if shift == 0 {
+            // 엄격한 매칭이 실패하면 완화된 매칭으로 한 번 더 시도한다.
+            shift = find_vertical_shift(&previous, &current, true);
+        }
+        if shift == 0 {
+            // 그래도 찾지 못하면 직전 스텝의 이동량을 그대로 사용한다. 같은 앱에서는
+            // 한 스텝의 이동량이 일정하므로 0으로 끝내는 것보다 안전하다.
+            shift = last_shift;
+        }
         if shift == 0 {
             break;
         }
+        last_shift = shift;
         shift = shift.min(maximum_height - total_height);
         // 정확한 shift에서 하드 컷이 가장 매끄럽다. 블렌딩은 텍스트 경계에
         // 이중상/흐릿한 띠를 만들어 오히려 이음새를 드러내므로 쓰지 않는다.
@@ -826,16 +845,17 @@ fn equivalent(first: &RgbaImage, second: &RgbaImage) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn find_vertical_shift(previous: &RgbaImage, current: &RgbaImage) -> u32 {
+fn find_vertical_shift(previous: &RgbaImage, current: &RgbaImage, relaxed: bool) -> u32 {
     let height = previous.height();
-    let minimum = 12u32.max(height / 60);
-    let maximum = minimum.max(height * 2 / 3);
+    // 완화 모드에서는 더 작은 이동도, 창 높이에 가까운 큰 이동도 허용한다.
+    let minimum = if relaxed { 8u32.max(height / 80) } else { 12u32.max(height / 60) };
+    let maximum = minimum.max(if relaxed { height * 4 / 5 } else { height * 2 / 3 });
     // 4px 간격 coarse 탐색은 1px 최적점을 놓쳐 이웃 봉우리에 걸리기 쉽다.
     // 2px 간격으로 상위 후보 3개를 추린 뒤 각 후보 ±2를 1px 단위로 정밀 탐색한다.
     let mut coarse_scores: Vec<(u32, f64)> = Vec::new();
     let mut shift = minimum;
     while shift <= maximum {
-        let score = score_shift(previous, current, shift);
+        let score = score_shift(previous, current, shift, relaxed);
         if score > 0.0 {
             coarse_scores.push((shift, score));
         }
@@ -852,7 +872,7 @@ fn find_vertical_shift(previous: &RgbaImage, current: &RgbaImage) -> u32 {
         let start = minimum.max(coarse.saturating_sub(2));
         let end = maximum.min(coarse + 2);
         for candidate in start..=end {
-            let score = score_shift(previous, current, candidate);
+            let score = score_shift(previous, current, candidate, relaxed);
             if score > best_score {
                 best_score = score;
                 best_shift = candidate;
@@ -861,17 +881,21 @@ fn find_vertical_shift(previous: &RgbaImage, current: &RgbaImage) -> u32 {
     }
     // 텍스트 경계에서는 1px 어긋나도 점수가 0.9 이상으로 높게 나온다.
     // 봉우리가 뭉툭하면 잘못된 shift로 하드 컷 되므로 임계값을 높여 확실할 때만 잇는다.
-    if best_score >= 0.68 {
-        // 이웃 shift와 점수 차가 너무 작으면(평탄한 봉우리) 오측정 위험이 있어 파기한다.
-        let neighbor_best = [best_shift.saturating_sub(1), best_shift + 1]
-            .into_iter()
-            .filter(|s| *s >= minimum && *s <= maximum && *s != best_shift)
-            .map(|s| score_shift(previous, current, s))
-            .fold(0.0f64, f64::max);
-        if best_score - neighbor_best < 0.015 {
-            // 단, 거의 완벽한 일치(0.95 이상)는 평탄해도 정답으로 인정한다.
-            if best_score < 0.95 {
-                return 0;
+    // 엄격 모드에서는 확실할 때만 인정하고, 완화 모드에서는 더 낮은 점수도 받아들인다.
+    let required = if relaxed { 0.6 } else { 0.68 };
+    if best_score >= required {
+        if !relaxed {
+            // 이웃 shift와 점수 차가 너무 작으면(평탄한 봉우리) 오측정 위험이 있어 파기한다.
+            let neighbor_best = [best_shift.saturating_sub(1), best_shift + 1]
+                .into_iter()
+                .filter(|s| *s >= minimum && *s <= maximum && *s != best_shift)
+                .map(|s| score_shift(previous, current, s, relaxed))
+                .fold(0.0f64, f64::max);
+            if best_score - neighbor_best < 0.015 {
+                // 단, 거의 완벽한 일치(0.95 이상)는 평탄해도 정답으로 인정한다.
+                if best_score < 0.95 {
+                    return 0;
+                }
             }
         }
         best_shift
@@ -881,7 +905,7 @@ fn find_vertical_shift(previous: &RgbaImage, current: &RgbaImage) -> u32 {
 }
 
 #[cfg(target_os = "windows")]
-fn score_shift(previous: &RgbaImage, current: &RgbaImage, shift: u32) -> f64 {
+fn score_shift(previous: &RgbaImage, current: &RgbaImage, shift: u32, relaxed: bool) -> f64 {
     let width = previous.width();
     let height = previous.height();
     // 상단 고정 UI(탭/주소창)와 하단 고정 밴드를 매칭에서 제외한다.
@@ -923,7 +947,8 @@ fn score_shift(previous: &RgbaImage, current: &RgbaImage, shift: u32) -> f64 {
         }
         y += 4;
     }
-    if informative < 80 {
+    let required_informative = if relaxed { 32 } else { 80 };
+    if informative < required_informative {
         0.0
     } else {
         matches as f64 / informative as f64
