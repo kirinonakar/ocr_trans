@@ -652,6 +652,9 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
     // enough distance to exclude the whole band from every segment instead of stitching it into
     // the long image repeatedly.
     const SCROLL_CAPTURE_BOTTOM_MARGIN: i32 = 14;
+    // 하드 컷으로 이어붙이면 미세한 정렬/서브픽셀 차이가 가로 이음새로 남는다.
+    // 직전 프레임과 겹치는 위쪽 몇 행을 크로스페이드해 경계를 감춘다.
+    const SCROLL_CAPTURE_SEAM_FADE: u32 = 6;
     let scroll_bounds = CaptureRect {
         x: target.bounds.x + SCROLL_CAPTURE_LEFT_MARGIN,
         y: target.bounds.y + SCROLL_CAPTURE_TOP_MARGIN,
@@ -675,6 +678,8 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
         .min((80_000_000u64 / scroll_bounds.width as u64) as u32)
         .max(total_height);
     let mut unchanged_steps = 0;
+    // 스크롤로 볼 수 없는 프레임 변화(애니메이션·지연 로딩)가 연속될 때 조기 종료하기 위한 카운터.
+    let mut unmeasured_steps = 0;
     // 실제 스크롤 한 번이 만드는 픽셀 이동량은 같은 앱 안에서 거의 일정하다.
     // shift 측정이 실패해도 마지막으로 측정한 값을 재사용하면 바닥까지 계속
     // 진행할 수 있다. 측정 실패를 이유로 캡처를 끝내면 바닥에 닿기 전에 멈춘다.
@@ -695,6 +700,7 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
         if equivalent(&previous, &current) {
             // 한두 번의 변화 없음은 스크롤 이벤트 유실이나 지연 렌더링일 수 있다.
             // 곧바로 끝내지 않고 몇 번 더 확인한 뒤에만 바닥으로 판단한다.
+            unmeasured_steps = 0;
             unchanged_steps += 1;
             if unchanged_steps < 3 {
                 continue;
@@ -702,24 +708,45 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
             break;
         }
         unchanged_steps = 0;
-        let mut shift = find_vertical_shift(&previous, &current, false);
+        // 직전 스텝의 이동량을 prior로 넘겨, 반복 패턴에서 주기의 배수를 잘못 고르는 것을 막는다.
+        let expected = (last_shift > 0).then_some(last_shift);
+        let mut shift = find_vertical_shift(&previous, &current, false, expected);
         if shift == 0 {
             // 엄격한 매칭이 실패하면 완화된 매칭으로 한 번 더 시도한다.
-            shift = find_vertical_shift(&previous, &current, true);
+            shift = find_vertical_shift(&previous, &current, true, expected);
+        }
+        if shift == 0 && last_shift > 0 {
+            // 매칭이 실패했다고 직전 이동량을 그대로 붙이면, 스크롤이 아닌 변화(차트 애니메이션,
+            // 지연 로딩 등)에서도 같은 내용을 다시 이어붙여 "이중"으로 보인다. 직전 이동량
+            // 위치의 실제 일치 점수를 확인해 스크롤로 볼 수 있을 때만 사용한다.
+            if score_shift(&previous, &current, last_shift, true) >= 0.5 {
+                shift = last_shift;
+            }
         }
         if shift == 0 {
-            // 그래도 찾지 못하면 직전 스텝의 이동량을 그대로 사용한다. 같은 앱에서는
-            // 한 스텝의 이동량이 일정하므로 0으로 끝내는 것보다 안전하다.
-            shift = last_shift;
+            // 스크롤로 볼 수 없는 변화는 붙이지 않고 다음 스텝으로 넘긴다. 다음 스텝에서
+            // 누적된 이동량이 측정되면 그때 빠진 구간까지 함께 이어붙는다.
+            unmeasured_steps += 1;
+            if unmeasured_steps >= 4 {
+                break;
+            }
+            continue;
         }
+        unmeasured_steps = 0;
+        shift = shift.min(maximum_height - total_height);
+        // 희소 샘플링으로 고른 shift는 1px 어긋나기 쉽고, 그 1px이 그대로 이음새가 된다.
+        // 겹치는 영역을 촘촘히 비교해 정렬을 확정한다.
+        shift = refine_vertical_shift(&previous, &current, shift);
+        shift = shift.min(maximum_height - total_height);
         if shift == 0 {
             break;
         }
         last_shift = shift;
-        shift = shift.min(maximum_height - total_height);
-        // 정확한 shift에서 하드 컷이 가장 매끄럽다. 블렌딩은 텍스트 경계에
-        // 이중상/흐릿한 띠를 만들어 오히려 이음새를 드러내므로 쓰지 않는다.
-        segments.push((copy_bottom_rows(&current, shift), 0u32));
+        // 직전 프레임과 겹치는 위쪽 행을 함께 잘라 두어 최종 결합에서 크로스페이드한다.
+        let fade = SCROLL_CAPTURE_SEAM_FADE
+            .min(shift)
+            .min(current.height().saturating_sub(shift));
+        segments.push((copy_bottom_rows(&current, shift + fade), fade));
         total_height += shift;
         previous = current;
     }
@@ -727,17 +754,39 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
     scroll_to_top(target.handle, recipient, point);
     let mut result = RgbaImage::new(scroll_bounds.width as u32, total_height);
     let mut y = 0u32;
-    for (segment, _overlap) in segments.into_iter() {
+    for (segment, overlap) in segments.into_iter() {
+        // 겹침 행은 직전 세그먼트가 이미 기록한 행의 재렌더링이다. 기록 지점을
+        // overlap 만큼 위로 올려 그 구간을 크로스페이드하면, 미세한 정렬/서브픽셀
+        // 차이가 하드 컷처럼 드러나지 않는다.
+        let start = y.saturating_sub(overlap);
         for row in 0..segment.height() {
-            let dst_y = y + row;
+            let dst_y = start + row;
             if dst_y >= result.height() {
                 break;
             }
-            for x in 0..segment.width() {
-                result.put_pixel(x, dst_y, *segment.get_pixel(x, row));
+            if overlap > 0 && dst_y < y {
+                let alpha = (row + 1) as f32 / (overlap + 1) as f32;
+                for x in 0..segment.width() {
+                    let src = *segment.get_pixel(x, row);
+                    let dst = *result.get_pixel(x, dst_y);
+                    result.put_pixel(
+                        x,
+                        dst_y,
+                        Rgba([
+                            blend_channel(dst[0], src[0], alpha),
+                            blend_channel(dst[1], src[1], alpha),
+                            blend_channel(dst[2], src[2], alpha),
+                            255,
+                        ]),
+                    );
+                }
+            } else {
+                for x in 0..segment.width() {
+                    result.put_pixel(x, dst_y, *segment.get_pixel(x, row));
+                }
             }
         }
-        y += segment.height();
+        y = start + segment.height();
         if y >= result.height() {
             break;
         }
@@ -816,11 +865,19 @@ fn send_wheel_step(recipient: isize, point: isize, delta: i32) {
 #[cfg(target_os = "windows")]
 fn stable_capture(rect: CaptureRect) -> Result<RgbaImage> {
     let mut latest = capture_area(&rect, &None)?;
-    for _ in 0..6 {
-        thread::sleep(Duration::from_millis(70));
+    let mut stable = 0;
+    // 한 번의 일치는 스크롤 감속/관성 애니메이션이 잠깐 멈춘 순간일 수 있다.
+    // 두 번 연속 일치해야 정지로 보고, 이동 중 프레임이 섞여 shift가 틀어지는 것을 막는다.
+    for _ in 0..12 {
+        thread::sleep(Duration::from_millis(80));
         let next = capture_area(&rect, &None)?;
         if equivalent(&latest, &next) {
-            return Ok(next);
+            stable += 1;
+            if stable >= 2 {
+                return Ok(next);
+            }
+        } else {
+            stable = 0;
         }
         latest = next;
     }
@@ -845,11 +902,22 @@ fn equivalent(first: &RgbaImage, second: &RgbaImage) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn find_vertical_shift(previous: &RgbaImage, current: &RgbaImage, relaxed: bool) -> u32 {
+fn find_vertical_shift(
+    previous: &RgbaImage,
+    current: &RgbaImage,
+    relaxed: bool,
+    expected: Option<u32>,
+) -> u32 {
     let height = previous.height();
     // 완화 모드에서는 더 작은 이동도, 창 높이에 가까운 큰 이동도 허용한다.
     let minimum = if relaxed { 8u32.max(height / 80) } else { 12u32.max(height / 60) };
-    let maximum = minimum.max(if relaxed { height * 4 / 5 } else { height * 2 / 3 });
+    let mut maximum = minimum.max(if relaxed { height * 4 / 5 } else { height * 2 / 3 });
+    // 직전 스텝의 이동량을 알고 있으면 그보다 훨씬 큰 후보(완화 모드의 창 높이 근처 값 등)를
+    // 배제한다. 모호한 반복 패턴은 아래에서 "직전 값에 가장 가까운 후보"를 골라 해결하므로,
+    // 상한은 실제 이동량을 잘라내지 않도록 넉넉하게 둔다.
+    if let Some(expected) = expected {
+        maximum = maximum.min(expected.saturating_mul(4).saturating_add(32)).max(minimum);
+    }
     // 4px 간격 coarse 탐색은 1px 최적점을 놓쳐 이웃 봉우리에 걸리기 쉽다.
     // 2px 간격으로 상위 후보 3개를 추린 뒤 각 후보 ±2를 1px 단위로 정밀 탐색한다.
     let mut coarse_scores: Vec<(u32, f64)> = Vec::new();
@@ -864,11 +932,30 @@ fn find_vertical_shift(previous: &RgbaImage, current: &RgbaImage, relaxed: bool)
     if coarse_scores.is_empty() {
         return 0;
     }
-    coarse_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    coarse_scores.truncate(3);
+    let best_coarse = coarse_scores
+        .iter()
+        .map(|(_, score)| *score)
+        .fold(0.0f64, f64::max);
+    // 차트/그리드처럼 세로 반복이 강한 페이지는 주기의 배수 위치에서도 점수가 비슷하게
+    // 높다. 최고점만 고르면 실제보다 큰 이동량으로 잘못 이어붙여 내용이 겹쳐 보이므로,
+    // 최고점과 비슷한 후보 중 직전 스텝 이동량에 가장 가까운 값을 고른다.
+    let mut candidates: Vec<(u32, f64)> = coarse_scores
+        .into_iter()
+        .filter(|(_, score)| *score >= best_coarse - 0.06)
+        .collect();
+    if let Some(expected) = expected {
+        candidates.sort_by(|a, b| {
+            a.0.abs_diff(expected)
+                .cmp(&b.0.abs_diff(expected))
+                .then_with(|| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
+        });
+    } else {
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    }
+    candidates.truncate(3);
     let mut best_shift = 0u32;
     let mut best_score = 0.0f64;
-    for (coarse, _) in coarse_scores {
+    for (coarse, _) in candidates {
         let start = minimum.max(coarse.saturating_sub(2));
         let end = maximum.min(coarse + 2);
         for candidate in start..=end {
@@ -892,8 +979,9 @@ fn find_vertical_shift(previous: &RgbaImage, current: &RgbaImage, relaxed: bool)
                 .map(|s| score_shift(previous, current, s, relaxed))
                 .fold(0.0f64, f64::max);
             if best_score - neighbor_best < 0.015 {
-                // 단, 거의 완벽한 일치(0.95 이상)는 평탄해도 정답으로 인정한다.
-                if best_score < 0.95 {
+                // 거의 완벽한 일치(0.95 이상)는 평탄해도 정답으로 인정한다. 그 외에는
+                // 직전 스텝 이동량을 알고 있으면 그 근처 값을 신뢰하고, 모르면 포기한다.
+                if best_score < 0.95 && expected.is_none() {
                     return 0;
                 }
             }
@@ -958,6 +1046,59 @@ fn score_shift(previous: &RgbaImage, current: &RgbaImage, shift: u32, relaxed: b
 #[cfg(target_os = "windows")]
 fn copy_bottom_rows(image: &RgbaImage, rows: u32) -> RgbaImage {
     image::imageops::crop_imm(image, 0, image.height() - rows, image.width(), rows).to_image()
+}
+
+#[cfg(target_os = "windows")]
+/// 희소 샘플링으로 고른 shift는 1px 어긋나기 쉽고, 그 1px이 이음새(가로줄)로 그대로 남는다.
+/// 겹치는 영역을 촘촘히 비교해 후보 ±2 중 실제 오차가 가장 작은 값을 확정한다.
+fn refine_vertical_shift(previous: &RgbaImage, current: &RgbaImage, shift: u32) -> u32 {
+    let height = previous.height();
+    let width = previous.width();
+    if shift == 0 || width < 8 || height < 16 {
+        return shift;
+    }
+    let top_margin = 4u32.max(height / 8);
+    let bottom_fixed = 4u32.max(height / 20);
+    let lower = shift.saturating_sub(2).max(1);
+    let upper = shift + 2;
+    let mut best = shift;
+    let mut best_error = f64::INFINITY;
+    for candidate in lower..=upper {
+        if candidate + bottom_fixed + top_margin >= height {
+            continue;
+        }
+        let limit = height - candidate - bottom_fixed;
+        let mut error = 0f64;
+        let mut count = 0f64;
+        let mut y = top_margin;
+        while y < limit {
+            let mut x = 2u32;
+            while x + 2 < width {
+                error += color_distance(
+                    previous.get_pixel(x, y + candidate),
+                    current.get_pixel(x, y),
+                ) as f64;
+                count += 1.0;
+                x += 2;
+            }
+            y += 2;
+        }
+        if count > 0.0 {
+            let mean = error / count;
+            if mean < best_error {
+                best_error = mean;
+                best = candidate;
+            }
+        }
+    }
+    best
+}
+
+#[cfg(target_os = "windows")]
+/// alpha=0이면 base, 1이면 over. 이음새 크로스페이드에만 쓰는 저비용 채널 보간.
+fn blend_channel(base: u8, over: u8, alpha: f32) -> u8 {
+    let blended = base as f32 + (over as f32 - base as f32) * alpha;
+    blended.round().clamp(0.0, 255.0) as u8
 }
 
 fn color_distance(first: &Rgba<u8>, second: &Rgba<u8>) -> u32 {
