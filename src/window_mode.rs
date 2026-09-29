@@ -143,6 +143,15 @@ pub(crate) fn register_callbacks(
         }
     });
 
+    // The folded API card gives its height back to the window, so mirror the style panel and
+    // resize the fixed-height window whenever the fold state changes.
+    let main_weak_api_fold = main_window.as_weak();
+    main_window.on_api_settings_toggled(move |_collapsed| {
+        if let Some(main) = main_weak_api_fold.upgrade() {
+            sync_ocr_window_size(&main);
+        }
+    });
+
     let main_weak_folder = main_window.as_weak();
     let state_folder = state.clone();
     main_window.on_folder_select_clicked(move || {

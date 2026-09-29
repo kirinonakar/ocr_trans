@@ -170,11 +170,15 @@ pub(crate) const OCR_WINDOW_CLOSED_HEIGHT: f32 = 880.0;
 pub(crate) const OCR_WINDOW_STYLE_HEIGHT: f32 = 1000.0;
 
 pub(crate) fn sync_ocr_window_size(main: &MainWindow) {
-    let height = if main.get_show_style_settings() {
+    let mut height = if main.get_show_style_settings() {
         OCR_WINDOW_STYLE_HEIGHT
     } else {
         OCR_WINDOW_CLOSED_HEIGHT
     };
+    if main.get_api_settings_collapsed() {
+        // The folded API card reports how much height it gives back to the window.
+        height -= main.get_api_settings_saved_height();
+    }
     main.window()
         .set_size(slint::LogicalSize::new(OCR_WINDOW_WIDTH, height));
 }

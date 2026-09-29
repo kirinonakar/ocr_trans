@@ -77,9 +77,9 @@ export component MainWindow inherits Window {
     width: 400px;
     // Keep each OCR layout state fixed while giving the optional style panel its own height.
     // The closed state is shorter to avoid unused space; the open state has room for all controls.
-    preferred-height: show_style_settings ? 990px : 870px;
-    min-height: show_style_settings ? 990px : 870px;
-    max-height: show_style_settings ? 990px : 870px;
+    preferred-height: (show_style_settings ? 990px : 870px) - (api_settings_collapsed ? api_settings_saved_height : 0px);
+    min-height: (show_style_settings ? 990px : 870px) - (api_settings_collapsed ? api_settings_saved_height : 0px);
+    max-height: (show_style_settings ? 990px : 870px) - (api_settings_collapsed ? api_settings_saved_height : 0px);
     background: dark_theme
         ? #2b2b31
         : @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
@@ -115,6 +115,9 @@ export component MainWindow inherits Window {
     in-out property <color> overlay_text_color: #1e293b;
     in-out property <float> overlay_bg_opacity: 0.9;
     in-out property <bool> show_style_settings: false;
+    // Fold state of the API card; the saved height is the window height the fold gives back.
+    in-out property <bool> api_settings_collapsed: false;
+    in-out property <length> api_settings_saved_height: 0px;
     in-out property <bool> dark_theme: false;
     in-out property <bool> use_textbox: false;
     in-out property <string> last_translated_text: "";
@@ -138,6 +141,7 @@ export component MainWindow inherits Window {
     callback refresh_models_clicked();
     callback sync_lmstudio_models();
     callback style_panel_toggled(bool);
+    callback api_settings_toggled(bool);
     callback style_changed();
     callback folder_select_clicked();
     callback capture_folder_changed(string);
@@ -202,7 +206,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        Rectangle {
+        api-card := Rectangle {
             background: dark_theme ? #37373f : #ffffff;
             border-radius: 12px;
             border-width: 1px;
@@ -211,132 +215,171 @@ export component MainWindow inherits Window {
             VerticalLayout {
                 spacing: 8px;
                 padding: 10px;
-                Text { text: "API SETTINGS"; font-weight: 700; color: dark_theme ? #45b8ed : #2563eb; font-size: 14px; }
-                
-                VerticalLayout {
-                    spacing: 6px;
-                    Text { text: "Provider:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                    ComboBox {
-                        model: provider_options;
-                        current-value <=> api_type;
-                        current-index <=> api_type_index;
-                        selected(value) => {
-                            api_type_changed(value);
-                            if (value == "LMStudio" || value == "Ollama" || value == "Ollama Cloud" || value == "Unsloth Desktop" || value == "OpenCode Go" || value == "OpenCode Zen") { sync_lmstudio_models(); }
-                        }
-                    }
-                }
-
-                VerticalLayout {
-                    spacing: 4px;
-                    Text { text: "Endpoint:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                    LineEdit {
-                        text <=> api_endpoint;
-                        placeholder-text: "http://localhost:1234/v1";
-                    }
-                }
-                
-                VerticalLayout {
-                    spacing: 4px;
-                    Text { text: "API Key:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                    LineEdit {
-                        text <=> api_key;
-                        input-type: password;
-                        placeholder-text: "Leave empty for local providers";
-                        edited(value) => { api_key_changed(value); }
-                        accepted(value) => { api_key_changed(value); }
-                    }
-                }
-                
-                VerticalLayout {
-                    spacing: 4px;
-                    Text { text: "Model Name:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                // Header row doubles as the fold toggle, mirroring the style panel's ▲/▼ button.
+                Rectangle {
+                    background: transparent;
                     HorizontalLayout {
+                        height: 22px;
                         spacing: 6px;
-                        ComboBox {
-                            model: model_options;
-                            current-value <=> model_name;
-                            current-index <=> model_index;
-                            selected(value) => { model_changed(value); }
+                        Text {
+                            text: "API SETTINGS";
+                            font-weight: 700;
+                            color: dark_theme ? #45b8ed : #2563eb;
+                            font-size: 14px;
+                            vertical-alignment: center;
                         }
-                        ToolbarButton {
-                            icon: @image-url("icons/sync.svg");
-                            dark_theme: dark_theme;
-                            width: 32px;
-                            height: 32px;
-                            icon_size: 18px;
-                            pressed => { refresh_models_clicked(); }
+                        Rectangle { } // Flexible spacer keeps the chevron on the right
+                        Image {
+                            source: @image-url("icons/chevron-down.svg");
+                            width: 14px;
+                            height: 14px;
+                            colorize: dark_theme ? #e2e8f0 : #334155;
+                            // Match the style panel: ▲ while expanded, ▼ while folded.
+                            rotation-angle: api_settings_collapsed ? 0deg : 180deg;
+                            animate rotation-angle { duration: 150ms; }
                         }
                     }
-                }
-                
-                VerticalLayout {
-                    spacing: 4px;
-                    HorizontalLayout {
-                        spacing: 4px;
-                        Text { text: "Temperature:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                        Text { text: round(temperature * 10) / 10; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; font-weight: 700; }
-                        Rectangle { } // Flexible spacer to push content left
-                    }
-                    Slider {
-                        minimum: 0.0;
-                        maximum: 1.0;
-                        value <=> temperature;
-                    }
-                }
-
-                VerticalLayout {
-                    spacing: 4px;
-                    Text { text: "Thinking Level:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                    ComboBox {
-                        model: thinking_level_options;
-                        current-value <=> thinking_level;
-                        selected(value) => { thinking_level_changed(value); }
+                    TouchArea {
+                        clicked => {
+                            if (!api_settings_collapsed) {
+                                // Folded, the card keeps only its 10px vertical padding and the
+                                // 22px header row; remember the height the window can reclaim.
+                                api_settings_saved_height = api-card.height - 42px;
+                            }
+                            api_settings_collapsed = !api_settings_collapsed;
+                            api_settings_toggled(api_settings_collapsed);
+                        }
                     }
                 }
 
-                VerticalLayout {
-                    spacing: 4px;
-                    HorizontalLayout {
-                        spacing: 4px;
-                        Text { text: "System Prompt:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                        Rectangle { } // Flexible spacer keeps the preset controls on the right
+                if (!api_settings_collapsed) : VerticalLayout {
+                    spacing: 8px;
+
+                    VerticalLayout {
+                        spacing: 6px;
+                        Text { text: "Provider:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                         ComboBox {
-                            width: 124px;
-                            height: 26px;
-                            model: preset_options;
-                            current-index <=> preset_index;
-                            selected(value) => { preset_selected(value); }
-                        }
-                        ToolbarButton {
-                            icon: @image-url("icons/save.svg");
-                            dark_theme: dark_theme;
-                            width: 26px;
-                            height: 26px;
-                            icon_size: 15px;
-                            pressed => { preset_save_clicked(); }
-                        }
-                        ToolbarButton {
-                            icon: @image-url("icons/trash.svg");
-                            dark_theme: dark_theme;
-                            width: 26px;
-                            height: 26px;
-                            icon_size: 15px;
-                            pressed => { preset_delete_clicked(); }
+                            model: provider_options;
+                            current-value <=> api_type;
+                            current-index <=> api_type_index;
+                            selected(value) => {
+                                api_type_changed(value);
+                                if (value == "LMStudio" || value == "Ollama" || value == "Ollama Cloud" || value == "Unsloth Desktop" || value == "OpenCode Go" || value == "OpenCode Zen") { sync_lmstudio_models(); }
+                            }
                         }
                     }
-                    Rectangle {
-                        background: dark_theme ? #2b2b31 : #f8fafc;
-                        border-radius: 4px;
-                        border-width: 1px;
-                        border-color: dark_theme ? transparent : #e2e8f0;
-                        height: 64px;
-                        TextEdit {
-                            text <=> system_prompt;
-                            width: 100%;
-                            height: 100%;
-                            font-size: 13px;
-                            edited(value) => { system_prompt_changed(value); }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text { text: "Endpoint:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                        LineEdit {
+                            text <=> api_endpoint;
+                            placeholder-text: "http://localhost:1234/v1";
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text { text: "API Key:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                        LineEdit {
+                            text <=> api_key;
+                            input-type: password;
+                            placeholder-text: "Leave empty for local providers";
+                            edited(value) => { api_key_changed(value); }
+                            accepted(value) => { api_key_changed(value); }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text { text: "Model Name:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            ComboBox {
+                                model: model_options;
+                                current-value <=> model_name;
+                                current-index <=> model_index;
+                                selected(value) => { model_changed(value); }
+                            }
+                            ToolbarButton {
+                                icon: @image-url("icons/sync.svg");
+                                dark_theme: dark_theme;
+                                width: 32px;
+                                height: 32px;
+                                icon_size: 18px;
+                                pressed => { refresh_models_clicked(); }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        HorizontalLayout {
+                            spacing: 4px;
+                            Text { text: "Temperature:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            Text { text: round(temperature * 10) / 10; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; font-weight: 700; }
+                            Rectangle { } // Flexible spacer to push content left
+                        }
+                        Slider {
+                            minimum: 0.0;
+                            maximum: 1.0;
+                            value <=> temperature;
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text { text: "Thinking Level:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                        ComboBox {
+                            model: thinking_level_options;
+                            current-value <=> thinking_level;
+                            selected(value) => { thinking_level_changed(value); }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        HorizontalLayout {
+                            spacing: 4px;
+                            Text { text: "System Prompt:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            Rectangle { } // Flexible spacer keeps the preset controls on the right
+                            ComboBox {
+                                width: 124px;
+                                height: 26px;
+                                model: preset_options;
+                                current-index <=> preset_index;
+                                selected(value) => { preset_selected(value); }
+                            }
+                            ToolbarButton {
+                                icon: @image-url("icons/save.svg");
+                                dark_theme: dark_theme;
+                                width: 26px;
+                                height: 26px;
+                                icon_size: 15px;
+                                pressed => { preset_save_clicked(); }
+                            }
+                            ToolbarButton {
+                                icon: @image-url("icons/trash.svg");
+                                dark_theme: dark_theme;
+                                width: 26px;
+                                height: 26px;
+                                icon_size: 15px;
+                                pressed => { preset_delete_clicked(); }
+                            }
+                        }
+                        Rectangle {
+                            background: dark_theme ? #2b2b31 : #f8fafc;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: dark_theme ? transparent : #e2e8f0;
+                            height: 64px;
+                            TextEdit {
+                                text <=> system_prompt;
+                                width: 100%;
+                                height: 100%;
+                                font-size: 13px;
+                                edited(value) => { system_prompt_changed(value); }
+                            }
                         }
                     }
                 }
