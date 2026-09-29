@@ -4,7 +4,7 @@ use crate::capture_workflow::{
 };
 use crate::settings::{
     load_system_prompt_presets, save_app_mode, save_capture_folder, save_dark_theme,
-    save_system_prompt, save_system_prompt_presets, PromptPreset,
+    save_system_prompt, save_system_prompt_presets, save_ui_fold_states, PromptPreset,
 };
 use crate::state::AppState;
 use crate::{
@@ -14,6 +14,15 @@ use crate::{
 use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// Persists the fold states of the style panel and the API settings card.
+fn persist_fold_states(main: &MainWindow) {
+    save_ui_fold_states(
+        main.get_show_style_settings(),
+        main.get_api_settings_collapsed(),
+        main.get_api_settings_saved_height(),
+    );
+}
 
 /// Replaces the preset combo box model with the given preset names.
 fn sync_preset_options(main: &MainWindow, presets: &[PromptPreset]) {
@@ -139,6 +148,7 @@ pub(crate) fn register_callbacks(
     let main_weak_style_panel = main_window.as_weak();
     main_window.on_style_panel_toggled(move |_is_open| {
         if let Some(main) = main_weak_style_panel.upgrade() {
+            persist_fold_states(&main);
             sync_ocr_window_size(&main);
         }
     });
@@ -148,6 +158,7 @@ pub(crate) fn register_callbacks(
     let main_weak_api_fold = main_window.as_weak();
     main_window.on_api_settings_toggled(move |_collapsed| {
         if let Some(main) = main_weak_api_fold.upgrade() {
+            persist_fold_states(&main);
             sync_ocr_window_size(&main);
         }
     });

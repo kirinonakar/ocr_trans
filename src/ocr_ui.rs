@@ -88,6 +88,16 @@ pub(crate) fn register_callbacks(
             let mut s = state_style.lock().unwrap();
             s.use_textbox = use_textbox;
         }
+        // Persist the style values so the next launch restores the last look.
+        if let Some(main) = main_weak_style.upgrade() {
+            save_style_settings(
+                main.get_base_font_size(),
+                use_textbox,
+                &color_to_hex(main.get_overlay_bg_color()),
+                &color_to_hex(main.get_overlay_text_color()),
+                main.get_overlay_bg_opacity(),
+            );
+        }
         if let (Some(main), Some(overlay), Some(textbox)) = (
             main_weak_style.upgrade(),
             overlay_weak_style.upgrade(),
@@ -174,6 +184,13 @@ pub(crate) fn register_callbacks(
             s.use_textbox = false;
 
             main.set_use_textbox(false);
+            save_style_settings(
+                main.get_base_font_size(),
+                false,
+                &color_to_hex(main.get_overlay_bg_color()),
+                &color_to_hex(main.get_overlay_text_color()),
+                main.get_overlay_bg_opacity(),
+            );
             overlay.set_is_textbox_mode(false);
             overlay.set_bg_opacity(main.get_overlay_bg_opacity());
             overlay.set_hide_text(false);

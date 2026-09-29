@@ -235,8 +235,8 @@ export component MainWindow inherits Window {
                             height: 14px;
                             colorize: dark_theme ? #e2e8f0 : #334155;
                             // Match the style panel: ▲ while expanded, ▼ while folded.
-                            rotation-angle: api_settings_collapsed ? 0deg : 180deg;
-                            animate rotation-angle { duration: 150ms; }
+                            transform-rotation: api_settings_collapsed ? 0deg : 180deg;
+                            animate transform-rotation { duration: 150ms; }
                         }
                     }
                     TouchArea {

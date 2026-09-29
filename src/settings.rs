@@ -284,6 +284,14 @@ pub(crate) struct AppSettings {
     pub(crate) app_mode: String,
     pub(crate) dark_theme: bool,
     pub(crate) ocr_language: String,
+    pub(crate) base_font_size: f32,
+    pub(crate) use_textbox: bool,
+    pub(crate) overlay_bg_color: String,
+    pub(crate) overlay_text_color: String,
+    pub(crate) overlay_bg_opacity: f32,
+    pub(crate) style_panel_open: bool,
+    pub(crate) api_settings_collapsed: bool,
+    pub(crate) api_settings_saved_height: f32,
     pub(crate) shortcuts: ShortcutConfig,
 }
 
@@ -454,6 +462,20 @@ fn ini_bool(
     )
 }
 
+fn ini_float(
+    values: &HashMap<(String, String), String>,
+    section: &str,
+    key: &str,
+    fallback: f32,
+) -> f32 {
+    ini_value(values, section, key, fallback.to_string())
+        .trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .unwrap_or(fallback)
+}
+
 fn load_legacy_provider_config() -> ProviderConfig {
     if let Some(path) = legacy_provider_config_path() {
         if let Ok(json) = std::fs::read_to_string(&path) {
@@ -476,6 +498,14 @@ pub(crate) fn load_app_settings() -> AppSettings {
         app_mode: "ocr".to_string(),
         dark_theme: false,
         ocr_language: String::new(),
+        base_font_size: 16.0,
+        use_textbox: false,
+        overlay_bg_color: "#ffffff".to_string(),
+        overlay_text_color: "#1e293b".to_string(),
+        overlay_bg_opacity: 0.9,
+        style_panel_open: false,
+        api_settings_collapsed: false,
+        api_settings_saved_height: 0.0,
         shortcuts: ShortcutConfig::default(),
     };
 
@@ -552,6 +582,40 @@ pub(crate) fn load_app_settings() -> AppSettings {
             settings.app_mode = ini_value(&values, "app", "app_mode", settings.app_mode);
             settings.dark_theme = ini_bool(&values, "app", "dark_theme", settings.dark_theme);
             settings.ocr_language = ini_value(&values, "app", "ocr_language", settings.ocr_language);
+            settings.base_font_size =
+                ini_float(&values, "style", "base_font_size", settings.base_font_size)
+                    .clamp(8.0, 72.0);
+            settings.use_textbox = ini_bool(&values, "style", "use_textbox", settings.use_textbox);
+            settings.overlay_bg_color = ini_value(
+                &values,
+                "style",
+                "overlay_bg_color",
+                settings.overlay_bg_color,
+            );
+            settings.overlay_text_color = ini_value(
+                &values,
+                "style",
+                "overlay_text_color",
+                settings.overlay_text_color,
+            );
+            settings.overlay_bg_opacity =
+                ini_float(&values, "style", "overlay_bg_opacity", settings.overlay_bg_opacity)
+                    .clamp(0.1, 1.0);
+            settings.style_panel_open =
+                ini_bool(&values, "ui", "style_panel_open", settings.style_panel_open);
+            settings.api_settings_collapsed = ini_bool(
+                &values,
+                "ui",
+                "api_settings_collapsed",
+                settings.api_settings_collapsed,
+            );
+            settings.api_settings_saved_height = ini_float(
+                &values,
+                "ui",
+                "api_settings_saved_height",
+                settings.api_settings_saved_height,
+            )
+            .clamp(0.0, 1000.0);
             settings.shortcuts.select_area = ini_value(&values, "shortcuts", "select_area", settings.shortcuts.select_area);
             settings.shortcuts.start = ini_value(&values, "shortcuts", "start", settings.shortcuts.start);
             settings.shortcuts.toolbar1_action = ini_value(&values, "shortcuts", "toolbar1_action", settings.shortcuts.toolbar1_action);
@@ -567,7 +631,7 @@ pub(crate) fn load_app_settings() -> AppSettings {
 
 pub(crate) fn save_app_settings(settings: &AppSettings) {
     let contents = format!(
-        "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
+        "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nuse_textbox={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
         ini_escape(&settings.provider.provider),
         ini_escape(&settings.provider.lm_model),
         ini_escape(&settings.provider.gemini_model),
@@ -584,6 +648,14 @@ pub(crate) fn save_app_settings(settings: &AppSettings) {
         ini_escape(&settings.app_mode),
         if settings.dark_theme { "true" } else { "false" },
         ini_escape(settings.ocr_language.trim()),
+        settings.base_font_size,
+        if settings.use_textbox { "true" } else { "false" },
+        ini_escape(&settings.overlay_bg_color),
+        ini_escape(&settings.overlay_text_color),
+        settings.overlay_bg_opacity,
+        if settings.style_panel_open { "true" } else { "false" },
+        if settings.api_settings_collapsed { "true" } else { "false" },
+        settings.api_settings_saved_height,
         ini_escape(&settings.shortcuts.select_area),
         ini_escape(&settings.shortcuts.start),
         ini_escape(&settings.shortcuts.toolbar1_action),
@@ -660,6 +732,53 @@ pub(crate) fn save_ocr_language(language: &str) {
     let mut settings = load_app_settings();
     settings.ocr_language = language.trim().to_string();
     save_app_settings(&settings);
+}
+
+/// Persists the Style panel values so the overlay keeps its last look across restarts.
+pub(crate) fn save_style_settings(
+    base_font_size: f32,
+    use_textbox: bool,
+    overlay_bg_color: &str,
+    overlay_text_color: &str,
+    overlay_bg_opacity: f32,
+) {
+    let mut settings = load_app_settings();
+    settings.base_font_size = base_font_size.clamp(8.0, 72.0);
+    settings.use_textbox = use_textbox;
+    settings.overlay_bg_color = overlay_bg_color.to_string();
+    settings.overlay_text_color = overlay_text_color.to_string();
+    settings.overlay_bg_opacity = overlay_bg_opacity.clamp(0.1, 1.0);
+    save_app_settings(&settings);
+}
+
+/// Persists the fold states of the style panel and the API settings card.
+pub(crate) fn save_ui_fold_states(
+    style_panel_open: bool,
+    api_settings_collapsed: bool,
+    api_settings_saved_height: f32,
+) {
+    let mut settings = load_app_settings();
+    settings.style_panel_open = style_panel_open;
+    settings.api_settings_collapsed = api_settings_collapsed;
+    settings.api_settings_saved_height = api_settings_saved_height.clamp(0.0, 1000.0);
+    save_app_settings(&settings);
+}
+
+/// Formats a Slint color as `#rrggbb` for the settings file.
+pub(crate) fn color_to_hex(color: slint::Color) -> String {
+    format!("#{:02x}{:02x}{:02x}", color.red(), color.green(), color.blue())
+}
+
+/// Parses a `#rrggbb` color from the settings file. Returns `None` for other input.
+pub(crate) fn color_from_hex(value: &str) -> Option<slint::Color> {
+    let hex = value.trim().trim_start_matches('#');
+    if hex.len() != 6 || !hex.is_ascii() {
+        return None;
+    }
+    let red = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let green = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let blue = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(slint::Color::from_rgb_u8(red, green, blue))
 }
 
 /// Loads just the shortcut configuration.

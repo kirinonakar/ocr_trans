@@ -2,7 +2,7 @@
 
 A real-time screen OCR, translation and capture tool built with Rust and Slint powered by VLM (Vision-Language Model).
 
-<img src="screenshot1.png" alt="screenshot1" width="50%">
+<img src="screenshot1.png" alt="screenshot1" width="49%"> <img src="screenshot3.png" alt="screenshot3" width="49%">
 
 Capture toolbar (dark theme)
 

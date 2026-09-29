@@ -325,7 +325,21 @@ pub(crate) fn initialize_ui(
             .map_or(-1, |index| index as i32),
     );
     main_window.set_interval(0.0);
-    main_window.set_base_font_size(16.0);
+    // Restore the Style panel values so the overlay keeps its last look across restarts.
+    main_window.set_base_font_size(initial_settings.base_font_size);
+    main_window.set_use_textbox(initial_settings.use_textbox);
+    if let Some(color) = color_from_hex(&initial_settings.overlay_bg_color) {
+        main_window.set_overlay_bg_color(color);
+    }
+    if let Some(color) = color_from_hex(&initial_settings.overlay_text_color) {
+        main_window.set_overlay_text_color(color);
+    }
+    main_window.set_overlay_bg_opacity(initial_settings.overlay_bg_opacity);
+    // Restore the fold states of the style panel and the API card, then re-apply the window size.
+    main_window.set_show_style_settings(initial_settings.style_panel_open);
+    main_window.set_api_settings_collapsed(initial_settings.api_settings_collapsed);
+    main_window.set_api_settings_saved_height(initial_settings.api_settings_saved_height);
+    sync_ocr_window_size(main_window);
 
     // Initial Model Sync (Localhost/LM Studio)
     let main_weak_startup = main_window.as_weak();
