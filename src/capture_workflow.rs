@@ -2,7 +2,7 @@ use crate::state::{AppState, SelectionPurpose};
 use crate::text_layout::*;
 use crate::{
     api, capture, ocr, win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow,
-    RecordingBorderWindow, SelectionWindow, TextboxWindow,
+    OverlayWindow, RecordingBorderWindow, SelectionWindow, TextboxWindow,
 };
 use anyhow::{Context, Result};
 use global_hotkey::{hotkey::HotKey, GlobalHotKeyManager};
@@ -259,6 +259,56 @@ pub(crate) fn schedule_textbox_native_theme(textbox: slint::Weak<TextboxWindow>,
         let current_dark_theme = textbox.get_dark_theme();
         let _ = configure_textbox_native_theme(&textbox, current_dark_theme);
         schedule_textbox_native_theme(textbox.as_weak(), attempt + 1);
+    });
+}
+
+/// Keeps the translation overlay (and the textbox used in Textbox mode) above applications that
+/// run fullscreen. Slint's `always-on-top` applies the topmost band when a window is created, and
+/// Windows can push the overlay behind an application that occupies the screen in fullscreen mode,
+/// so the topmost band is re-applied while another process owns a fullscreen foreground window.
+///
+/// The caller must keep the returned timer alive; dropping it stops the guard.
+#[cfg(target_os = "windows")]
+pub(crate) fn start_overlay_topmost_guard(
+    overlay: slint::Weak<OverlayWindow>,
+    textbox: slint::Weak<TextboxWindow>,
+) -> slint::Timer {
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(500),
+        move || {
+            if !win_utils::foreground_app_is_fullscreen() {
+                return;
+            }
+            if let Some(overlay) = overlay.upgrade() {
+                if overlay.window().is_visible() {
+                    reassert_topmost(overlay.window());
+                }
+            }
+            if let Some(textbox) = textbox.upgrade() {
+                if textbox.window().is_visible() {
+                    reassert_topmost(textbox.window());
+                }
+            }
+        },
+    );
+    timer
+}
+
+/// Re-applies the topmost band to a window without moving it or stealing focus.
+#[cfg(target_os = "windows")]
+fn reassert_topmost(window: &slint::Window) {
+    let _ = window.with_winit_window(|winit_window| {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Ok(handle) = winit_window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        win_utils::set_topmost(windows::Win32::Foundation::HWND(handle.hwnd.get() as _));
     });
 }
 

@@ -118,6 +118,70 @@ pub fn set_layered(hwnd: HWND) {
     }
 }
 
+/// Re-applies the topmost band to the window without resizing it, moving it, or stealing focus.
+///
+/// An application running in fullscreen can push an always-on-top overlay behind itself, so the
+/// OCR overlay re-applies HWND_TOPMOST while such an application owns the foreground.
+pub fn set_topmost(hwnd: HWND) {
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+        };
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        );
+    }
+}
+
+/// Returns true when the foreground window of another process covers its whole monitor, which is
+/// how a fullscreen application presents itself (browser, game, video player, ...). This app's own
+/// windows are ignored so switching between them never triggers the overlay guard, and merely
+/// maximized windows are excluded via IsZoomed.
+pub fn foreground_app_is_fullscreen() -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsZoomed,
+    };
+
+    unsafe {
+        let foreground = GetForegroundWindow();
+        if foreground.0.is_null() {
+            return false;
+        }
+        let mut process_id = 0u32;
+        let _ = GetWindowThreadProcessId(foreground, Some(&mut process_id));
+        if process_id == std::process::id() || IsZoomed(foreground).as_bool() {
+            return false;
+        }
+        let mut window_rect = RECT::default();
+        if GetWindowRect(foreground, &mut window_rect).is_err() {
+            return false;
+        }
+        let monitor = MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST);
+        let mut monitor_info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(monitor, &mut monitor_info).as_bool() {
+            return false;
+        }
+        let monitor_rect = monitor_info.rcMonitor;
+        window_rect.left <= monitor_rect.left
+            && window_rect.top <= monitor_rect.top
+            && window_rect.right >= monitor_rect.right
+            && window_rect.bottom >= monitor_rect.bottom
+    }
+}
+
 /// Applies the Mica backdrop effect (Windows 11).
 pub fn set_mica_backdrop(hwnd: HWND) {
     unsafe {

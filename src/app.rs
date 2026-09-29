@@ -187,6 +187,13 @@ pub(crate) async fn run() -> Result<()> {
         hotkey_state,
     );
 
+    // Keep the translation overlay above applications that run in fullscreen mode. The guard
+    // re-applies the topmost window band while another process owns a fullscreen foreground
+    // window, and the timer stays alive until the event loop exits.
+    #[cfg(target_os = "windows")]
+    let _overlay_topmost_guard =
+        start_overlay_topmost_guard(overlay_window.as_weak(), textbox_window.as_weak());
+
     if let Err(error) = main_window.run() {
         log::error!("OCR Translator event loop stopped: {error:?}");
     }
