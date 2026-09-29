@@ -119,6 +119,19 @@ pub(crate) fn physical_selection_rect(
     }
 }
 
+/// Window position in physical desktop pixels. Logical positions are re-interpreted through the
+/// DPI scale of the monitor a window is created on, which moves the selector and the overlay to
+/// the wrong display whenever their region is not on the primary monitor.
+pub(crate) fn physical_window_position(x: i32, y: i32) -> slint::WindowPosition {
+    slint::WindowPosition::Physical(slint::PhysicalPosition::new(x, y))
+}
+
+/// Window size in physical desktop pixels, so a native window lines up exactly with the captured
+/// pixels instead of the logical size of whatever monitor it was created on.
+pub(crate) fn physical_window_size(width: u32, height: u32) -> slint::WindowSize {
+    slint::WindowSize::Physical(slint::PhysicalSize::new(width.max(1), height.max(1)))
+}
+
 pub(crate) fn format_elapsed(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
     format!("{:02}:{:02}", (seconds / 60) % 60, seconds % 60)
@@ -501,25 +514,35 @@ pub(crate) fn prepare_selection_window(
     selection.set_ruler_mode(purpose == SelectionPurpose::Ruler);
     selection.invoke_reset();
 
+    // The selector covers the whole virtual desktop so a region can be dragged across monitors;
+    // capture_area stitches every monitor that the finished region intersects.
     let (cursor_x, cursor_y) = capture::cursor_position();
-    let (monitor_rect, screenshot) = match capture::capture_monitor_at_point(cursor_x, cursor_y) {
-        Ok((rect, image)) => (rect, image),
-        Err(_) => {
-            let Ok(image) = capture::capture_full_screen() else {
-                if let Ok(mut state) = state.lock() {
-                    state.pending_selection = None;
+    let (desktop_rect, screenshot) = match capture::capture_virtual_desktop() {
+        Ok(capture) => capture,
+        Err(error) => {
+            log::warn!(
+                "Virtual desktop capture failed; using the monitor under the cursor: {error:?}"
+            );
+            match capture::capture_monitor_at_point(cursor_x, cursor_y) {
+                Ok(capture) => capture,
+                Err(_) => {
+                    let Ok(image) = capture::capture_full_screen() else {
+                        if let Ok(mut state) = state.lock() {
+                            state.pending_selection = None;
+                        }
+                        return false;
+                    };
+                    (
+                        capture::CaptureRect {
+                            x: 0,
+                            y: 0,
+                            width: image.width() as i32,
+                            height: image.height() as i32,
+                        },
+                        image,
+                    )
                 }
-                return false;
-            };
-            (
-                capture::CaptureRect {
-                    x: 0,
-                    y: 0,
-                    width: image.width() as i32,
-                    height: image.height() as i32,
-                },
-                image,
-            )
+            }
         }
     };
 
@@ -533,22 +556,20 @@ pub(crate) fn prepare_selection_window(
     {
         let mut state = state.lock().unwrap();
         state.pending_selection = Some(purpose);
-        state.selection_origin_x = monitor_rect.x;
-        state.selection_origin_y = monitor_rect.y;
+        state.selection_origin_x = desktop_rect.x;
+        state.selection_origin_y = desktop_rect.y;
         state.selection_scale = scale;
         state.selection_screenshot = selection_screenshot;
     }
     selection.set_screenshot(rgba_to_slint_image(screenshot));
-    selection.window().set_size(slint::LogicalSize::new(
-        width as f32 / scale,
-        height as f32 / scale,
-    ));
+    // Physical geometry keeps the selector aligned with the captured desktop pixels, including
+    // monitors left of or above the primary display.
     selection
         .window()
-        .set_position(slint::WindowPosition::Logical(slint::LogicalPosition::new(
-            monitor_rect.x as f32 / scale,
-            monitor_rect.y as f32 / scale,
-        )));
+        .set_position(physical_window_position(desktop_rect.x, desktop_rect.y));
+    selection
+        .window()
+        .set_size(physical_window_size(width, height));
 
     let should_initialize = !*selection_initialized.lock().unwrap();
     if let Err(error) = selection.show() {
@@ -558,6 +579,32 @@ pub(crate) fn prepare_selection_window(
         }
         return false;
     }
+    // Winit can apply its own geometry while the secondary window is created lazily, so repeat
+    // the physical placement after show(). The real scale factor is only known now as well; the
+    // color picker and the magnifier index the stitched screenshot with it.
+    selection
+        .window()
+        .set_position(physical_window_position(desktop_rect.x, desktop_rect.y));
+    selection
+        .window()
+        .set_size(physical_window_size(width, height));
+    if let Ok(mut state) = state.lock() {
+        state.selection_scale = selection.window().scale_factor().max(1.0);
+    }
+    // Windows can still adjust the window during the first frames; re-apply one more time after
+    // the native surface has settled so the selector keeps covering every monitor.
+    let selection_weak = selection.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(32), move || {
+        let Some(selection) = selection_weak.upgrade() else {
+            return;
+        };
+        selection
+            .window()
+            .set_position(physical_window_position(desktop_rect.x, desktop_rect.y));
+        selection
+            .window()
+            .set_size(physical_window_size(width, height));
+    });
     // Configure the native selection window only after show(). Winit creates secondary windows
     // lazily, so doing this before show() can leave the first capture action unconfigured.
     #[cfg(target_os = "windows")]
@@ -762,7 +809,10 @@ pub(crate) fn begin_fullscreen_toolbar_action_now(
             return;
         };
         let (cursor_x, cursor_y) = capture::cursor_position();
-        let rect = match capture::monitor_rect_at_point(cursor_x, cursor_y) {
+        // "Fullscreen" covers every monitor, so a dual-monitor desktop is captured as one image.
+        let rect = match capture::virtual_desktop_capture_rect()
+            .or_else(|_| capture::monitor_rect_at_point(cursor_x, cursor_y))
+        {
             Ok(rect) => rect,
             Err(error) => {
                 set_capture_toolbar_status(&toolbar, format!("Error: {error}"));

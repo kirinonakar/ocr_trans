@@ -343,7 +343,8 @@ pub(crate) fn register_callbacks(
             // Convert logical to physical coordinates using scale factor
             let sf = selection.window().scale_factor();
             s.selection_scale = sf;
-            s.capture_rect = Some(physical_selection_rect(&s, x, y, w, h));
+            let physical_rect = physical_selection_rect(&s, x, y, w, h);
+            s.capture_rect = Some(physical_rect);
 
             // Auto-start
             s.is_running = true;
@@ -362,9 +363,22 @@ pub(crate) fn register_callbacks(
             main.set_is_running(true);
 
             if let Some(overlay) = overlay_weak.upgrade() {
-                // Set properties
-                overlay.set_window_w(w);
-                overlay.set_window_h(h);
+                // The overlay is placed in physical desktop pixels. A logical position is
+                // converted back with the DPI scale of the monitor the window is created on,
+                // which moves the overlay to the wrong display (or keeps it off-screen) whenever
+                // the capture region is not on the primary monitor.
+                overlay
+                    .window()
+                    .set_position(physical_window_position(physical_rect.x, physical_rect.y));
+                overlay.window().set_size(physical_window_size(
+                    physical_rect.width.max(1) as u32,
+                    physical_rect.height.max(1) as u32,
+                ));
+                // Slint lays out in logical pixels; the real scale factor is known after the
+                // first show, so use the current monitor scale as the initial estimate.
+                let pre_show_scale = overlay.window().scale_factor().max(1.0);
+                overlay.set_window_w(physical_rect.width as f32 / pre_show_scale);
+                overlay.set_window_h(physical_rect.height as f32 / pre_show_scale);
                 overlay.set_window_x(0.0); // Internal offset should be 0 since window itself is moved
                 overlay.set_window_y(0.0);
 
@@ -378,21 +392,8 @@ pub(crate) fn register_callbacks(
                 overlay.set_hide_text(main.get_use_textbox());
                 overlay.set_is_textbox_mode(main.get_use_textbox());
 
-                // Move and resize native window
-                let window = overlay.window();
-                window.set_position(slint::WindowPosition::Logical(slint::LogicalPosition::new(
-                    x, y,
-                )));
-                window.set_size(slint::LogicalSize::new(w, h));
-
                 overlay.set_translated_text("Searching...".into());
                 overlay.set_is_searching(true);
-                overlay.set_font_size(calculate_font_size(
-                    "Searching...",
-                    w,
-                    h,
-                    main.get_base_font_size(),
-                ));
                 main.set_overlay_visible(true);
 
                 if main.get_use_textbox() {
@@ -408,6 +409,27 @@ pub(crate) fn register_callbacks(
                 if let Err(error) = overlay.show() {
                     log::warn!("Failed to show OCR overlay: {error:?}");
                 }
+                // Repeat the physical placement after show(): winit can apply its own geometry
+                // while the overlay's native window is created lazily. Then translate the
+                // physical region into the logical size the Slint UI and font fitter use.
+                overlay
+                    .window()
+                    .set_position(physical_window_position(physical_rect.x, physical_rect.y));
+                overlay.window().set_size(physical_window_size(
+                    physical_rect.width.max(1) as u32,
+                    physical_rect.height.max(1) as u32,
+                ));
+                let overlay_scale = overlay.window().scale_factor().max(1.0);
+                let logical_width = physical_rect.width as f32 / overlay_scale;
+                let logical_height = physical_rect.height as f32 / overlay_scale;
+                overlay.set_window_w(logical_width);
+                overlay.set_window_h(logical_height);
+                overlay.set_font_size(calculate_font_size(
+                    "Searching...",
+                    logical_width,
+                    logical_height,
+                    main.get_base_font_size(),
+                ));
 
                 // Set overlay to click-through and hide from taskbar
                 #[cfg(target_os = "windows")]
