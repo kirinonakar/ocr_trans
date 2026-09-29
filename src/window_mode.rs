@@ -2,7 +2,10 @@ use crate::capture_workflow::{
     configure_main_window_native_theme, schedule_main_window_native_theme,
     schedule_textbox_native_theme, show_capture_toolbar_at_top_center, sync_ocr_window_size,
 };
-use crate::settings::{save_app_mode, save_capture_folder, save_dark_theme, save_system_prompt};
+use crate::settings::{
+    load_system_prompt_presets, save_app_mode, save_capture_folder, save_dark_theme,
+    save_system_prompt, save_system_prompt_presets, PromptPreset,
+};
 use crate::state::AppState;
 use crate::{
     win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow, OverlayWindow,
@@ -11,6 +14,15 @@ use crate::{
 use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// Replaces the preset combo box model with the given preset names.
+fn sync_preset_options(main: &MainWindow, presets: &[PromptPreset]) {
+    let names: Vec<slint::SharedString> = presets
+        .iter()
+        .map(|preset| preset.name.as_str().into())
+        .collect();
+    main.set_preset_options(slint::ModelRc::from(names.as_slice()));
+}
 
 pub(crate) fn register_callbacks(
     main_window: &MainWindow,
@@ -35,6 +47,91 @@ pub(crate) fn register_callbacks(
 
     main_window.on_system_prompt_changed(move |prompt| {
         save_system_prompt(prompt.as_str());
+    });
+    // System prompt presets: the combo box applies a stored prompt, the disk button opens the
+    // name dialog for a new or overwritten preset, and the trash button removes the selection.
+    let main_weak_preset_select = main_window.as_weak();
+    main_window.on_preset_selected(move |name| {
+        let Some(main) = main_weak_preset_select.upgrade() else {
+            return;
+        };
+        let name = name.to_string();
+        let presets = load_system_prompt_presets();
+        let Some(index) = presets.iter().position(|preset| preset.name == name) else {
+            return;
+        };
+        let prompt = presets[index].prompt.clone();
+        main.set_system_prompt(prompt.clone().into());
+        main.set_preset_index(index as i32);
+        save_system_prompt(&prompt);
+    });
+
+    let main_weak_preset_save = main_window.as_weak();
+    main_window.on_preset_save_clicked(move || {
+        let Some(main) = main_weak_preset_save.upgrade() else {
+            return;
+        };
+        let presets = load_system_prompt_presets();
+        let index = main.get_preset_index();
+        let draft = if index >= 0 {
+            presets
+                .get(index as usize)
+                .map(|preset| preset.name.clone())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        main.set_preset_name(draft.into());
+        main.set_preset_dialog_open(true);
+    });
+
+    let main_weak_preset_confirm = main_window.as_weak();
+    main_window.on_preset_save_confirmed(move |name| {
+        let Some(main) = main_weak_preset_confirm.upgrade() else {
+            return;
+        };
+        main.set_preset_dialog_open(false);
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let prompt = main.get_system_prompt().to_string();
+        let mut presets = load_system_prompt_presets();
+        let index = match presets.iter().position(|preset| preset.name == name) {
+            Some(index) => {
+                presets[index].prompt = prompt;
+                index
+            }
+            None => {
+                presets.push(PromptPreset {
+                    name: name.clone(),
+                    prompt,
+                });
+                presets.len() - 1
+            }
+        };
+        save_system_prompt_presets(&presets);
+        sync_preset_options(&main, &presets);
+        main.set_preset_index(index as i32);
+    });
+
+    let main_weak_preset_delete = main_window.as_weak();
+    main_window.on_preset_delete_clicked(move || {
+        let Some(main) = main_weak_preset_delete.upgrade() else {
+            return;
+        };
+        let index = main.get_preset_index();
+        if index < 0 {
+            return;
+        }
+        let mut presets = load_system_prompt_presets();
+        if index as usize >= presets.len() {
+            return;
+        }
+        presets.remove(index as usize);
+        save_system_prompt_presets(&presets);
+        sync_preset_options(&main, &presets);
+        main.set_preset_index(-1);
     });
 
     // Resize only when the style panel state changes. Both states remain fixed-height so the

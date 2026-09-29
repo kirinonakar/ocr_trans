@@ -122,6 +122,11 @@ export component MainWindow inherits Window {
     in-out property <string> capture_folder: "";
     in-out property <string> select_area_shortcut_label: "Win + Alt + A";
     in-out property <string> start_shortcut_label: "Win + Alt + P";
+    // System prompt presets: the combo box lists the stored names and the index selects one.
+    in-out property <[string]> preset_options: [];
+    in-out property <int> preset_index: -1;
+    in-out property <bool> preset_dialog_open: false;
+    in-out property <string> preset_name: "";
 
     
     
@@ -137,6 +142,10 @@ export component MainWindow inherits Window {
     callback folder_select_clicked();
     callback capture_folder_changed(string);
     callback system_prompt_changed(string);
+    callback preset_selected(string);
+    callback preset_save_clicked();
+    callback preset_save_confirmed(string);
+    callback preset_delete_clicked();
 
     callback model_changed(string);
     callback thinking_level_changed(string);
@@ -288,13 +297,40 @@ export component MainWindow inherits Window {
 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "System Prompt:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text { text: "System Prompt:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                        Rectangle { } // Flexible spacer keeps the preset controls on the right
+                        ComboBox {
+                            width: 124px;
+                            height: 26px;
+                            model: preset_options;
+                            current-index <=> preset_index;
+                            selected(value) => { preset_selected(value); }
+                        }
+                        ToolbarButton {
+                            icon: @image-url("icons/save.svg");
+                            dark_theme: dark_theme;
+                            width: 26px;
+                            height: 26px;
+                            icon_size: 15px;
+                            pressed => { preset_save_clicked(); }
+                        }
+                        ToolbarButton {
+                            icon: @image-url("icons/trash.svg");
+                            dark_theme: dark_theme;
+                            width: 26px;
+                            height: 26px;
+                            icon_size: 15px;
+                            pressed => { preset_delete_clicked(); }
+                        }
+                    }
                     Rectangle {
                         background: dark_theme ? #2b2b31 : #f8fafc;
                         border-radius: 4px;
                         border-width: 1px;
                         border-color: dark_theme ? transparent : #e2e8f0;
-                        height: 80px;
+                        height: 64px;
                         TextEdit {
                             text <=> system_prompt;
                             width: 100%;
@@ -557,6 +593,64 @@ export component MainWindow inherits Window {
         }
 
         Rectangle { height: 10px; } // Extra spacer at the very bottom to lift it slightly more
+    }
+
+    // In-window dialog for naming a preset. Keeping it inside the window avoids resizing the
+    // fixed-height settings window while a preset name is entered.
+    if preset_dialog_open : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        background: #0f172a66;
+        TouchArea { x: 0px; y: 0px; width: 100%; height: 100%; }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 268px;
+            height: 106px;
+            background: dark_theme ? #37373f : #ffffff;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: dark_theme ? #4a4a55 : #e2e8f0;
+
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+
+                Text {
+                    text: "Preset name";
+                    font-size: 12px;
+                    color: dark_theme ? #cbd5e1 : #64748b;
+                }
+
+                LineEdit {
+                    text <=> preset_name;
+                    placeholder-text: "Preset name";
+                    accepted(value) => { preset_save_confirmed(value); }
+                }
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    Rectangle { } // Flexible spacer keeps the buttons on the right
+                    Button {
+                        text: "Cancel";
+                        width: 64px;
+                        height: 26px;
+                        primary: false;
+                        clicked => { preset_dialog_open = false; }
+                    }
+                    Button {
+                        text: "Save";
+                        width: 64px;
+                        height: 26px;
+                        primary: true;
+                        clicked => { preset_save_confirmed(preset_name); }
+                    }
+                }
+            }
+        }
     }
 }
 

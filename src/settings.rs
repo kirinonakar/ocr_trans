@@ -280,10 +280,19 @@ pub(crate) struct AppSettings {
     pub(crate) provider: ProviderConfig,
     pub(crate) capture_folder: String,
     pub(crate) system_prompt: String,
+    pub(crate) system_prompt_presets: Vec<PromptPreset>,
     pub(crate) app_mode: String,
     pub(crate) dark_theme: bool,
     pub(crate) ocr_language: String,
     pub(crate) shortcuts: ShortcutConfig,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
+pub(crate) struct PromptPreset {
+    #[serde(default)]
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) prompt: String,
 }
 
 fn settings_read_path() -> Option<PathBuf> {
@@ -463,6 +472,7 @@ pub(crate) fn load_app_settings() -> AppSettings {
         capture_folder: legacy_capture_folder().unwrap_or_default(),
         system_prompt: read_legacy_system_prompt()
             .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()),
+        system_prompt_presets: Vec::new(),
         app_mode: "ocr".to_string(),
         dark_theme: false,
         ocr_language: String::new(),
@@ -528,6 +538,17 @@ pub(crate) fn load_app_settings() -> AppSettings {
                 ini_value(&values, "app", "capture_folder", settings.capture_folder);
             settings.system_prompt =
                 ini_value(&values, "app", "system_prompt", settings.system_prompt);
+            if let Ok(presets) = serde_json::from_str::<Vec<PromptPreset>>(&ini_value(
+                &values,
+                "app",
+                "system_prompt_presets",
+                String::new(),
+            )) {
+                settings.system_prompt_presets = presets
+                    .into_iter()
+                    .filter(|preset| !preset.name.trim().is_empty())
+                    .collect();
+            }
             settings.app_mode = ini_value(&values, "app", "app_mode", settings.app_mode);
             settings.dark_theme = ini_bool(&values, "app", "dark_theme", settings.dark_theme);
             settings.ocr_language = ini_value(&values, "app", "ocr_language", settings.ocr_language);
@@ -546,7 +567,7 @@ pub(crate) fn load_app_settings() -> AppSettings {
 
 pub(crate) fn save_app_settings(settings: &AppSettings) {
     let contents = format!(
-        "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
+        "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
         ini_escape(&settings.provider.provider),
         ini_escape(&settings.provider.lm_model),
         ini_escape(&settings.provider.gemini_model),
@@ -559,6 +580,7 @@ pub(crate) fn save_app_settings(settings: &AppSettings) {
         ini_escape(&settings.provider.opencode_zen_model),
         ini_escape(settings.capture_folder.trim()),
         ini_escape(&settings.system_prompt),
+        ini_escape(&serde_json::to_string(&settings.system_prompt_presets).unwrap_or_default()),
         ini_escape(&settings.app_mode),
         if settings.dark_theme { "true" } else { "false" },
         ini_escape(settings.ocr_language.trim()),
@@ -605,6 +627,16 @@ pub(crate) fn save_system_prompt(prompt: &str) {
     } else {
         prompt.to_string()
     };
+    save_app_settings(&settings);
+}
+
+pub(crate) fn load_system_prompt_presets() -> Vec<PromptPreset> {
+    load_app_settings().system_prompt_presets
+}
+
+pub(crate) fn save_system_prompt_presets(presets: &[PromptPreset]) {
+    let mut settings = load_app_settings();
+    settings.system_prompt_presets = presets.to_vec();
     save_app_settings(&settings);
 }
 

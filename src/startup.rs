@@ -310,6 +310,20 @@ pub(crate) fn initialize_ui(
 
     main_window.set_thinking_level(configured_thinking_level(&config).into());
     main_window.set_system_prompt(initial_system_prompt.into());
+    // Mirror the stored system prompt presets on the OCR window's preset combo box.
+    let preset_names: Vec<slint::SharedString> = initial_settings
+        .system_prompt_presets
+        .iter()
+        .map(|preset| preset.name.as_str().into())
+        .collect();
+    main_window.set_preset_options(slint::ModelRc::from(preset_names.as_slice()));
+    main_window.set_preset_index(
+        initial_settings
+            .system_prompt_presets
+            .iter()
+            .position(|preset| preset.prompt.trim() == initial_settings.system_prompt.trim())
+            .map_or(-1, |index| index as i32),
+    );
     main_window.set_interval(0.0);
     main_window.set_base_font_size(16.0);
 
