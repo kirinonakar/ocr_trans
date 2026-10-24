@@ -476,6 +476,7 @@ pub(crate) fn shutdown_and_exit(
     recorder_slot: &Arc<Mutex<Option<capture::ScreenRecorder>>>,
     recording_border: &slint::Weak<RecordingBorderWindow>,
 ) -> ! {
+    crate::settings::flush_settings();
     if let Some(border) = recording_border.upgrade() {
         let _ = border.hide();
     }
@@ -562,6 +563,11 @@ pub(crate) fn prepare_selection_window(
     esc_hotkey: HotKey,
     owner: Option<isize>,
 ) -> bool {
+    if state.lock().unwrap().scroll_cancel.is_some() {
+        log::debug!("Scrolling capture is in progress; press Esc to cancel it first");
+        return false;
+    }
+
     let _ = selection.hide();
     selection.set_window_mode(window_mode);
     selection.set_color_picker_mode(color_picker_mode);
@@ -1020,9 +1026,22 @@ pub(crate) async fn run_toolbar_action(
             }
             SelectionPurpose::ScrollCapture => {
                 let target = target.context("A window target is required for scrolling capture")?;
-                let image = tokio::task::spawn_blocking(move || capture::scrolling_capture(target))
-                    .await
-                    .context("Scrolling capture worker stopped")??;
+                let cancel = state.lock().unwrap().scroll_cancel.clone()
+                    .context("Scrolling capture cancellation was not initialized")?;
+                let progress_toolbar = toolbar.as_weak();
+                let image = tokio::task::spawn_blocking(move || {
+                    capture::scrolling_capture(target, &cancel, |step, maximum| {
+                        let toolbar = progress_toolbar.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(toolbar) = toolbar.upgrade() {
+                                set_capture_toolbar_status(&toolbar,
+                                    format!("Scrolling capture {step}/{maximum} — Esc to cancel"));
+                            }
+                        });
+                    })
+                })
+                .await
+                .context("Scrolling capture worker stopped")??;
                 let configured_folder = configured_folder.clone();
                 let path = tokio::task::spawn_blocking(move || {
                     capture::save_png_and_copy_to(&image, Some(configured_folder.as_str()))
@@ -1084,7 +1103,7 @@ pub(crate) async fn run_toolbar_action(
                         .context("Capture worker stopped")??;
                 if action == SelectionPurpose::Vlm {
                     let client = make_api_client(&http, &main);
-                    let text = client.translate_image(&image).await?;
+                    let text = client.translate_image(image).await?;
                     if text.trim().is_empty() {
                         anyhow::bail!("VLM returned no text");
                     }
@@ -1116,24 +1135,33 @@ pub(crate) async fn run_toolbar_action(
                     }
                     return Ok("No text was recognized".to_string());
                 }
+                // Preserve useful OCR output even when the translation service is unavailable.
+                capture::copy_text_to_clipboard(&text)?;
+                main.set_last_translated_text(text.clone().into());
+                if let Some(textbox) = textbox.upgrade() {
+                    textbox.set_text(text.clone().into());
+                }
                 let translation = if action == SelectionPurpose::OcrTranslate {
-                    Some(make_api_client(&http, &main).translate_text(&text).await?)
+                    match make_api_client(&http, &main).translate_text(&text).await {
+                        Ok(translation) => Some(translation),
+                        Err(error) => {
+                            log::warn!("OCR translation failed: {error:?}");
+                            return Ok(format!("OCR copied; translation failed: {error}"));
+                        }
+                    }
                 } else {
                     None
                 };
+                if translation.is_none() {
+                    return Ok(format!("Recognized text copied ({} characters)", text.trim().chars().count()));
+                }
                 let composed = compose_ocr_clipboard(&text, translation.as_deref());
                 capture::copy_text_to_clipboard(&composed)?;
+                main.set_last_translated_text(composed.clone().into());
                 if let Some(textbox) = textbox.upgrade() {
                     textbox.set_text(composed.into());
                 }
-                if translation.is_some() {
-                    Ok("OCR text and translation copied".to_string())
-                } else {
-                    Ok(format!(
-                        "Recognized text copied ({} characters)",
-                        text.trim().chars().count()
-                    ))
-                }
+                Ok("OCR text and translation copied".to_string())
             }
             SelectionPurpose::ContinuousOcr
             | SelectionPurpose::ColorPicker

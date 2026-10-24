@@ -13,7 +13,9 @@ Capture toolbar (dark theme)
 - **Toggleable Overlay**: Dedicated toggle and logic to hide/show the translation box without stopping the OCR process.
 - **Interactive Region Selection**: Drag your mouse to select exactly what you want to translate. Supports **Escape** to cancel.
 - **Auto-Automation**: Selecting a region automatically starts the capture process for immediate results.
-- **Change Detection**: Intelligent logic avoids redundant API calls by detecting screen changes.
+- **Change Detection**: Continuous mode compares Windows OCR text and waits for two identical consecutive samples before calling the VLM. Animated backgrounds do not trigger requests when the recognized text stays the same. Empty/unavailable OCR falls back to stable pixel comparison. Interval 0 performs an immediate one-shot request.
+- **Responsive cancellation and retry**: Stop or selecting a new region cancels the current request and rejects stale results. Failed requests retry with a 1–32 second backoff, even if the screen is unchanged.
+- **Image quality**: VLM images retain their original size up to one million pixels; larger images shrink proportionally. JPEG quality is 92, preserving wide subtitle strips without upscaling small captures.
 - **Customizable Overlay**: Instantly change background color, text color, transparency, and separate textbox to match your preference.
 - **Textbox mode & Click-Through**: Enable Textbox mode to hide the overlay's close button and allow **Click-Through Interaction**, letting you click applications behind the capture area while still seeing the translation boundary.
 - **Markdown results**: The textbox renders headings, emphasis (including quoted Korean text followed by particles), lists, quotes, code blocks, and tables. Automatic clipboard sync and **Ctrl+C** retain the original Markdown text. Links display their labels; images display their alternative text.
@@ -31,10 +33,12 @@ Capture toolbar (dark theme)
   - Up to **three capture-toolbar shortcuts** can run Fullscreen / Window / Region capture, OCR, OCR + Translate, VLM, color picker, or ruler. Every binding is remappable from the keyboard button next to the **CAPTURE SETTINGS** title.
 - **Capture Mode**: Compact always-on-top toolbar (`Capture` ↔ `OCR` toggle).
   - Frame mode opens a movable, resizable transparent capture frame with its own Capture and Record controls.
-  - Fullscreen / Window / Scrolling (Windows only) / Region (`Esc` to cancel).
+  - Fullscreen / Window / Scrolling (Windows only) / Region (`Esc` to cancel). Scrolling capture shows step progress and can also be canceled with `Esc` while capturing.
   - One-shot OCR, OCR+Translate, VLM, color picker, ruler.
   - For one-shot OCR and OCR+Translate, the language dropdown lists only installed Windows OCR packs with short labels such as **KO**, **JP**, and **EN**.
-  - PNG/MP4 saved as `YYYY-MM-DD_001...` + clipboard copy; recording needs `ffmpeg`.
+  - OCR+Translate preserves and copies the recognized source text if translation fails, with the error shown in the toolbar status.
+  - PNG/MP4 saved as `YYYY-MM-DD_001...` + clipboard copy; recording needs `ffmpeg`. Single-monitor recording first tries ddagrab/NVENC and retries with software capture/libx264 if startup fails. NVIDIA hardware is optional; the FFmpeg build must include libx264 for software recording.
+  - Settings changes are cached in memory, coalesced for 250 ms, and saved by replacing the INI file through a temporary file. Pending changes are flushed on normal exit.
 
 ## Shortcuts
 

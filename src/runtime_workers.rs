@@ -1,7 +1,9 @@
+use crate::shortcuts::{HotkeyState, ToolbarAction};
 use crate::state::AppState;
 use crate::text_layout::{calculate_font_size, clean_text};
-use crate::shortcuts::{HotkeyState, ToolbarAction};
-use crate::{api, capture, CaptureToolbarWindow, MainWindow, OverlayWindow, SelectionWindow, TextboxWindow};
+use crate::{
+    api, capture, CaptureToolbarWindow, MainWindow, OverlayWindow, SelectionWindow, TextboxWindow,
+};
 use global_hotkey::{hotkey::HotKey, GlobalHotKeyEvent};
 use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
@@ -19,7 +21,7 @@ pub(crate) fn start(
     esc_hotkey: HotKey,
 ) {
     let state_for_worker = state.clone();
-    // Background Worker - Dedicated thread to handle non-Send Monitor objects and CPU-intensive capture
+    // Keep capture, OCR and request waits off the UI thread.
     // Uses slint::invoke_from_event_loop() instead of tokio channels to guarantee
     // the slint event loop wakes up for every UI update (tokio wakers don't reliably
     // wake the slint event loop, causing freezes after prolonged use).
@@ -29,245 +31,138 @@ pub(crate) fn start(
     let main_weak_worker = main_window.as_weak();
     let textbox_weak_worker = textbox_window.as_weak();
     std::thread::spawn(move || {
-        let mut prev_img = None;
-        let mut prev_rect = None;
-        let mut cached_monitors = None;
-        let mut was_running = false;
-        let mut last_monitor_refresh = std::time::Instant::now();
-
+        let control = state_for_worker.lock().unwrap().worker_control.clone();
+        let mut observed_revision = u64::MAX;
+        let mut gate = ChangeGate::default();
+        let mut failures = 0u32;
         loop {
-            let (is_running, rect, api_config, step_interval, _base_fs, _use_textbox) = {
-                let s = state_for_worker.lock().unwrap();
+            // Subscribe before the snapshot, so a stop between the snapshot and select cannot
+            // be lost. Revisions also reject callbacks that were already queued on Slint.
+            let mut cancel = control.subscribe();
+            let (running, rect, client, interval, revision) = {
+                let state = state_for_worker.lock().unwrap();
                 (
-                    s.is_running,
-                    s.capture_rect,
-                    (
-                        s.api_endpoint.clone(),
-                        s.api_key.clone(),
-                        s.model_name.clone(),
-                        s.system_prompt.clone(),
-                        s.temperature,
-                        s.thinking_level.clone(),
-                        s.provider.clone(),
+                    state.is_running,
+                    state.capture_rect,
+                    api::ApiClient::new(
+                        http_worker.clone(),
+                        state.api_endpoint.clone(),
+                        state.api_key.clone(),
+                        state.model_name.clone(),
+                        state.system_prompt.clone(),
+                        state.temperature,
+                        state.thinking_level.clone(),
+                        state.provider.clone(),
                     ),
-                    s.interval_sec,
-                    s.base_font_size,
-                    s.use_textbox,
+                    state.interval_sec,
+                    control.revision(),
                 )
             };
-
-            if is_running && !was_running {
-                prev_img = None;
-                prev_rect = None;
+            if revision != observed_revision {
+                gate = ChangeGate::default();
+                failures = 0;
+                observed_revision = revision;
             }
-            was_running = is_running;
-
-            if is_running && rect.is_some() {
-                let current_rect = rect.unwrap();
-                if Some(current_rect) != prev_rect {
-                    prev_img = None;
-                    prev_rect = Some(current_rect);
-                }
-
-                // Refresh monitors every 60 seconds or if never fetched
-                if cached_monitors.is_none()
-                    || last_monitor_refresh.elapsed() > Duration::from_secs(60)
-                {
-                    if let Ok(m) = xcap::Monitor::all() {
-                        cached_monitors = Some(m);
-                        last_monitor_refresh = std::time::Instant::now();
-                    }
-                }
-
-                if let Ok(curr_img) = capture::capture_area(&current_rect, &cached_monitors) {
-                    if capture::is_changed(&prev_img, &curr_img, 0.05) {
-                        prev_img = Some(curr_img.clone());
-
-                        // Notify UI: "Searching..."
-                        {
-                            let ow = overlay_weak_worker.clone();
-                            let mw = main_weak_worker.clone();
-                            let tww = textbox_weak_worker.clone();
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(overlay) = ow.upgrade() {
-                                    overlay.set_translated_text("Searching...".into());
-                                    overlay.set_is_searching(true);
-                                    let base_fs = mw
-                                        .upgrade()
-                                        .map(|m| m.get_base_font_size())
-                                        .unwrap_or(16.0);
-                                    let font_size = calculate_font_size(
-                                        "Searching...",
-                                        overlay.get_window_w(),
-                                        overlay.get_window_h(),
-                                        base_fs,
-                                    );
-                                    overlay.set_font_size(font_size);
-                                    let is_visible = mw
-                                        .upgrade()
-                                        .map(|m| m.get_overlay_visible())
-                                        .unwrap_or(true);
-                                    let use_textbox =
-                                        mw.upgrade().map(|m| m.get_use_textbox()).unwrap_or(false);
-
-                                    if use_textbox {
-                                        overlay.set_show_text(is_visible);
-                                        overlay.set_hide_text(true);
-                                        overlay.set_bg_opacity(0.1);
-                                    } else {
-                                        overlay.set_show_text(is_visible);
-                                        overlay.set_hide_text(false);
-                                        overlay.set_bg_opacity(
-                                            mw.upgrade()
-                                                .map(|m| m.get_overlay_bg_opacity())
-                                                .unwrap_or(0.9),
-                                        );
-                                    }
-
-                                    if let Some(main) = mw.upgrade() {
-                                        main.set_last_translated_text("Searching...".into());
-                                        if let Some(tw) = tww.upgrade() {
-                                            tw.set_text("Searching...".into());
-                                            tw.set_text_color(main.get_overlay_text_color());
-                                            tw.set_font_size(main.get_base_font_size());
-                                        }
-                                    }
-                                }
-                            });
-                        }
-
-                        let client = api::ApiClient::new(
-                            http_worker.clone(),
-                            api_config.0,
-                            api_config.1,
-                            api_config.2,
-                            api_config.3,
-                            api_config.4,
-                            api_config.5,
-                            api_config.6,
-                        );
-
-                        // Use runtime handle to call async translation from sync thread
-                        let api_result = runtime_handle
-                            .block_on(async { client.translate_image(&curr_img).await });
-
-                        match api_result {
-                            Ok(text) => {
-                                {
-                                    let mut s = state_for_worker.lock().unwrap();
-                                    if s.last_text != text {
-                                        s.last_text = text.clone();
-                                    }
-                                }
-
-                                let ow = overlay_weak_worker.clone();
-                                let mw = main_weak_worker.clone();
-                                let tww = textbox_weak_worker.clone();
-                                let final_text = text;
-                                let _ = slint::invoke_from_event_loop(move || {
-                                    if let Some(overlay) = ow.upgrade() {
-                                        let display_text = clean_text(&final_text);
-                                        overlay.set_translated_text(display_text.clone().into());
-                                        overlay.set_is_searching(false);
-
-                                        let base_fs = mw
-                                            .upgrade()
-                                            .map(|m| m.get_base_font_size())
-                                            .unwrap_or(16.0);
-                                        let font_size = calculate_font_size(
-                                            &display_text,
-                                            overlay.get_window_w(),
-                                            overlay.get_window_h(),
-                                            base_fs,
-                                        );
-                                        overlay.set_font_size(font_size);
-
-                                        // Sync colors/opacity
-                                        if let Some(main) = mw.upgrade() {
-                                            let use_textbox = main.get_use_textbox();
-                                            let is_visible = main.get_overlay_visible();
-
-                                            overlay.set_bg_color(main.get_overlay_bg_color());
-                                            overlay.set_text_color(main.get_overlay_text_color());
-
-                                            if use_textbox {
-                                                overlay.set_bg_opacity(0.1);
-                                                overlay.set_hide_text(true);
-                                            } else {
-                                                overlay
-                                                    .set_bg_opacity(main.get_overlay_bg_opacity());
-                                                overlay.set_hide_text(false);
-                                            }
-
-                                            overlay.set_show_text(is_visible);
-
-                                            main.set_last_translated_text(
-                                                display_text.clone().into(),
-                                            );
-                                            if let Some(tw) = tww.upgrade() {
-                                                tw.set_text(final_text.clone().into());
-                                                tw.set_text_color(main.get_overlay_text_color());
-                                                tw.set_font_size(main.get_base_font_size());
-                                            }
-                                        }
-
-                                        // Copy to clipboard ??create/drop immediately
-                                        if let Ok(mut cb) = arboard::Clipboard::new() {
-                                            let _ = cb.set_text(&final_text);
-                                        }
-                                    }
-                                });
-                            }
-                            Err(e) => {
-                                log::error!("API Error: {:?}", e);
-                                let err_msg = format!("Error: {}", e);
-                                let ow = overlay_weak_worker.clone();
-                                let mw = main_weak_worker.clone();
-                                let _ = slint::invoke_from_event_loop(move || {
-                                    if let Some(overlay) = ow.upgrade() {
-                                        overlay.set_translated_text(err_msg.clone().into());
-                                        overlay.set_is_searching(false);
-                                        let base_fs = mw
-                                            .upgrade()
-                                            .map(|m| m.get_base_font_size())
-                                            .unwrap_or(16.0);
-                                        let font_size = calculate_font_size(
-                                            &err_msg,
-                                            overlay.get_window_w(),
-                                            overlay.get_window_h(),
-                                            base_fs,
-                                        );
-                                        overlay.set_font_size(font_size);
-                                    }
-                                });
-                            }
-                        }
-                    }
-                }
-
-                // Handle Interval 0 (One-shot)
-                if step_interval <= 0.01 {
-                    {
-                        let mut s = state_for_worker.lock().unwrap();
-                        s.is_running = false;
-                    }
-                    let mw = main_weak_worker.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(main) = mw.upgrade() {
-                            main.set_is_running(false);
-                        }
-                    });
-                }
-            } else {
-                prev_img = None;
-                prev_rect = None;
+            if !running || rect.is_none() {
+                control.wait(revision, Duration::from_secs(60));
+                continue;
             }
-            let sleep_duration = if step_interval <= 0.01 {
-                Duration::from_secs(1)
+            let one_shot = interval <= 0.01;
+            let interval = if interval.is_finite() {
+                interval.clamp(0.1, 3600.0)
             } else {
-                Duration::from_secs_f32(step_interval)
+                1.0
             };
-            std::thread::sleep(sleep_duration);
+            let mut delay = Duration::from_secs_f32(interval);
+            match capture::capture_area(&rect.unwrap(), &None) {
+                Ok(image) => {
+                    let language = crate::settings::load_app_settings().ocr_language;
+                    let text = if one_shot {
+                        String::new()
+                    } else {
+                        let pixels = crate::capture_workflow::rgba_to_bgra_bytes(&image);
+                        match crate::ocr::recognize_text_with_cancel(
+                            &pixels,
+                            image.width(),
+                            image.height(),
+                            &language,
+                            || control.revision() != revision,
+                        ) {
+                            Ok(text) => text.split_whitespace().collect::<Vec<_>>().join(" "),
+                            Err(error) => {
+                                log::debug!(
+                                    "Continuous OCR unavailable; using pixel comparison: {error:?}"
+                                );
+                                String::new()
+                            }
+                        }
+                    };
+                    if control.revision() != revision {
+                        continue;
+                    }
+                    if gate.observe(&text, &image, one_shot) {
+                        queue_worker_result(
+                            &state_for_worker,
+                            revision,
+                            &overlay_weak_worker,
+                            &main_weak_worker,
+                            &textbox_weak_worker,
+                            "Searching...".into(),
+                            true,
+                            false,
+                            false,
+                        );
+                        let result = runtime_handle.block_on(in_generation(
+                            &mut cancel,
+                            revision,
+                            client.translate_image(image.clone()),
+                        ));
+                        let Some(result) = result else {
+                            continue;
+                        };
+                        if control.revision() != revision {
+                            continue;
+                        }
+                        match result {
+                            Ok(translated) => {
+                                gate.accept(text, image);
+                                failures = 0;
+                                queue_worker_result(
+                                    &state_for_worker,
+                                    revision,
+                                    &overlay_weak_worker,
+                                    &main_weak_worker,
+                                    &textbox_weak_worker,
+                                    translated,
+                                    false,
+                                    true,
+                                    one_shot,
+                                );
+                            }
+                            Err(error) => {
+                                log::error!("API Error: {error:?}");
+                                gate.retry();
+                                failures = failures.saturating_add(1);
+                                delay =
+                                    Duration::from_secs(1u64 << failures.saturating_sub(1).min(5));
+                                queue_worker_result(
+                                    &state_for_worker,
+                                    revision,
+                                    &overlay_weak_worker,
+                                    &main_weak_worker,
+                                    &textbox_weak_worker,
+                                    format!("Error (retry in {}s): {error}", delay.as_secs()),
+                                    false,
+                                    false,
+                                    false,
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(error) => log::warn!("Continuous capture failed: {error:?}"),
+            }
+            control.wait(revision, delay);
         }
     });
 
@@ -275,6 +170,7 @@ pub(crate) fn start(
     let main_weak_hk = main_window.as_weak();
     let selection_weak_hk = selection_window.as_weak();
     let toolbar_weak_hk = capture_toolbar.as_weak();
+    let scroll_state_hk = state.clone();
     let state_hk = hotkey_state;
     let esc_id = esc_hotkey.id();
     std::thread::spawn(move || loop {
@@ -328,6 +224,10 @@ pub(crate) fn start(
                 dispatch_toolbar_action(&toolbar_weak_hk, action);
             }
         } else if event.id == esc_id {
+            if let Some(cancel) = scroll_state_hk.lock().unwrap().scroll_cancel.as_ref() {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
             let selection_weak = selection_weak_hk.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(selection) = selection_weak.upgrade() {
@@ -357,4 +257,199 @@ fn dispatch_toolbar_action(toolbar: &slint::Weak<CaptureToolbarWindow>, action: 
             ToolbarAction::Ruler => toolbar.invoke_ruler_clicked(),
         }
     });
+}
+
+async fn in_generation<T>(
+    cancel: &mut tokio::sync::watch::Receiver<u64>,
+    revision: u64,
+    request: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    if *cancel.borrow_and_update() != revision {
+        return None;
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.changed() => None,
+        result = request => Some(result),
+    }
+}
+
+/// OCR is the trigger whenever available. Animated backgrounds then have no effect. Empty or
+/// unavailable OCR falls back to two stable pixel samples. Only successful requests are accepted.
+#[derive(Default)]
+struct ChangeGate {
+    candidate_text: Option<String>,
+    candidate_image: Option<image::RgbaImage>,
+    accepted_text: Option<String>,
+    accepted_image: Option<image::RgbaImage>,
+}
+
+impl ChangeGate {
+    fn observe(&mut self, text: &str, image: &image::RgbaImage, one_shot: bool) -> bool {
+        if one_shot {
+            return true;
+        }
+        let stable = if text.is_empty() {
+            self.candidate_text.is_none()
+                && self.candidate_image.is_some()
+                && !capture::is_changed(&self.candidate_image, image, 0.01)
+        } else {
+            self.candidate_text.as_deref() == Some(text)
+        };
+        let changed = if text.is_empty() {
+            capture::is_changed(&self.accepted_image, image, 0.01)
+        } else {
+            self.accepted_text.as_deref() != Some(text)
+        };
+        if text.is_empty() {
+            self.candidate_text = None;
+            self.candidate_image = Some(image.clone());
+        } else {
+            self.candidate_text = Some(text.to_string());
+            self.candidate_image = None;
+        }
+        stable && changed
+    }
+
+    fn accept(&mut self, text: String, image: image::RgbaImage) {
+        self.accepted_text = Some(text);
+        self.accepted_image = Some(image);
+    }
+
+    fn retry(&mut self) {
+        self.accepted_text = None;
+        self.accepted_image = None;
+    }
+}
+
+fn queue_worker_result(
+    state: &Arc<Mutex<AppState>>,
+    revision: u64,
+    overlay: &slint::Weak<OverlayWindow>,
+    main: &slint::Weak<MainWindow>,
+    textbox: &slint::Weak<TextboxWindow>,
+    text: String,
+    searching: bool,
+    success: bool,
+    one_shot: bool,
+) {
+    let (state, ow, mw, tw) = (
+        state.clone(),
+        overlay.clone(),
+        main.clone(),
+        textbox.clone(),
+    );
+    let _ = slint::invoke_from_event_loop(move || {
+        {
+            let mut state = state.lock().unwrap();
+            if !state.is_running || state.worker_control.revision() != revision {
+                return;
+            }
+            if success {
+                state.last_text = text.clone();
+            }
+            if success && one_shot {
+                state.is_running = false;
+            }
+        }
+        let Some(main) = mw.upgrade() else {
+            return;
+        };
+        let display_text = clean_text(&text);
+        if let Some(overlay) = ow.upgrade() {
+            overlay.set_translated_text(display_text.clone().into());
+            overlay.set_is_searching(searching);
+            overlay.set_font_size(calculate_font_size(
+                &display_text,
+                overlay.get_window_w(),
+                overlay.get_window_h(),
+                main.get_base_font_size(),
+            ));
+            overlay.set_bg_color(main.get_overlay_bg_color());
+            overlay.set_text_color(main.get_overlay_text_color());
+            overlay.set_bg_opacity(if main.get_use_textbox() {
+                0.1
+            } else {
+                main.get_overlay_bg_opacity()
+            });
+            overlay.set_hide_text(main.get_use_textbox());
+            overlay.set_show_text(main.get_overlay_visible());
+        }
+        {
+            main.set_last_translated_text(display_text.into());
+            if let Some(textbox) = tw.upgrade() {
+                textbox.set_text(text.clone().into());
+                textbox.set_text_color(main.get_overlay_text_color());
+                textbox.set_font_size(main.get_base_font_size());
+            }
+        }
+        if success {
+            if let Err(error) = capture::copy_text_to_clipboard(&text) {
+                log::warn!("Continuous result clipboard failed: {error:?}");
+            }
+            if one_shot {
+                main.set_is_running(false);
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{Rgba, RgbaImage};
+
+    #[tokio::test]
+    async fn stop_cancels_inflight_request_and_rejects_old_generations() {
+        let control = Arc::new(crate::state::WorkerControl::default());
+        let revision = control.revision();
+        let mut cancel = control.subscribe();
+        let stop = control.clone();
+        let request = async move {
+            stop.signal(); // Stop while the request is pending.
+            std::future::pending::<String>().await
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            in_generation(&mut cancel, revision, request),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_none());
+        // Even an immediately ready response from before Stop cannot be applied.
+        assert!(in_generation(&mut cancel, revision, async { "stale" })
+            .await
+            .is_none());
+        assert_eq!(
+            in_generation(&mut cancel, control.revision(), async { "fresh" }).await,
+            Some("fresh")
+        );
+    }
+
+    #[test]
+    fn waits_for_text_stability_and_ignores_background_motion() {
+        let a = RgbaImage::from_pixel(20, 20, Rgba([0, 0, 0, 255]));
+        let b = RgbaImage::from_pixel(20, 20, Rgba([255, 255, 255, 255]));
+        let mut gate = ChangeGate::default();
+        assert!(!gate.observe("he", &a, false));
+        assert!(!gate.observe("hello", &b, false));
+        assert!(gate.observe("hello", &a, false));
+        gate.accept("hello".into(), a.clone());
+        assert!(!gate.observe("hello", &b, false));
+        gate.retry();
+        assert!(gate.observe("hello", &b, false));
+    }
+
+    #[test]
+    fn empty_ocr_uses_stable_pixels_and_one_shot_is_immediate() {
+        let a = RgbaImage::from_pixel(20, 20, Rgba([0, 0, 0, 255]));
+        let b = RgbaImage::from_pixel(20, 20, Rgba([255, 255, 255, 255]));
+        let mut gate = ChangeGate::default();
+        assert!(!gate.observe("", &a, false));
+        assert!(!gate.observe("", &b, false));
+        assert!(gate.observe("", &b, false));
+        gate.accept("".into(), b.clone());
+        assert!(!gate.observe("", &b, false));
+        assert!(gate.observe("", &b, true));
+    }
 }

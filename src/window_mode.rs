@@ -239,6 +239,7 @@ pub(crate) fn register_callbacks(
             {
                 let mut state = state_mode.lock().unwrap();
                 state.is_running = false;
+                state.worker_control.signal();
             }
             main.set_is_running(false);
             main.set_overlay_visible(false);

@@ -348,18 +348,9 @@ pub(crate) fn register_callbacks(
 
             // Auto-start
             s.is_running = true;
-            s.api_endpoint = main.get_api_endpoint().to_string();
-            s.api_key = main.get_api_key().to_string();
-            s.model_name = main.get_model_name().to_string();
-            s.interval_sec = main.get_interval();
-            s.system_prompt = main.get_system_prompt().to_string();
-            s.temperature = main.get_temperature();
-            s.thinking_level = main.get_thinking_level().to_string();
-            s.provider = main.get_api_type().to_string();
-            s.base_font_size = main.get_base_font_size();
-            s.overlay_bg_color = main.get_overlay_bg_color();
-            s.overlay_text_color = main.get_overlay_text_color();
-            s.overlay_bg_opacity = main.get_overlay_bg_opacity();
+            s.worker_control.signal();
+            sync_capture_state(&mut s, &main);
+            drop(s);
             main.set_is_running(true);
 
             if let Some(overlay) = overlay_weak.upgrade() {
@@ -382,12 +373,12 @@ pub(crate) fn register_callbacks(
                 overlay.set_window_x(0.0); // Internal offset should be 0 since window itself is moved
                 overlay.set_window_y(0.0);
 
-                overlay.set_bg_color(s.overlay_bg_color.clone());
-                overlay.set_text_color(s.overlay_text_color.clone());
+                overlay.set_bg_color(main.get_overlay_bg_color());
+                overlay.set_text_color(main.get_overlay_text_color());
                 overlay.set_bg_opacity(if main.get_use_textbox() {
                     0.1
                 } else {
-                    s.overlay_bg_opacity
+                    main.get_overlay_bg_opacity()
                 });
                 overlay.set_hide_text(main.get_use_textbox());
                 overlay.set_is_textbox_mode(main.get_use_textbox());
@@ -601,25 +592,49 @@ pub(crate) fn register_callbacks(
             if let Some(selection) = selection_weak.upgrade() {
                 let _ = selection.hide();
             }
-            if let Some(ref manager) = hotkey_manager {
-                let _ = manager.unregister(esc_hotkey_window_selected);
+            if purpose != SelectionPurpose::ScrollCapture {
+                if let Some(ref manager) = hotkey_manager {
+                    let _ = manager.unregister(esc_hotkey_window_selected);
+                }
+            } else {
+                state.lock().unwrap().scroll_cancel = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
             }
 
             if let (Some(main), Some(toolbar)) = (main_weak.upgrade(), toolbar) {
-                if let Err(error) = slint::spawn_local(run_toolbar_action(
-                    purpose,
-                    target.bounds,
-                    Some(target),
-                    None,
-                    purpose == SelectionPurpose::Record,
-                    recording_border,
-                    main.as_weak(),
-                    toolbar.as_weak(),
-                    state,
-                    recorder_slot,
-                    http,
-                    textbox,
-                )) {
+                let action_main = main.as_weak();
+                let action_toolbar = toolbar.as_weak();
+                let failure_state = state.clone();
+                let cleanup_state = state.clone();
+                let cleanup_hotkeys = hotkey_manager.clone();
+                if let Err(error) = slint::spawn_local(async move {
+                    run_toolbar_action(
+                        purpose,
+                        target.bounds,
+                        Some(target),
+                        None,
+                        purpose == SelectionPurpose::Record,
+                        recording_border,
+                        action_main,
+                        action_toolbar,
+                        state,
+                        recorder_slot,
+                        http,
+                        textbox,
+                    )
+                    .await;
+                    if purpose == SelectionPurpose::ScrollCapture {
+                        cleanup_state.lock().unwrap().scroll_cancel = None;
+                        if let Some(manager) = cleanup_hotkeys {
+                            let _ = manager.unregister(esc_hotkey_window_selected);
+                        }
+                    }
+                }) {
+                    if purpose == SelectionPurpose::ScrollCapture {
+                        failure_state.lock().unwrap().scroll_cancel = None;
+                        if let Some(manager) = hotkey_manager {
+                            let _ = manager.unregister(esc_hotkey_window_selected);
+                        }
+                    }
                     log::error!("Failed to start window capture action: {error:?}");
                     set_capture_toolbar_status(&toolbar, format!("Error: {error:?}"));
                 }

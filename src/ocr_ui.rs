@@ -182,6 +182,7 @@ pub(crate) fn register_callbacks(
         ) {
             let mut s = state_tb_close.lock().unwrap();
             s.use_textbox = false;
+            drop(s);
 
             main.set_use_textbox(false);
             save_style_settings(
@@ -220,6 +221,8 @@ pub(crate) fn register_callbacks(
         let mut s = state_close.lock().unwrap();
 
         s.is_running = false;
+        s.worker_control.signal();
+        drop(s);
         main.set_is_running(false);
         main.set_overlay_visible(false);
         overlay.hide().unwrap();
@@ -263,19 +266,9 @@ pub(crate) fn register_callbacks(
                 }
 
                 s.is_running = true;
-                s.api_endpoint = main.get_api_endpoint().to_string();
-                s.api_key = main.get_api_key().to_string();
-                s.model_name = main.get_model_name().to_string();
-                s.interval_sec = main.get_interval();
-                s.system_prompt = main.get_system_prompt().to_string();
-                s.temperature = main.get_temperature();
-                s.thinking_level = main.get_thinking_level().to_string();
-                s.provider = main.get_api_type().to_string();
-                s.base_font_size = main.get_base_font_size();
-                s.overlay_bg_color = main.get_overlay_bg_color();
-                s.overlay_text_color = main.get_overlay_text_color();
-                s.overlay_bg_opacity = main.get_overlay_bg_opacity();
-                s.use_textbox = main.get_use_textbox();
+                s.worker_control.signal();
+                sync_capture_state(&mut s, &main);
+                drop(s);
                 main.set_is_running(true);
                 main.set_overlay_visible(true);
 
@@ -288,17 +281,17 @@ pub(crate) fn register_callbacks(
                         overlay.get_window_h(),
                         main.get_base_font_size(),
                     ));
-                    overlay.set_bg_color(s.overlay_bg_color.clone());
-                    overlay.set_text_color(s.overlay_text_color.clone());
-                    overlay.set_bg_opacity(if s.use_textbox {
+                    overlay.set_bg_color(main.get_overlay_bg_color());
+                    overlay.set_text_color(main.get_overlay_text_color());
+                    overlay.set_bg_opacity(if main.get_use_textbox() {
                         0.1
                     } else {
-                        s.overlay_bg_opacity
+                        main.get_overlay_bg_opacity()
                     });
-                    overlay.set_hide_text(s.use_textbox);
-                    overlay.set_is_textbox_mode(s.use_textbox);
+                    overlay.set_hide_text(main.get_use_textbox());
+                    overlay.set_is_textbox_mode(main.get_use_textbox());
                     overlay.set_show_text(main.get_overlay_visible());
-                    if s.use_textbox {
+                    if main.get_use_textbox() {
                         if let Some(textbox) = textbox_weak.upgrade() {
                             textbox.set_text("Searching...".into());
                             textbox.set_text_color(main.get_overlay_text_color());
@@ -321,7 +314,7 @@ pub(crate) fn register_callbacks(
                                 win_utils::set_tool_window(hwnd, false);
                                 win_utils::set_exclude_from_capture(hwnd);
                                 win_utils::disable_window_transitions(hwnd);
-                                win_utils::set_click_through(hwnd, s.use_textbox);
+                                win_utils::set_click_through(hwnd, main.get_use_textbox());
                                 if let Some(owner) = main_hwnd_stop {
                                     win_utils::set_window_owner(hwnd, owner);
                                 }
@@ -334,6 +327,8 @@ pub(crate) fn register_callbacks(
         } else {
             let mut s = state_clone.lock().unwrap();
             s.is_running = false;
+            s.worker_control.signal();
+            drop(s);
             main.set_is_running(false);
             main.set_overlay_visible(false);
             if let Some(overlay) = overlay_weak_for_stop.upgrade() {
@@ -372,6 +367,7 @@ pub(crate) fn register_callbacks(
             // Stop active capture before opening a new selection surface.
             if let Ok(mut state) = state.lock() {
                 state.is_running = false;
+                state.worker_control.signal();
                 state.pending_selection = None;
             }
             if let Some(main) = main_weak.upgrade() {

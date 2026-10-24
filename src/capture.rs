@@ -107,7 +107,63 @@ pub fn capture_virtual_desktop() -> Result<(CaptureRect, RgbaImage)> {
     Ok((rect, image))
 }
 
+/// Copies only the requested desktop rectangle, including negative virtual-desktop coordinates.
+#[cfg(target_os = "windows")]
+fn capture_area_gdi(rect: &CaptureRect) -> Result<RgbaImage> {
+    use windows::Win32::Foundation::{HANDLE, HWND};
+    use windows::Win32::Graphics::Gdi::*;
+    unsafe {
+        let screen = GetDC(HWND::default());
+        anyhow::ensure!(!screen.is_invalid(), "GetDC failed");
+        let memory = CreateCompatibleDC(screen);
+        if memory.is_invalid() {
+            ReleaseDC(HWND::default(), screen);
+            anyhow::bail!("CreateCompatibleDC failed");
+        }
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: rect.width, biHeight: -rect.height,
+                biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0,
+                ..Default::default()
+            }, ..Default::default()
+        };
+        let mut bits = std::ptr::null_mut();
+        let result = (|| -> Result<RgbaImage> {
+            let bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &mut bits, HANDLE::default(), 0)?;
+            let previous = SelectObject(memory, bitmap);
+            let result = (|| -> Result<RgbaImage> {
+                anyhow::ensure!(!previous.is_invalid() && previous.0 as isize != -1, "SelectObject failed");
+                BitBlt(memory, 0, 0, rect.width, rect.height, screen, rect.x, rect.y, SRCCOPY | CAPTUREBLT)?;
+                anyhow::ensure!(GdiFlush().as_bool(), "GdiFlush failed");
+                anyhow::ensure!(!bits.is_null(), "The capture buffer is empty");
+                let size = rect.width as usize * rect.height as usize * 4;
+                let mut pixels = std::slice::from_raw_parts(bits.cast::<u8>(), size).to_vec();
+                for pixel in pixels.chunks_exact_mut(4) {
+                    pixel.swap(0, 2);
+                    pixel[3] = 255;
+                }
+                RgbaImage::from_raw(rect.width as u32, rect.height as u32, pixels)
+                    .context("Invalid capture dimensions")
+            })();
+            SelectObject(memory, previous);
+            let _ = DeleteObject(bitmap);
+            result
+        })();
+        let _ = DeleteDC(memory);
+        ReleaseDC(HWND::default(), screen);
+        result
+    }
+}
+
 pub fn capture_area(rect: &CaptureRect, monitors: &Option<Vec<Monitor>>) -> Result<RgbaImage> {
+    anyhow::ensure!(rect.valid(), "The capture area is invalid");
+    #[cfg(target_os = "windows")]
+    match capture_area_gdi(rect) {
+        Ok(image) => return Ok(image),
+        Err(error) => log::debug!("Region BitBlt failed; falling back to monitor capture: {error:?}"),
+    }
+
     let local_monitors;
     let monitors_ref = if let Some(m) = monitors {
         m
@@ -759,9 +815,16 @@ pub fn copy_text_to_clipboard(text: &str) -> Result<()> {
         .context("Failed to copy text to clipboard")
 }
 
+fn check_scroll_cancel(cancel: &AtomicBool) -> Result<()> {
+    anyhow::ensure!(!cancel.load(Ordering::Relaxed), "Scrolling capture canceled");
+    Ok(())
+}
+
 /// Scrolls a window and stitches the newly exposed rows, following AIMediaWorker's behavior.
 #[cfg(target_os = "windows")]
-pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
+pub fn scrolling_capture(
+    target: WindowTarget, cancel: &AtomicBool, progress: impl Fn(u32, u32),
+) -> Result<RgbaImage> {
     if !target.bounds.valid() || target.handle == 0 {
         anyhow::bail!("A valid window is required for scrolling capture");
     }
@@ -801,7 +864,7 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
     let point = make_point_parameter(center_x, center_y);
 
     scroll_to_top(target.handle, recipient, point);
-    let mut previous = stable_capture(scroll_bounds)?;
+    let mut previous = stable_capture(scroll_bounds, cancel)?;
     let mut segments = vec![(previous.clone(), 0u32)];
     let mut total_height = scroll_bounds.height as u32;
     let maximum_height = (60_000u32)
@@ -818,7 +881,9 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
     // 도달할 때까지 계속하되, 스크롤이 전혀 먹지 않는 경우에만 멈추도록 안전 상한을 둔다.
     let maximum_steps = (maximum_height / 24).clamp(180, 600);
 
-    for _ in 0..maximum_steps {
+    for step in 0..maximum_steps {
+        check_scroll_cancel(cancel)?;
+        progress(step + 1, maximum_steps);
         if total_height >= maximum_height {
             break;
         }
@@ -826,7 +891,7 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
         // Smooth-scroll 잔상이 shift 계산을 어긋나게 하므로 애니메이션이
         // 끝난 뒤 안정 프레임을 잡는다.
         thread::sleep(Duration::from_millis(160));
-        let current = stable_capture(scroll_bounds)?;
+        let current = stable_capture(scroll_bounds, cancel)?;
         if equivalent(&previous, &current) {
             // 한두 번의 변화 없음은 스크롤 이벤트 유실이나 지연 렌더링일 수 있다.
             // 곧바로 끝내지 않고 몇 번 더 확인한 뒤에만 바닥으로 판단한다.
@@ -881,6 +946,7 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
         previous = current;
     }
 
+    check_scroll_cancel(cancel)?;
     scroll_to_top(target.handle, recipient, point);
     let mut result = RgbaImage::new(scroll_bounds.width as u32, total_height);
     let mut y = 0u32;
@@ -890,6 +956,7 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
         // 차이가 하드 컷처럼 드러나지 않는다.
         let start = y.saturating_sub(overlap);
         for row in 0..segment.height() {
+            check_scroll_cancel(cancel)?;
             let dst_y = start + row;
             if dst_y >= result.height() {
                 break;
@@ -925,7 +992,9 @@ pub fn scrolling_capture(target: WindowTarget) -> Result<RgbaImage> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn scrolling_capture(_target: WindowTarget) -> Result<RgbaImage> {
+pub fn scrolling_capture(
+    _target: WindowTarget, _cancel: &AtomicBool, _progress: impl Fn(u32, u32),
+) -> Result<RgbaImage> {
     anyhow::bail!("Scrolling capture is available on Windows only")
 }
 
@@ -993,12 +1062,14 @@ fn send_wheel_step(recipient: isize, point: isize, delta: i32) {
 }
 
 #[cfg(target_os = "windows")]
-fn stable_capture(rect: CaptureRect) -> Result<RgbaImage> {
+fn stable_capture(rect: CaptureRect, cancel: &AtomicBool) -> Result<RgbaImage> {
+    check_scroll_cancel(cancel)?;
     let mut latest = capture_area(&rect, &None)?;
     let mut stable = 0;
     // 한 번의 일치는 스크롤 감속/관성 애니메이션이 잠깐 멈춘 순간일 수 있다.
     // 두 번 연속 일치해야 정지로 보고, 이동 중 프레임이 섞여 shift가 틀어지는 것을 막는다.
     for _ in 0..12 {
+        check_scroll_cancel(cancel)?;
         thread::sleep(Duration::from_millis(80));
         let next = capture_area(&rect, &None)?;
         if equivalent(&latest, &next) {
@@ -1914,6 +1985,17 @@ fn prepare_wasapi_input() -> Result<(WasapiAudioFormat, TcpListener, String)> {
 
 impl ScreenRecorder {
     pub fn start(rect: CaptureRect, path: PathBuf, fps: u32) -> Result<Self> {
+        match Self::start_with_backend(rect, path.clone(), fps, true) {
+            Ok(recorder) => Ok(recorder),
+            Err(error) => {
+                log::warn!("Hardware recording unavailable, retrying with software: {error:?}");
+                Self::start_with_backend(rect, path, fps, false)
+                    .with_context(|| format!("Software recording failed after initial attempt: {error}"))
+            }
+        }
+    }
+
+    fn start_with_backend(rect: CaptureRect, path: PathBuf, fps: u32, prefer_hardware: bool) -> Result<Self> {
         if !rect.valid() {
             anyhow::bail!("The recording area is too small");
         }
@@ -1930,7 +2012,7 @@ impl ScreenRecorder {
         let fps = fps.clamp(1, 60);
 
         #[cfg(target_os = "windows")]
-        let ddagrab = ddagrab_config(rect, fps)?;
+        let ddagrab = if prefer_hardware { ddagrab_config(rect, fps)? } else { None };
         #[cfg(target_os = "windows")]
         let use_ddagrab = ddagrab.is_some();
         #[cfg(not(target_os = "windows"))]
@@ -2352,7 +2434,7 @@ fn record_frames(
 }
 
 /// Comparison logic to check if the screen changed enough to trigger the original VLM worker.
-pub fn is_changed(prev: &Option<RgbaImage>, curr: &RgbaImage, _threshold: f32) -> bool {
+pub fn is_changed(prev: &Option<RgbaImage>, curr: &RgbaImage, threshold: f32) -> bool {
     let prev_img = match prev {
         Some(p) => p,
         None => return true,
@@ -2377,7 +2459,7 @@ pub fn is_changed(prev: &Option<RgbaImage>, curr: &RgbaImage, _threshold: f32) -
             total_pixels += 1;
         }
     }
-    total_pixels != 0 && diff_sum as f32 / total_pixels as f32 >= 0.01
+    total_pixels != 0 && diff_sum as f32 / total_pixels as f32 > threshold.clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -2387,6 +2469,23 @@ mod tests {
         WINDOW_CAPTURE_MARGIN,
     };
     use image::{Rgba, RgbaImage};
+
+    #[test]
+    fn pixel_change_threshold_is_respected() {
+        let original = RgbaImage::from_pixel(20, 20, Rgba([0, 0, 0, 255]));
+        let mut changed = original.clone();
+        for y in 0..2 { for x in 0..20 { changed.put_pixel(x, y, Rgba([255, 255, 255, 255])); } }
+        assert!(super::is_changed(&Some(original.clone()), &changed, 0.05));
+        assert!(!super::is_changed(&Some(original.clone()), &changed, 0.2));
+        assert!(!super::is_changed(&Some(original.clone()), &original, 0.0));
+        assert!(super::is_changed(&None, &original, 0.5));
+    }
+
+    #[test]
+    fn scroll_cancellation_is_reported_before_work() {
+        let canceled = super::AtomicBool::new(true);
+        assert!(super::check_scroll_cancel(&canceled).unwrap_err().to_string().contains("canceled"));
+    }
 
     #[test]
     fn window_corners_are_transparent_after_frame_crop_and_png_roundtrip() {

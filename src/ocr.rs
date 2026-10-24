@@ -134,6 +134,14 @@ pub fn recognize_text(
     height: u32,
     language_tag: &str,
 ) -> Result<String> {
+    recognize_text_with_cancel(bgra_pixels, width, height, language_tag, || false)
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn recognize_text_with_cancel(
+    bgra_pixels: &[u8], width: u32, height: u32, language_tag: &str,
+    canceled: impl Fn() -> bool,
+) -> Result<String> {
     use windows::core::HSTRING;
     use windows::Foundation::AsyncStatus;
     use windows::Globalization::Language;
@@ -187,6 +195,10 @@ pub fn recognize_text(
         // called from RTMediaFrame.dll+0xD87D), so no completion callback is registered here.
         let started = std::time::Instant::now();
         let ocr_result = loop {
+            if canceled() {
+                let _ = operation.Cancel();
+                anyhow::bail!("Windows OCR was canceled");
+            }
             let status = operation
                 .Status()
                 .context("Failed to query Windows OCR status")?;
@@ -249,4 +261,10 @@ pub fn recognize_text(
     _language_tag: &str,
 ) -> Result<String> {
     anyhow::bail!("Windows OCR is available on Windows only")
+}
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn recognize_text_with_cancel(
+    pixels: &[u8], width: u32, height: u32, language: &str, _canceled: impl Fn() -> bool,
+) -> Result<String> {
+    recognize_text(pixels, width, height, language)
 }

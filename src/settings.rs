@@ -487,7 +487,60 @@ fn load_legacy_provider_config() -> ProviderConfig {
     ProviderConfig::default()
 }
 
+fn settings_cache() -> &'static std::sync::Mutex<AppSettings> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<AppSettings>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(read_app_settings()))
+}
+
 pub(crate) fn load_app_settings() -> AppSettings {
+    settings_cache().lock().unwrap().clone()
+}
+
+enum SaveMessage {
+    Changed,
+    Flush(std::sync::mpsc::Sender<()>),
+}
+
+fn settings_writer() -> &'static std::sync::mpsc::Sender<SaveMessage> {
+    static WRITER: std::sync::OnceLock<std::sync::mpsc::Sender<SaveMessage>> = std::sync::OnceLock::new();
+    WRITER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok(mut message) = rx.recv() {
+                // Coalesce slider drags and related changes without touching disk on the UI thread.
+                while matches!(message, SaveMessage::Changed) {
+                    match rx.recv_timeout(std::time::Duration::from_millis(250)) {
+                        Ok(next) => message = next,
+                        Err(_) => break,
+                    }
+                }
+                let snapshot = load_app_settings();
+                write_app_settings(&snapshot);
+                if let SaveMessage::Flush(done) = message { let _ = done.send(()); }
+            }
+        });
+        tx
+    })
+}
+
+fn update_settings(update: impl FnOnce(&mut AppSettings)) {
+    let mut settings = settings_cache().lock().unwrap();
+    update(&mut settings);
+    let _ = settings_writer().send(SaveMessage::Changed);
+}
+
+pub(crate) fn save_app_settings(settings: &AppSettings) {
+    update_settings(|current| *current = settings.clone());
+}
+
+pub(crate) fn flush_settings() {
+    let (done, completed) = std::sync::mpsc::channel();
+    if settings_writer().send(SaveMessage::Flush(done)).is_ok() {
+        let _ = completed.recv();
+    }
+}
+
+fn read_app_settings() -> AppSettings {
     let legacy_provider = load_legacy_provider_config();
     let mut settings = AppSettings {
         provider: legacy_provider,
@@ -629,7 +682,23 @@ pub(crate) fn load_app_settings() -> AppSettings {
     settings
 }
 
-pub(crate) fn save_app_settings(settings: &AppSettings) {
+fn atomic_write(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new().create_new(true).write(true).open(&temporary)?;
+        file.write_all(contents)?;
+        file.sync_all()?;
+        drop(file);
+        // Both files are in the same directory. Rust replaces an existing Windows destination
+        // with MoveFileExW(REPLACE_EXISTING); never delete the old settings before replacement.
+        std::fs::rename(&temporary, path)
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result
+}
+
+fn write_app_settings(settings: &AppSettings) {
     let contents = format!(
         "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nuse_textbox={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
         ini_escape(&settings.provider.provider),
@@ -666,16 +735,16 @@ pub(crate) fn save_app_settings(settings: &AppSettings) {
         ini_escape(&settings.shortcuts.toolbar3_key),
     );
     if let Some(path) = settings_write_path() {
-        if let Err(error) = std::fs::write(path, contents) {
+        if let Err(error) = atomic_write(&path, contents.as_bytes()) {
             log::warn!("Failed to save settings: {error}");
         }
     }
 }
 
 pub(crate) fn save_provider_config(config: &ProviderConfig) {
-    let mut settings = load_app_settings();
-    settings.provider = config.clone();
-    save_app_settings(&settings);
+    update_settings(|settings| {
+        settings.provider = config.clone();
+    });
 }
 
 pub(crate) fn load_provider_config() -> ProviderConfig {
@@ -687,19 +756,19 @@ pub(crate) fn save_capture_folder(folder: &str) {
     if folder.is_empty() {
         return;
     }
-    let mut settings = load_app_settings();
-    settings.capture_folder = folder.to_string();
-    save_app_settings(&settings);
+    update_settings(|settings| {
+        settings.capture_folder = folder.to_string();
+    });
 }
 
 pub(crate) fn save_system_prompt(prompt: &str) {
-    let mut settings = load_app_settings();
-    settings.system_prompt = if prompt.trim().is_empty() {
-        DEFAULT_SYSTEM_PROMPT.to_string()
-    } else {
-        prompt.to_string()
-    };
-    save_app_settings(&settings);
+    update_settings(|settings| {
+        settings.system_prompt = if prompt.trim().is_empty() {
+            DEFAULT_SYSTEM_PROMPT.to_string()
+        } else {
+            prompt.to_string()
+        };
+    });
 }
 
 pub(crate) fn load_system_prompt_presets() -> Vec<PromptPreset> {
@@ -707,31 +776,31 @@ pub(crate) fn load_system_prompt_presets() -> Vec<PromptPreset> {
 }
 
 pub(crate) fn save_system_prompt_presets(presets: &[PromptPreset]) {
-    let mut settings = load_app_settings();
-    settings.system_prompt_presets = presets.to_vec();
-    save_app_settings(&settings);
+    update_settings(|settings| {
+        settings.system_prompt_presets = presets.to_vec();
+    });
 }
 
 pub(crate) fn save_app_mode(mode: &str) {
-    let mut settings = load_app_settings();
-    settings.app_mode = if mode.eq_ignore_ascii_case("capture") {
-        "capture".to_string()
-    } else {
-        "ocr".to_string()
-    };
-    save_app_settings(&settings);
+    update_settings(|settings| {
+        settings.app_mode = if mode.eq_ignore_ascii_case("capture") {
+            "capture".to_string()
+        } else {
+            "ocr".to_string()
+        };
+    });
 }
 
 pub(crate) fn save_dark_theme(dark_theme: bool) {
-    let mut settings = load_app_settings();
-    settings.dark_theme = dark_theme;
-    save_app_settings(&settings);
+    update_settings(|settings| {
+        settings.dark_theme = dark_theme;
+    });
 }
 
 pub(crate) fn save_ocr_language(language: &str) {
-    let mut settings = load_app_settings();
-    settings.ocr_language = language.trim().to_string();
-    save_app_settings(&settings);
+    update_settings(|settings| {
+        settings.ocr_language = language.trim().to_string();
+    });
 }
 
 /// Persists the Style panel values so the overlay keeps its last look across restarts.
@@ -742,13 +811,13 @@ pub(crate) fn save_style_settings(
     overlay_text_color: &str,
     overlay_bg_opacity: f32,
 ) {
-    let mut settings = load_app_settings();
-    settings.base_font_size = base_font_size.clamp(8.0, 72.0);
-    settings.use_textbox = use_textbox;
-    settings.overlay_bg_color = overlay_bg_color.to_string();
-    settings.overlay_text_color = overlay_text_color.to_string();
-    settings.overlay_bg_opacity = overlay_bg_opacity.clamp(0.1, 1.0);
-    save_app_settings(&settings);
+    update_settings(|settings| {
+        settings.base_font_size = base_font_size.clamp(8.0, 72.0);
+        settings.use_textbox = use_textbox;
+        settings.overlay_bg_color = overlay_bg_color.to_string();
+        settings.overlay_text_color = overlay_text_color.to_string();
+        settings.overlay_bg_opacity = overlay_bg_opacity.clamp(0.1, 1.0);
+    });
 }
 
 /// Persists the fold states of the style panel and the API settings card.
@@ -757,11 +826,11 @@ pub(crate) fn save_ui_fold_states(
     api_settings_collapsed: bool,
     api_settings_saved_height: f32,
 ) {
-    let mut settings = load_app_settings();
-    settings.style_panel_open = style_panel_open;
-    settings.api_settings_collapsed = api_settings_collapsed;
-    settings.api_settings_saved_height = api_settings_saved_height.clamp(0.0, 1000.0);
-    save_app_settings(&settings);
+    update_settings(|settings| {
+        settings.style_panel_open = style_panel_open;
+        settings.api_settings_collapsed = api_settings_collapsed;
+        settings.api_settings_saved_height = api_settings_saved_height.clamp(0.0, 1000.0);
+    });
 }
 
 /// Formats a Slint color as `#rrggbb` for the settings file.
@@ -788,7 +857,40 @@ pub(crate) fn load_shortcut_config() -> ShortcutConfig {
 
 /// Persists the shortcut configuration while preserving every other setting.
 pub(crate) fn save_shortcut_config(config: &ShortcutConfig) {
-    let mut settings = load_app_settings();
-    settings.shortcuts = config.clone();
-    save_app_settings(&settings);
+    update_settings(|settings| {
+        settings.shortcuts = config.clone();
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_settings_replace_existing_file_and_leave_old_data_on_failure() {
+        let directory = std::env::temp_dir().join(format!("ocr-settings-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("settings.ini");
+        atomic_write(&path, b"old settings").unwrap();
+        atomic_write(&path, b"new settings").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new settings");
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // A real replacement failure on Windows: another reader denies delete sharing.
+            let locked = std::fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
+            assert!(atomic_write(&path, b"replacement must fail").is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), b"new settings");
+            drop(locked);
+        }
+        let protected_destination = directory.join("directory.ini");
+        std::fs::create_dir(&protected_destination).unwrap();
+        assert!(atomic_write(&protected_destination, b"must fail").is_err());
+        assert!(protected_destination.is_dir());
+        assert_eq!(std::fs::read(&path).unwrap(), b"new settings");
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 2);
+        std::fs::remove_dir(&protected_destination).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&directory).unwrap();
+    }
 }
