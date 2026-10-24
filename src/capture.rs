@@ -820,11 +820,92 @@ fn check_scroll_cancel(cancel: &AtomicBool) -> Result<()> {
     Ok(())
 }
 
+/// Calibrates wheel distance in each application, keeping about half a viewport of overlap.
+/// Wheel settings, font sizes and applications all produce different pixels per wheel notch.
+struct ScrollStep {
+    target_pixels: u32,
+    notches: u32,
+    maximum_notches: u32,
+    pixels_per_notch: Option<f64>,
+}
+
+impl ScrollStep {
+    fn new(viewport_height: u32) -> Self {
+        Self {
+            target_pixels: (viewport_height / 2).max(1),
+            notches: if viewport_height < 600 { 1 } else { 2 },
+            maximum_notches: 16,
+            pixels_per_notch: None,
+        }
+    }
+
+    fn expected_shift(&self) -> Option<u32> {
+        self.pixels_per_notch
+            .map(|pixels| (pixels * self.notches as f64).round() as u32)
+    }
+
+    fn measured(&mut self, pixels: u32) {
+        if pixels == 0 {
+            return;
+        }
+        let pixels_per_notch = pixels as f64 / self.notches as f64;
+        self.pixels_per_notch = Some(pixels_per_notch);
+        self.notches = (self.target_pixels as f64 / pixels_per_notch)
+            .round()
+            .clamp(1.0, self.maximum_notches.min(self.notches * 3) as f64)
+            as u32;
+    }
+
+    fn reduce(&mut self) {
+        self.maximum_notches = (self.notches / 2).max(1);
+        self.notches = self.maximum_notches;
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn aligned_scroll_shift(previous: &RgbaImage, current: &RgbaImage, expected: Option<u32>) -> u32 {
+    // Once calibrated, the next shift is usually known to within a pixel. Accept only a very
+    // strong match here; short final steps or changed scroll behavior use the full search below.
+    if let Some(expected) = expected {
+        for candidate in [
+            expected,
+            expected.saturating_sub(1),
+            expected.saturating_add(1),
+            expected.saturating_sub(2),
+            expected.saturating_add(2),
+        ] {
+            if candidate > 0
+                && candidate < previous.height()
+                && score_shift(previous, current, candidate, false) >= 0.95
+            {
+                return refine_vertical_shift(previous, current, candidate);
+            }
+        }
+    }
+    let mut shift = find_vertical_shift(previous, current, false, expected);
+    if shift == 0 {
+        shift = find_vertical_shift(previous, current, true, expected);
+    }
+    if shift > 0 {
+        refine_vertical_shift(previous, current, shift)
+    } else {
+        crate::scroll_alignment::find_shift(previous, current, expected)
+    }
+}
+
+pub(crate) struct ScrollingCapture {
+    pub(crate) image: RgbaImage,
+    /// Captures with verified frames still produce a usable result if later alignment fails.
+    pub(crate) warning: Option<String>,
+}
+
 /// Scrolls a window and stitches the newly exposed rows, following AIMediaWorker's behavior.
 #[cfg(target_os = "windows")]
 pub fn scrolling_capture(
-    target: WindowTarget, cancel: &AtomicBool, progress: impl Fn(u32, u32),
-) -> Result<RgbaImage> {
+    target: WindowTarget,
+    cancel: &AtomicBool,
+    progress: impl Fn(u32, u32),
+) -> Result<ScrollingCapture> {
     if !target.bounds.valid() || target.handle == 0 {
         anyhow::bail!("A valid window is required for scrolling capture");
     }
@@ -871,84 +952,110 @@ pub fn scrolling_capture(
         .min((80_000_000u64 / scroll_bounds.width as u64) as u32)
         .max(total_height);
     let mut unchanged_steps = 0;
-    // 스크롤로 볼 수 없는 프레임 변화(애니메이션·지연 로딩)가 연속될 때 조기 종료하기 위한 카운터.
-    let mut unmeasured_steps = 0;
-    // 실제 스크롤 한 번이 만드는 픽셀 이동량은 같은 앱 안에서 거의 일정하다.
-    // shift 측정이 실패해도 마지막으로 측정한 값을 재사용하면 바닥까지 계속
-    // 진행할 수 있다. 측정 실패를 이유로 캡처를 끝내면 바닥에 닿기 전에 멈춘다.
-    let mut last_shift = 0u32;
+    let mut scroll_step = ScrollStep::new(scroll_bounds.height as u32);
     // 180 스텝 상한은 세로로 긴 문서에서 바닥에 닿기 전에 소진된다. 높이 상한에
     // 도달할 때까지 계속하되, 스크롤이 전혀 먹지 않는 경우에만 멈추도록 안전 상한을 둔다.
     let maximum_steps = (maximum_height / 24).clamp(180, 600);
 
-    for step in 0..maximum_steps {
-        check_scroll_cancel(cancel)?;
-        progress(step + 1, maximum_steps);
-        if total_height >= maximum_height {
-            break;
-        }
-        send_wheel_step(recipient, point, -120);
-        // Smooth-scroll 잔상이 shift 계산을 어긋나게 하므로 애니메이션이
-        // 끝난 뒤 안정 프레임을 잡는다.
-        thread::sleep(Duration::from_millis(160));
-        let current = stable_capture(scroll_bounds, cancel)?;
-        if equivalent(&previous, &current) {
-            // 한두 번의 변화 없음은 스크롤 이벤트 유실이나 지연 렌더링일 수 있다.
-            // 곧바로 끝내지 않고 몇 번 더 확인한 뒤에만 바닥으로 판단한다.
-            unmeasured_steps = 0;
-            unchanged_steps += 1;
-            if unchanged_steps < 3 {
-                continue;
-            }
-            break;
-        }
-        unchanged_steps = 0;
-        // 직전 스텝의 이동량을 prior로 넘겨, 반복 패턴에서 주기의 배수를 잘못 고르는 것을 막는다.
-        let expected = (last_shift > 0).then_some(last_shift);
-        let mut shift = find_vertical_shift(&previous, &current, false, expected);
-        if shift == 0 {
-            // 엄격한 매칭이 실패하면 완화된 매칭으로 한 번 더 시도한다.
-            shift = find_vertical_shift(&previous, &current, true, expected);
-        }
-        if shift == 0 && last_shift > 0 {
-            // 매칭이 실패했다고 직전 이동량을 그대로 붙이면, 스크롤이 아닌 변화(차트 애니메이션,
-            // 지연 로딩 등)에서도 같은 내용을 다시 이어붙여 "이중"으로 보인다. 직전 이동량
-            // 위치의 실제 일치 점수를 확인해 스크롤로 볼 수 있을 때만 사용한다.
-            if score_shift(&previous, &current, last_shift, true) >= 0.5 {
-                shift = last_shift;
-            }
-        }
-        if shift == 0 {
-            // 스크롤로 볼 수 없는 변화는 붙이지 않고 다음 스텝으로 넘긴다. 다음 스텝에서
-            // 누적된 이동량이 측정되면 그때 빠진 구간까지 함께 이어붙는다.
-            unmeasured_steps += 1;
-            if unmeasured_steps >= 4 {
+    let capture_result: Result<()> = (|| {
+        for step in 0..maximum_steps {
+            check_scroll_cancel(cancel)?;
+            progress(step + 1, maximum_steps);
+            if total_height >= maximum_height {
                 break;
             }
-            continue;
+            send_wheel_step(recipient, point, -(scroll_step.notches as i32), cancel)?;
+            // Start sampling sooner; stable_capture still requires two matching frames, so a
+            // smooth-scroll animation cannot be stitched just because this short delay elapsed.
+            thread::sleep(Duration::from_millis(40));
+            let mut current = stable_capture(scroll_bounds, cancel)?;
+            if crate::scroll_alignment::frames_stable(&previous, &current) {
+                // 한두 번의 변화 없음은 스크롤 이벤트 유실이나 지연 렌더링일 수 있다.
+                // 곧바로 끝내지 않고 몇 번 더 확인한 뒤에만 바닥으로 판단한다.
+                unchanged_steps += 1;
+                if unchanged_steps < 3 {
+                    continue;
+                }
+                break;
+            }
+            unchanged_steps = 0;
+            // Scale the matching prior with the wheel burst. Reusing the old shift after increasing
+            // the burst would favor the wrong repetition on tables or repeated paragraphs.
+            let expected = scroll_step.expected_shift();
+            let mut shift = aligned_scroll_shift(&previous, &current, expected);
+            for _ in 0..2 {
+                if shift > 0 {
+                    break;
+                }
+                // Delayed rendering must not cause another scroll and lose the remaining overlap.
+                current = stable_capture(scroll_bounds, cancel)?;
+                shift = aligned_scroll_shift(&previous, &current, expected);
+            }
+            if shift == 0 {
+                if scroll_step.notches > 1 {
+                    // Some apps accelerate multi-notch scrolling. Restore the last verified position
+                    // before trying a smaller burst; never stitch or advance across an unknown gap.
+                    send_wheel_step(recipient, point, scroll_step.notches as i32, cancel)?;
+                    thread::sleep(Duration::from_millis(40));
+                    let restored = stable_capture(scroll_bounds, cancel)?;
+                    anyhow::ensure!(
+                        crate::scroll_alignment::frames_stable(&previous, &restored)
+                            || crate::scroll_alignment::same_position(&previous, &restored),
+                        "Could not restore the scrolling position after an unaligned frame"
+                    );
+                    scroll_step.reduce();
+                    continue;
+                }
+                anyhow::bail!(
+                    "Could not align scrolling frames; capture stopped to avoid missing content"
+                );
+            }
+            scroll_step.measured(shift);
+            shift = shift.min(maximum_height - total_height);
+            if shift == 0 {
+                break;
+            }
+            // 직전 프레임과 겹치는 위쪽 행을 함께 잘라 두어 최종 결합에서 크로스페이드한다.
+            let fade = SCROLL_CAPTURE_SEAM_FADE
+                .min(shift)
+                .min(current.height().saturating_sub(shift));
+            segments.push((copy_bottom_rows(&current, shift + fade), fade));
+            total_height += shift;
+            previous = current;
         }
-        unmeasured_steps = 0;
-        shift = shift.min(maximum_height - total_height);
-        // 희소 샘플링으로 고른 shift는 1px 어긋나기 쉽고, 그 1px이 그대로 이음새가 된다.
-        // 겹치는 영역을 촘촘히 비교해 정렬을 확정한다.
-        shift = refine_vertical_shift(&previous, &current, shift);
-        shift = shift.min(maximum_height - total_height);
-        if shift == 0 {
-            break;
-        }
-        last_shift = shift;
-        // 직전 프레임과 겹치는 위쪽 행을 함께 잘라 두어 최종 결합에서 크로스페이드한다.
-        let fade = SCROLL_CAPTURE_SEAM_FADE
-            .min(shift)
-            .min(current.height().saturating_sub(shift));
-        segments.push((copy_bottom_rows(&current, shift + fade), fade));
-        total_height += shift;
-        previous = current;
-    }
 
+        Ok(())
+    })();
+
+    // A failed later frame must not discard the frames we already aligned. Explicit Escape
+    // remains cancellation; every other failure produces a marked partial image.
     check_scroll_cancel(cancel)?;
-    scroll_to_top(target.handle, recipient, point);
-    let mut result = RgbaImage::new(scroll_bounds.width as u32, total_height);
+    if capture_result.is_ok() {
+        scroll_to_top(target.handle, recipient, point);
+    }
+    finish_scrolling_capture(
+        segments,
+        scroll_bounds.width as u32,
+        total_height,
+        cancel,
+        capture_result,
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn finish_scrolling_capture(
+    segments: Vec<(RgbaImage, u32)>,
+    width: u32,
+    total_height: u32,
+    cancel: &AtomicBool,
+    capture_result: Result<()>,
+) -> Result<ScrollingCapture> {
+    check_scroll_cancel(cancel)?;
+    let warning = capture_result.err().map(|error| {
+        log::warn!("Saving partial scrolling capture: {error:#}");
+        error.to_string()
+    });
+    let mut result = RgbaImage::new(width, total_height);
     let mut y = 0u32;
     for (segment, overlap) in segments.into_iter() {
         // 겹침 행은 직전 세그먼트가 이미 기록한 행의 재렌더링이다. 기록 지점을
@@ -988,13 +1095,16 @@ pub fn scrolling_capture(
             break;
         }
     }
-    Ok(result)
+    Ok(ScrollingCapture {
+        image: result,
+        warning,
+    })
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn scrolling_capture(
     _target: WindowTarget, _cancel: &AtomicBool, _progress: impl Fn(u32, u32),
-) -> Result<RgbaImage> {
+) -> Result<ScrollingCapture> {
     anyhow::bail!("Scrolling capture is available on Windows only")
 }
 
@@ -1053,12 +1163,21 @@ fn scroll_to_top(window: isize, recipient: isize, point: isize) {
 }
 
 #[cfg(target_os = "windows")]
-fn send_wheel_step(recipient: isize, point: isize, delta: i32) {
-    for _ in 0..2 {
-        if !send_message(recipient, 0x020A, ((delta << 16) as u32) as usize, point) {
-            break;
-        }
+fn send_wheel_step(
+    recipient: isize,
+    point: isize,
+    notches: i32,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let delta = if notches < 0 { -120i32 } else { 120i32 };
+    for _ in 0..notches.unsigned_abs() {
+        check_scroll_cancel(cancel)?;
+        anyhow::ensure!(
+            send_message(recipient, 0x020A, ((delta << 16) as u32) as usize, point),
+            "The selected window is not responding to scrolling"
+        );
     }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -1068,11 +1187,11 @@ fn stable_capture(rect: CaptureRect, cancel: &AtomicBool) -> Result<RgbaImage> {
     let mut stable = 0;
     // 한 번의 일치는 스크롤 감속/관성 애니메이션이 잠깐 멈춘 순간일 수 있다.
     // 두 번 연속 일치해야 정지로 보고, 이동 중 프레임이 섞여 shift가 틀어지는 것을 막는다.
-    for _ in 0..12 {
+    for _ in 0..16 {
         check_scroll_cancel(cancel)?;
-        thread::sleep(Duration::from_millis(80));
+        thread::sleep(Duration::from_millis(60));
         let next = capture_area(&rect, &None)?;
-        if equivalent(&latest, &next) {
+        if crate::scroll_alignment::frames_stable(&latest, &next) {
             stable += 1;
             if stable >= 2 {
                 return Ok(next);
@@ -1083,23 +1202,6 @@ fn stable_capture(rect: CaptureRect, cancel: &AtomicBool) -> Result<RgbaImage> {
         latest = next;
     }
     Ok(latest)
-}
-
-fn equivalent(first: &RgbaImage, second: &RgbaImage) -> bool {
-    if first.dimensions() != second.dimensions() {
-        return false;
-    }
-    let mut difference = 0i64;
-    let mut samples = 0i64;
-    for y in (0..first.height()).step_by(20) {
-        for x in (0..first.width()).step_by(20) {
-            let a = first.get_pixel(x, y);
-            let b = second.get_pixel(x, y);
-            difference += color_distance(a, b) as i64;
-            samples += 1;
-        }
-    }
-    samples == 0 || difference as f64 / ((samples * 3) as f64) < 1.5
 }
 
 #[cfg(target_os = "windows")]
@@ -1129,6 +1231,18 @@ fn find_vertical_shift(
             coarse_scores.push((shift, score));
         }
         shift += 2;
+    }
+    // Text normally gives a broad enough peak for 2px sampling. Fine detail can have a
+    // one-pixel peak (including the shorter final scroll), so check the skipped phase before
+    // declaring alignment failure. The normal, well-aligned path keeps its existing cost.
+    let required = if relaxed { 0.6 } else { 0.68 };
+    if !coarse_scores.iter().any(|(_, score)| *score >= required) {
+        let mut shift = minimum + 1;
+        while shift <= maximum {
+            let score = score_shift(previous, current, shift, relaxed);
+            if score > 0.0 { coarse_scores.push((shift, score)); }
+            shift += 2;
+        }
     }
     if coarse_scores.is_empty() {
         return 0;
@@ -1170,7 +1284,6 @@ fn find_vertical_shift(
     // 텍스트 경계에서는 1px 어긋나도 점수가 0.9 이상으로 높게 나온다.
     // 봉우리가 뭉툭하면 잘못된 shift로 하드 컷 되므로 임계값을 높여 확실할 때만 잇는다.
     // 엄격 모드에서는 확실할 때만 인정하고, 완화 모드에서는 더 낮은 점수도 받아들인다.
-    let required = if relaxed { 0.6 } else { 0.68 };
     if best_score >= required {
         if !relaxed {
             // 이웃 shift와 점수 차가 너무 작으면(평탄한 봉우리) 오측정 위험이 있어 파기한다.
@@ -2469,6 +2582,156 @@ mod tests {
         WINDOW_CAPTURE_MARGIN,
     };
     use image::{Rgba, RgbaImage};
+
+    #[test]
+    fn scroll_distance_adapts_to_app_speed_and_preserves_overlap() {
+        let mut step = super::ScrollStep::new(1080);
+        assert_eq!(step.notches, 2);
+        step.measured(120); // 60 pixels per notch.
+        assert_eq!(step.notches, 6); // Limit the first increase while calibrating.
+        assert_eq!(step.expected_shift(), Some(360));
+        step.measured(360);
+        assert_eq!(step.notches, 9);
+        assert_eq!(step.expected_shift(), Some(540));
+        step.measured(540);
+        assert_eq!(step.notches, 9);
+
+        let mut fast = super::ScrollStep::new(1080);
+        fast.measured(600);
+        assert_eq!(fast.notches, 2);
+        assert_eq!(fast.expected_shift(), Some(600));
+        let small = super::ScrollStep::new(300);
+        assert_eq!(small.notches, 1);
+    }
+
+    #[test]
+    fn rejected_large_scrolls_reduce_the_limit_and_do_not_repeat_the_same_burst() {
+        let mut step = super::ScrollStep::new(1080);
+        step.measured(120);
+        step.reduce();
+        assert_eq!(step.notches, 3);
+        assert_eq!(step.expected_shift(), Some(180));
+        step.measured(180);
+        assert_eq!(step.notches, 3);
+        step.reduce();
+        assert_eq!(step.notches, 1);
+        step.measured(60);
+        assert_eq!(step.notches, 1);
+    }
+
+    #[test]
+    fn calibrated_scrolling_reduces_capture_steps_for_long_documents() {
+        let mut step = super::ScrollStep::new(1080);
+        let distance = 30_000u32;
+        let mut captured = 0;
+        let mut captures = 0;
+        while captured < distance {
+            let shift = (step.notches * 60).min(distance - captured);
+            captured += shift;
+            captures += 1;
+            step.measured(shift);
+        }
+        let old_captures = distance.div_ceil(120);
+        assert!(captures < old_captures / 3, "{captures} vs {old_captures}");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn scroll_alignment_handles_large_steps_and_short_final_steps() {
+        fn frame(offset: u32) -> RgbaImage {
+            RgbaImage::from_fn(240, 1000, |x, y| {
+                let value = x.wrapping_mul(73856093) ^ (y + offset).wrapping_mul(19349663);
+                Rgba([value as u8, (value >> 8) as u8, (value >> 16) as u8, 255])
+            })
+        }
+        let first = frame(0);
+        let second = frame(550);
+        assert_eq!(super::aligned_scroll_shift(&first, &second, Some(550)), 550);
+        // Near the bottom the remaining distance is smaller than the calibrated burst.
+        let last = frame(673);
+        assert_eq!(super::aligned_scroll_shift(&second, &last, Some(550)), 123);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn chart_only_frames_use_the_sparse_alignment_fallback() {
+        let frame = |offset| {
+            RgbaImage::from_fn(240, 600, |_, y| {
+                if y < 75 {
+                    return Rgba([32, 38, 46, 255]);
+                }
+                let y = y + offset;
+                if [
+                    (100, 124),
+                    (183, 212),
+                    (291, 326),
+                    (410, 437),
+                    (493, 524),
+                    (612, 657),
+                ]
+                .iter()
+                .any(|(a, b)| y >= *a && y < *b)
+                {
+                    Rgba([225, 230, 238, 255])
+                } else {
+                    Rgba([244, 246, 250, 255])
+                }
+            })
+        };
+        let (old, new) = (frame(0), frame(173));
+        assert_eq!(super::score_shift(&old, &new, 173, false), 0.0);
+        assert_eq!(super::aligned_scroll_shift(&old, &new, None), 173);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn failed_alignment_preserves_all_verified_frames_in_partial_png() {
+        let pixel = |y: u32| Rgba([y as u8, y.wrapping_mul(3) as u8, 80, 255]);
+        let first = RgbaImage::from_fn(24, 80, |_, y| pixel(y));
+        let next = RgbaImage::from_fn(24, 80, |_, y| pixel(y + 30));
+        let segments = vec![(first, 0), (super::copy_bottom_rows(&next, 36), 6)];
+        let capture = super::finish_scrolling_capture(
+            segments,
+            24,
+            110,
+            &super::AtomicBool::new(false),
+            Err(anyhow::anyhow!("alignment failed")),
+        )
+        .unwrap();
+        assert_eq!(capture.warning.as_deref(), Some("alignment failed"));
+        assert_eq!(capture.image.dimensions(), (24, 110));
+        for y in 0..110 {
+            assert_eq!(*capture.image.get_pixel(10, y), pixel(y));
+        }
+        let path = std::env::temp_dir().join(format!("ocr-partial-{}.png", uuid::Uuid::new_v4()));
+        capture.image.save(&path).unwrap();
+        assert_eq!(image::open(&path).unwrap().to_rgba8(), capture.image);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn first_frame_survives_alignment_failure_but_escape_still_cancels() {
+        let first = RgbaImage::from_pixel(24, 80, Rgba([40, 60, 80, 255]));
+        let capture = super::finish_scrolling_capture(
+            vec![(first.clone(), 0)],
+            24,
+            80,
+            &super::AtomicBool::new(false),
+            Err(anyhow::anyhow!("alignment failed")),
+        )
+        .unwrap();
+        assert_eq!(capture.image, first);
+        assert!(capture.warning.is_some());
+        assert!(super::finish_scrolling_capture(
+            vec![(first, 0)],
+            24,
+            80,
+            &super::AtomicBool::new(true),
+            Err(anyhow::anyhow!("canceled"))
+        )
+        .is_err());
+    }
 
     #[test]
     fn pixel_change_threshold_is_respected() {

@@ -33,7 +33,7 @@ Capture toolbar (dark theme)
   - Up to **three capture-toolbar shortcuts** can run Fullscreen / Window / Region capture, OCR, OCR + Translate, VLM, color picker, or ruler. Every binding is remappable from the keyboard button next to the **CAPTURE SETTINGS** title.
 - **Capture Mode**: Compact always-on-top toolbar (`Capture` ↔ `OCR` toggle).
   - Frame mode opens a movable, resizable transparent capture frame with its own Capture and Record controls.
-  - Fullscreen / Window / Scrolling (Windows only) / Region (`Esc` to cancel). Scrolling capture shows step progress and can also be canceled with `Esc` while capturing.
+  - Fullscreen / Window / Scrolling (Windows only) / Region (`Esc` to cancel). Scrolling capture calibrates wheel distance to move about half a window per step, retains overlap for stitching, shows step progress, and can be canceled with `Esc` while capturing. Sparse chart layouts use an additional edge-correlation alignment pass. If alignment fails after frames were captured, verified frames are still saved/copied as a partial capture and the toolbar reports the reason.
   - One-shot OCR, OCR+Translate, VLM, color picker, ruler.
   - For one-shot OCR and OCR+Translate, the language dropdown lists only installed Windows OCR packs with short labels such as **KO**, **JP**, and **EN**.
   - OCR+Translate preserves and copies the recognized source text if translation fails, with the error shown in the toolbar status.

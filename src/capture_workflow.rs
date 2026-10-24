@@ -1026,29 +1026,49 @@ pub(crate) async fn run_toolbar_action(
             }
             SelectionPurpose::ScrollCapture => {
                 let target = target.context("A window target is required for scrolling capture")?;
-                let cancel = state.lock().unwrap().scroll_cancel.clone()
+                let cancel = state
+                    .lock()
+                    .unwrap()
+                    .scroll_cancel
+                    .clone()
                     .context("Scrolling capture cancellation was not initialized")?;
                 let progress_toolbar = toolbar.as_weak();
-                let image = tokio::task::spawn_blocking(move || {
+                let progress_active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+                let worker_progress = progress_active.clone();
+                let capture_result = tokio::task::spawn_blocking(move || {
                     capture::scrolling_capture(target, &cancel, |step, maximum| {
                         let toolbar = progress_toolbar.clone();
+                        let active = worker_progress.clone();
                         let _ = slint::invoke_from_event_loop(move || {
+                            if !active.load(std::sync::atomic::Ordering::Relaxed) { return; }
                             if let Some(toolbar) = toolbar.upgrade() {
-                                set_capture_toolbar_status(&toolbar,
-                                    format!("Scrolling capture {step}/{maximum} — Esc to cancel"));
+                                set_capture_toolbar_status(
+                                    &toolbar,
+                                    format!("Scrolling capture {step}/{maximum} — Esc to cancel"),
+                                );
                             }
                         });
                     })
                 })
-                .await
-                .context("Scrolling capture worker stopped")??;
+                .await;
+                // Already queued progress must not overwrite the saved/partial-result status.
+                progress_active.store(false, std::sync::atomic::Ordering::Relaxed);
+                let capture = capture_result.context("Scrolling capture worker stopped")??;
+                let warning = capture.warning;
+                let image = capture.image;
                 let configured_folder = configured_folder.clone();
                 let path = tokio::task::spawn_blocking(move || {
                     capture::save_png_and_copy_to(&image, Some(configured_folder.as_str()))
                 })
                 .await
                 .context("Scrolling capture save worker stopped")??;
-                Ok(format!("Saved and copied: {}", path.display()))
+                Ok(match warning {
+                    Some(warning) => format!(
+                        "Partial capture saved and copied: {} ({warning})",
+                        path.display()
+                    ),
+                    None => format!("Saved and copied: {}", path.display()),
+                })
             }
             SelectionPurpose::Record => {
                 if recorder_slot.lock().unwrap().is_some() {

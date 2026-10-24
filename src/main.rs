@@ -13,6 +13,7 @@ mod ocr;
 mod ocr_ui;
 mod provider_ui;
 mod runtime_workers;
+mod scroll_alignment;
 mod selection_ui;
 mod settings;
 mod shortcuts;
