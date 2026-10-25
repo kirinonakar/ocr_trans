@@ -75,6 +75,7 @@ pub(crate) fn sync_capture_state(state: &mut AppState, main: &MainWindow) {
     state.model_name = main.get_model_name().to_string();
     state.interval_sec = main.get_interval();
     state.system_prompt = main.get_system_prompt().to_string();
+    state.translation_glossary = main.get_translation_glossary().to_string();
     state.temperature = main.get_temperature();
     state.thinking_level = main.get_thinking_level().to_string();
     state.provider = main.get_api_type().to_string();
@@ -97,6 +98,7 @@ pub(crate) fn make_api_client(http: &reqwest::Client, main: &MainWindow) -> api:
         main.get_thinking_level().to_string(),
         main.get_api_type().to_string(),
     )
+    .with_context(&main.get_translation_glossary(), &[])
 }
 
 pub(crate) fn physical_selection_rect(
@@ -1123,7 +1125,19 @@ pub(crate) async fn run_toolbar_action(
                         .context("Capture worker stopped")??;
                 if action == SelectionPurpose::Vlm {
                     let client = make_api_client(&http, &main);
-                    let text = client.translate_image(image).await?;
+                    let mut last_update = None::<Instant>;
+                    let text = client
+                        .translate_image_stream(image, |partial| {
+                            if last_update.is_some_and(|time| time.elapsed() < Duration::from_millis(80)) {
+                                return;
+                            }
+                            last_update = Some(Instant::now());
+                            main.set_last_translated_text(partial.into());
+                            if let Some(textbox) = textbox.upgrade() {
+                                textbox.set_text(partial.into());
+                            }
+                        })
+                        .await?;
                     if text.trim().is_empty() {
                         anyhow::bail!("VLM returned no text");
                     }
@@ -1162,11 +1176,27 @@ pub(crate) async fn run_toolbar_action(
                     textbox.set_text(text.clone().into());
                 }
                 let translation = if action == SelectionPurpose::OcrTranslate {
-                    match make_api_client(&http, &main).translate_text(&text).await {
+                    let client = make_api_client(&http, &main);
+                    let mut last_update = None::<Instant>;
+                    match client.translate_text_stream(&text, |partial| {
+                        if last_update.is_some_and(|time| time.elapsed() < Duration::from_millis(80)) {
+                            return;
+                        }
+                        last_update = Some(Instant::now());
+                        let composed = compose_ocr_clipboard(&text, Some(partial));
+                        main.set_last_translated_text(composed.clone().into());
+                        if let Some(textbox) = textbox.upgrade() {
+                            textbox.set_text(composed.into());
+                        }
+                    }).await {
                         Ok(translation) => Some(translation),
                         Err(error) => {
                             log::warn!("OCR translation failed: {error:?}");
-                            return Ok(format!("OCR copied; translation failed: {error}"));
+                            main.set_last_translated_text(text.clone().into());
+                            if let Some(textbox) = textbox.upgrade() {
+                                textbox.set_text(text.clone().into());
+                            }
+                            return Ok(format!("OCR copied; translation failed: {}", api::error_summary(&error)));
                         }
                     }
                 } else {
@@ -1205,7 +1235,17 @@ pub(crate) async fn run_toolbar_action(
     }
     match result {
         Ok(message) => set_capture_toolbar_status(&toolbar, message),
-        Err(error) => set_capture_toolbar_status(&toolbar, format!("Error: {error}")),
+        Err(error) => {
+            if action == SelectionPurpose::Vlm {
+                // A failed stream must not leave partial output looking like a completed result.
+                let message = format!("Translation failed: {}", api::error_summary(&error));
+                main.set_last_translated_text(message.clone().into());
+                if let Some(textbox) = textbox.upgrade() {
+                    textbox.set_text(message.into());
+                }
+            }
+            set_capture_toolbar_status(&toolbar, format!("Error: {}", api::error_summary(&error)));
+        }
     }
     if show_progress_tooltip {
         toolbar.set_active_tooltip("done".into());

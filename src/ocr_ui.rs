@@ -24,6 +24,17 @@ pub(crate) fn register_callbacks(
     #[cfg(target_os = "windows")] main_hwnd: Option<windows::Win32::Foundation::HWND>,
     #[cfg(not(target_os = "windows"))] main_hwnd: Option<()>,
 ) {
+    let options_main = main_window.as_weak();
+    let options_state = state.clone();
+    main_window.on_translation_options_saved(move || {
+        if let Some(main) = options_main.upgrade() {
+            let glossary = main.get_translation_glossary().to_string();
+            save_translation_options(main.get_skip_empty_ocr(), &glossary);
+            let mut state = options_state.lock().unwrap();
+            state.translation_glossary = glossary;
+            state.worker_control.signal();
+        }
+    });
     let main_weak = main_window.as_weak();
     let textbox_weak = textbox_window.as_weak();
     let state_clone = state.clone();

@@ -284,6 +284,8 @@ pub(crate) struct AppSettings {
     pub(crate) app_mode: String,
     pub(crate) dark_theme: bool,
     pub(crate) ocr_language: String,
+    pub(crate) skip_empty_ocr: bool,
+    pub(crate) translation_glossary: String,
     pub(crate) base_font_size: f32,
     pub(crate) use_textbox: bool,
     pub(crate) overlay_bg_color: String,
@@ -496,6 +498,19 @@ pub(crate) fn load_app_settings() -> AppSettings {
     settings_cache().lock().unwrap().clone()
 }
 
+/// Only copy the values used by the continuous capture tick.
+pub(crate) fn continuous_ocr_settings() -> (String, bool) {
+    let settings = settings_cache().lock().unwrap();
+    (settings.ocr_language.clone(), settings.skip_empty_ocr)
+}
+
+pub(crate) fn save_translation_options(skip_empty_ocr: bool, glossary: &str) {
+    update_settings(|settings| {
+        settings.skip_empty_ocr = skip_empty_ocr;
+        settings.translation_glossary = glossary.to_string();
+    });
+}
+
 enum SaveMessage {
     Changed,
     Flush(std::sync::mpsc::Sender<()>),
@@ -551,6 +566,8 @@ fn read_app_settings() -> AppSettings {
         app_mode: "ocr".to_string(),
         dark_theme: false,
         ocr_language: String::new(),
+        skip_empty_ocr: false,
+        translation_glossary: String::new(),
         base_font_size: 16.0,
         use_textbox: false,
         overlay_bg_color: "#ffffff".to_string(),
@@ -635,6 +652,8 @@ fn read_app_settings() -> AppSettings {
             settings.app_mode = ini_value(&values, "app", "app_mode", settings.app_mode);
             settings.dark_theme = ini_bool(&values, "app", "dark_theme", settings.dark_theme);
             settings.ocr_language = ini_value(&values, "app", "ocr_language", settings.ocr_language);
+            settings.skip_empty_ocr = ini_bool(&values, "translation", "skip_empty_ocr", false);
+            settings.translation_glossary = ini_value(&values, "translation", "glossary", String::new());
             settings.base_font_size =
                 ini_float(&values, "style", "base_font_size", settings.base_font_size)
                     .clamp(8.0, 72.0);
@@ -699,7 +718,7 @@ fn atomic_write(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> 
 }
 
 fn write_app_settings(settings: &AppSettings) {
-    let contents = format!(
+    let mut contents = format!(
         "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nuse_textbox={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
         ini_escape(&settings.provider.provider),
         ini_escape(&settings.provider.lm_model),
@@ -734,6 +753,11 @@ fn write_app_settings(settings: &AppSettings) {
         ini_escape(&settings.shortcuts.toolbar3_action),
         ini_escape(&settings.shortcuts.toolbar3_key),
     );
+    contents.push_str(&format!(
+        "\n[translation]\nskip_empty_ocr={}\nglossary={}\n",
+        settings.skip_empty_ocr,
+        ini_escape(&settings.translation_glossary)
+    ));
     if let Some(path) = settings_write_path() {
         if let Err(error) = atomic_write(&path, contents.as_bytes()) {
             log::warn!("Failed to save settings: {error}");

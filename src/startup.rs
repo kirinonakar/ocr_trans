@@ -25,6 +25,8 @@ pub(crate) fn initialize_ui(
         .window()
         .set_size(slint::LogicalSize::new(CAPTURE_TOOLBAR_WIDTH, 48.0));
     let mut initial_settings = load_app_settings();
+    main_window.set_skip_empty_ocr(initial_settings.skip_empty_ocr);
+    main_window.set_translation_glossary(initial_settings.translation_glossary.clone().into());
     // Windows OCR is enumerated on a worker thread: the `windows` crate initializes the caller
     // into the MTA, which makes Winit's later `OleInitialize` on the main thread fail.
     let language_menu = match std::thread::spawn({

@@ -32,7 +32,8 @@ pub(crate) async fn run() -> Result<()> {
     let shortcut_window = ShortcutSettingsWindow::new()?;
 
     let http_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(60))
         .build()
         .expect("Failed to build HTTP client");
 

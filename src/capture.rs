@@ -1421,6 +1421,15 @@ fn color_distance(first: &Rgba<u8>, second: &Rgba<u8>) -> u32 {
         + (first[2] as i32 - second[2] as i32).unsigned_abs()
 }
 
+fn ffmpeg_executable(executable: Option<&std::path::Path>) -> std::path::PathBuf {
+    let name = if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" };
+    executable
+        .and_then(std::path::Path::parent)
+        .map(|directory| directory.join(name))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| "ffmpeg".into())
+}
+
 /// Lightweight FFmpeg-backed recorder. Windows uses Desktop Duplication with NVENC for normal
 /// single-monitor selections; the raw-frame worker remains as a cross-monitor/non-Windows
 /// fallback. The UI owns the stop/pause handles and recording lifecycle.
@@ -2162,7 +2171,7 @@ impl ScreenRecorder {
             }
         };
         let framerate = fps.to_string();
-        let mut ffmpeg = Command::new("ffmpeg");
+        let mut ffmpeg = Command::new(ffmpeg_executable(std::env::current_exe().ok().as_deref()));
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
@@ -2298,7 +2307,7 @@ impl ScreenRecorder {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
-            .context("FFmpeg was not found. Install ffmpeg and make sure it is on PATH.")?;
+            .context("Could not start FFmpeg. Place ffmpeg.exe beside the app or install it on PATH.")?;
         let mut ffmpeg_stderr = child.stderr.take().map(|mut stderr| {
             thread::spawn(move || {
                 let mut output = Vec::new();

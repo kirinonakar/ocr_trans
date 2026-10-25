@@ -12,6 +12,7 @@ pub(crate) struct AppState {
     pub(crate) model_name: String,
     pub(crate) interval_sec: f32,
     pub(crate) system_prompt: String,
+    pub(crate) translation_glossary: String,
     pub(crate) temperature: f32,
     pub(crate) thinking_level: String,
     pub(crate) provider: String,

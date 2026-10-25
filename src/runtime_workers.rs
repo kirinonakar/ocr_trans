@@ -35,11 +35,13 @@ pub(crate) fn start(
         let mut observed_revision = u64::MAX;
         let mut gate = ChangeGate::default();
         let mut failures = 0u32;
+        let mut history = Vec::new();
+        let mut halted = false;
         loop {
             // Subscribe before the snapshot, so a stop between the snapshot and select cannot
             // be lost. Revisions also reject callbacks that were already queued on Slint.
             let mut cancel = control.subscribe();
-            let (running, rect, client, interval, revision) = {
+            let (running, rect, client, glossary, interval, revision) = {
                 let state = state_for_worker.lock().unwrap();
                 (
                     state.is_running,
@@ -54,6 +56,7 @@ pub(crate) fn start(
                         state.thinking_level.clone(),
                         state.provider.clone(),
                     ),
+                    state.translation_glossary.clone(),
                     state.interval_sec,
                     control.revision(),
                 )
@@ -61,9 +64,11 @@ pub(crate) fn start(
             if revision != observed_revision {
                 gate = ChangeGate::default();
                 failures = 0;
+                history.clear();
+                halted = false;
                 observed_revision = revision;
             }
-            if !running || rect.is_none() {
+            if !running || rect.is_none() || halted {
                 control.wait(revision, Duration::from_secs(60));
                 continue;
             }
@@ -76,9 +81,9 @@ pub(crate) fn start(
             let mut delay = Duration::from_secs_f32(interval);
             match capture::capture_area(&rect.unwrap(), &None) {
                 Ok(image) => {
-                    let language = crate::settings::load_app_settings().ocr_language;
+                    let (language, skip_empty_ocr) = crate::settings::continuous_ocr_settings();
                     let text = if one_shot {
-                        String::new()
+                        None
                     } else {
                         let pixels = crate::capture_workflow::rgba_to_bgra_bytes(&image);
                         match crate::ocr::recognize_text_with_cancel(
@@ -88,19 +93,35 @@ pub(crate) fn start(
                             &language,
                             || control.revision() != revision,
                         ) {
-                            Ok(text) => text.split_whitespace().collect::<Vec<_>>().join(" "),
+                            Ok(text) => Some(text.split_whitespace().collect::<Vec<_>>().join(" ")),
                             Err(error) => {
                                 log::debug!(
                                     "Continuous OCR unavailable; using pixel comparison: {error:?}"
                                 );
-                                String::new()
+                                None
                             }
                         }
                     };
                     if control.revision() != revision {
                         continue;
                     }
-                    if gate.observe(&text, &image, one_shot) {
+                    let decision = gate.observe(text.as_deref(), &image, one_shot, skip_empty_ocr);
+                    if decision == GateDecision::Clear {
+                        failures = 0;
+                        queue_worker_result(
+                            &state_for_worker,
+                            revision,
+                            &overlay_weak_worker,
+                            &main_weak_worker,
+                            &textbox_weak_worker,
+                            String::new(),
+                            false,
+                            true,
+                            false,
+                        );
+                    }
+                    if decision == GateDecision::Translate {
+                        let client = client.with_context(&glossary, &history);
                         queue_worker_result(
                             &state_for_worker,
                             revision,
@@ -112,10 +133,29 @@ pub(crate) fn start(
                             false,
                             false,
                         );
+                        let mut last_update = None::<std::time::Instant>;
                         let result = runtime_handle.block_on(in_generation(
                             &mut cancel,
                             revision,
-                            client.translate_image(image.clone()),
+                            client.translate_image_stream(image.clone(), |partial| {
+                                if last_update
+                                    .is_some_and(|time| time.elapsed() < Duration::from_millis(80))
+                                {
+                                    return;
+                                }
+                                last_update = Some(std::time::Instant::now());
+                                queue_worker_result(
+                                    &state_for_worker,
+                                    revision,
+                                    &overlay_weak_worker,
+                                    &main_weak_worker,
+                                    &textbox_weak_worker,
+                                    partial.to_string(),
+                                    false,
+                                    false,
+                                    false,
+                                );
+                            }),
                         ));
                         let Some(result) = result else {
                             continue;
@@ -125,6 +165,11 @@ pub(crate) fn start(
                         }
                         match result {
                             Ok(translated) => {
+                                api::remember_line(
+                                    &mut history,
+                                    text.as_deref().unwrap_or_default(),
+                                    &translated,
+                                );
                                 gate.accept(text, image);
                                 failures = 0;
                                 queue_worker_result(
@@ -143,18 +188,25 @@ pub(crate) fn start(
                                 log::error!("API Error: {error:?}");
                                 gate.retry();
                                 failures = failures.saturating_add(1);
-                                delay =
-                                    Duration::from_secs(1u64 << failures.saturating_sub(1).min(5));
+                                let retry = api::retry_delay(&error, failures);
+                                halted = retry.is_none();
+                                delay = retry.unwrap_or(Duration::from_secs(60));
+                                let summary = api::error_summary(&error);
+                                let message = if halted {
+                                    format!("Stopped: {summary}")
+                                } else {
+                                    format!("Retry in {}s: {summary}", delay.as_secs())
+                                };
                                 queue_worker_result(
                                     &state_for_worker,
                                     revision,
                                     &overlay_weak_worker,
                                     &main_weak_worker,
                                     &textbox_weak_worker,
-                                    format!("Error (retry in {}s): {error}", delay.as_secs()),
+                                    message,
                                     false,
                                     false,
-                                    false,
+                                    halted,
                                 );
                             }
                         }
@@ -274,8 +326,15 @@ async fn in_generation<T>(
     }
 }
 
-/// OCR is the trigger whenever available. Animated backgrounds then have no effect. Empty or
-/// unavailable OCR falls back to two stable pixel samples. Only successful requests are accepted.
+/// A successful empty OCR result remains distinct from an OCR error (None).
+/// Users can opt out of pixel fallback on empty OCR when detecting subtitle disappearance.
+#[derive(Debug, PartialEq, Eq)]
+enum GateDecision {
+    Wait,
+    Translate,
+    Clear,
+}
+
 #[derive(Default)]
 struct ChangeGate {
     candidate_text: Option<String>,
@@ -285,34 +344,57 @@ struct ChangeGate {
 }
 
 impl ChangeGate {
-    fn observe(&mut self, text: &str, image: &image::RgbaImage, one_shot: bool) -> bool {
+    fn observe(
+        &mut self,
+        text: Option<&str>,
+        image: &image::RgbaImage,
+        one_shot: bool,
+        skip_empty_ocr: bool,
+    ) -> GateDecision {
         if one_shot {
-            return true;
+            return GateDecision::Translate;
         }
-        let stable = if text.is_empty() {
+        if text == Some("") && skip_empty_ocr {
+            if self.accepted_text.as_deref() == Some("")
+                && self.candidate_text.as_deref() == Some("")
+            {
+                return GateDecision::Wait;
+            }
+            *self = Self::default();
+            self.accepted_text = Some(String::new());
+            self.candidate_text = Some(String::new());
+            return GateDecision::Clear;
+        }
+        // Compatibility mode allows outlined/unrecognized text to use stable pixels.
+        let text = text.filter(|text| !text.is_empty());
+        let stable = if text.is_none() {
             self.candidate_text.is_none()
                 && self.candidate_image.is_some()
                 && !capture::is_changed(&self.candidate_image, image, 0.01)
         } else {
-            self.candidate_text.as_deref() == Some(text)
+            self.candidate_text.as_deref() == text
         };
-        let changed = if text.is_empty() {
+        let changed = if text.is_none() {
             capture::is_changed(&self.accepted_image, image, 0.01)
         } else {
-            self.accepted_text.as_deref() != Some(text)
+            self.accepted_text.as_deref() != text
         };
-        if text.is_empty() {
+        if text.is_none() {
             self.candidate_text = None;
             self.candidate_image = Some(image.clone());
         } else {
-            self.candidate_text = Some(text.to_string());
+            self.candidate_text = text.map(str::to_string);
             self.candidate_image = None;
         }
-        stable && changed
+        if stable && changed {
+            GateDecision::Translate
+        } else {
+            GateDecision::Wait
+        }
     }
 
-    fn accept(&mut self, text: String, image: image::RgbaImage) {
-        self.accepted_text = Some(text);
+    fn accept(&mut self, text: Option<String>, image: image::RgbaImage) {
+        self.accepted_text = text;
         self.accepted_image = Some(image);
     }
 
@@ -348,7 +430,7 @@ fn queue_worker_result(
             if success {
                 state.last_text = text.clone();
             }
-            if success && one_shot {
+            if one_shot {
                 state.is_running = false;
             }
         }
@@ -383,13 +465,13 @@ fn queue_worker_result(
                 textbox.set_font_size(main.get_base_font_size());
             }
         }
-        if success {
+        if success && !text.trim().is_empty() {
             if let Err(error) = capture::copy_text_to_clipboard(&text) {
                 log::warn!("Continuous result clipboard failed: {error:?}");
             }
-            if one_shot {
-                main.set_is_running(false);
-            }
+        }
+        if one_shot {
+            main.set_is_running(false);
         }
     });
 }
@@ -431,13 +513,28 @@ mod tests {
         let a = RgbaImage::from_pixel(20, 20, Rgba([0, 0, 0, 255]));
         let b = RgbaImage::from_pixel(20, 20, Rgba([255, 255, 255, 255]));
         let mut gate = ChangeGate::default();
-        assert!(!gate.observe("he", &a, false));
-        assert!(!gate.observe("hello", &b, false));
-        assert!(gate.observe("hello", &a, false));
-        gate.accept("hello".into(), a.clone());
-        assert!(!gate.observe("hello", &b, false));
+        assert_eq!(
+            gate.observe(Some("he"), &a, false, true),
+            GateDecision::Wait
+        );
+        assert_eq!(
+            gate.observe(Some("hello"), &b, false, true),
+            GateDecision::Wait
+        );
+        assert_eq!(
+            gate.observe(Some("hello"), &a, false, true),
+            GateDecision::Translate
+        );
+        gate.accept(Some("hello".into()), a.clone());
+        assert_eq!(
+            gate.observe(Some("hello"), &b, false, true),
+            GateDecision::Wait
+        );
         gate.retry();
-        assert!(gate.observe("hello", &b, false));
+        assert_eq!(
+            gate.observe(Some("hello"), &b, false, true),
+            GateDecision::Translate
+        );
     }
 
     #[test]
@@ -445,11 +542,46 @@ mod tests {
         let a = RgbaImage::from_pixel(20, 20, Rgba([0, 0, 0, 255]));
         let b = RgbaImage::from_pixel(20, 20, Rgba([255, 255, 255, 255]));
         let mut gate = ChangeGate::default();
-        assert!(!gate.observe("", &a, false));
-        assert!(!gate.observe("", &b, false));
-        assert!(gate.observe("", &b, false));
-        gate.accept("".into(), b.clone());
-        assert!(!gate.observe("", &b, false));
-        assert!(gate.observe("", &b, true));
+        assert_eq!(gate.observe(Some(""), &a, false, false), GateDecision::Wait);
+        assert_eq!(gate.observe(Some(""), &b, false, false), GateDecision::Wait);
+        assert_eq!(
+            gate.observe(Some(""), &b, false, false),
+            GateDecision::Translate
+        );
+        gate.accept(Some("".into()), b.clone());
+        assert_eq!(gate.observe(Some(""), &b, false, false), GateDecision::Wait);
+        assert_eq!(
+            gate.observe(Some(""), &b, true, true),
+            GateDecision::Translate
+        );
+    }
+
+    #[test]
+    fn subtitle_disappearance_clears_and_rearms_while_ocr_errors_still_use_pixels() {
+        let image = RgbaImage::from_pixel(20, 20, Rgba([0, 0, 0, 255]));
+        let mut gate = ChangeGate::default();
+        gate.accept(Some("hello".into()), image.clone());
+        assert_eq!(
+            gate.observe(Some(""), &image, false, true),
+            GateDecision::Clear
+        );
+        assert_eq!(
+            gate.observe(Some(""), &image, false, true),
+            GateDecision::Wait
+        );
+        assert_eq!(
+            gate.observe(Some("hello"), &image, false, true),
+            GateDecision::Wait
+        );
+        assert_eq!(
+            gate.observe(Some("hello"), &image, false, true),
+            GateDecision::Translate
+        );
+        let mut gate = ChangeGate::default();
+        assert_eq!(gate.observe(None, &image, false, true), GateDecision::Wait);
+        assert_eq!(
+            gate.observe(None, &image, false, true),
+            GateDecision::Translate
+        );
     }
 }
