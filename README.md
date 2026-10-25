@@ -15,7 +15,7 @@ Capture toolbar (dark theme)
 - **Auto-Automation**: Selecting a region automatically starts the capture process for immediate results.
 - **Change Detection**: Continuous mode compares Windows OCR text and waits for two identical consecutive samples before calling the VLM. Animated backgrounds do not trigger requests when the recognized text stays the same. Empty/unavailable OCR falls back to stable pixel comparison. Interval 0 performs an immediate one-shot request.
 - **Responsive cancellation and retry**: Stop or changing regions cancels pending requests. Transient failures retry with backoff or `Retry-After`; HTTP 4xx errors except 429 stop translation and show a short error.
-- **Translation options**: Open **Translation…** in **CAPTURE SETTINGS** for a glossary (`source=translation`, one entry per line) and an option to skip empty OCR and clear the overlay. Skipping defaults to off to support fonts Windows OCR may miss.
+- **Translation options**: Open **Options...** in **CAPTURE SETTINGS** for a glossary (`source=translation`, one entry per line) and an option to skip empty OCR and clear the overlay. Skipping defaults to off to support fonts Windows OCR may miss.
 - **Dialogue context**: Continuous translation uses the last three completed lines and your glossary for consistency.
 - **Streaming results**: Continuous translation and toolbar VLM/OCR+Translate show output as it arrives. Only completed translations are copied to the clipboard.
 - **Image quality**: VLM images retain their original size up to one million pixels; larger images shrink proportionally. JPEG quality is 92, preserving wide subtitle strips without upscaling small captures.
