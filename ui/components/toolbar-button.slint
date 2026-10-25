@@ -1,0 +1,72 @@
+// Shared icon button, hover tooltip, and native-drag press handling.
+
+export component ToolbarButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> available: true;
+    in property <bool> active: false;
+    in property <bool> dark_theme: false;
+    in property <bool> press_on_down: false;
+    in property <string> label: "";
+    in property <string> tooltip: "";
+    in property <length> icon_size: 17px;
+    callback pressed();
+    callback hovered_tooltip_changed(string);
+
+    width: 30px;
+    height: 30px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: 6px;
+    border-width: 0px;
+    border-color: transparent;
+    background: active
+        ? (dark_theme ? #45b8ed : #dbeafe)
+        : (dark_theme ? (touch.has-hover ? #4a4a55 : #3a3a43) : (touch.has-hover ? #e2e8f0 : #ffffffcc));
+    opacity: available ? 1.0 : 0.38;
+
+    Image {
+        source: icon;
+        width: label == "" ? icon_size : 14px;
+        height: label == "" ? icon_size : 14px;
+        x: label == "" ? (parent.width - self.width) / 2 : 6px;
+        y: (parent.height - self.height) / 2;
+        colorize: dark_theme ? #e2e8f0 : #334155;
+    }
+
+    if (label != "") : Text {
+        x: 24px;
+        width: parent.width - 27px;
+        height: parent.height;
+        text: label;
+        color: dark_theme ? #f8fafc : #1e293b;
+        font-size: 10px;
+        font-weight: 700;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    touch := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        z: 10;
+        // A press-on-down control starts a native drag loop. That loop consumes the native
+        // mouse-up event, so let Slint cancel and release its TouchArea grab immediately after
+        // the press. Otherwise the move button keeps intercepting every later toolbar click.
+        enabled: available && !(press_on_down && touch.pressed);
+        pointer-event(event) => {
+            if (press_on_down && event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                pressed();
+            }
+        }
+        changed has-hover => {
+            if (tooltip != "") {
+                hovered_tooltip_changed(self.has-hover ? tooltip : "");
+            }
+        }
+        clicked => {
+            if (!press_on_down) { pressed(); }
+        }
+    }
+}

@@ -1,0 +1,668 @@
+// OCR provider, translation, capture, and appearance settings window.
+
+import { Button, CheckBox, Slider, LineEdit, ComboBox, TextEdit, Palette } from "std-widgets.slint";
+import { ToolbarButton } from "../components/toolbar-button.slint";
+
+export component MainWindow inherits Window {
+    title: "OCR Translator";
+    icon: @image-url("../../app.ico");
+    width: 400px;
+    // Keep each OCR layout state fixed while giving the optional style panel its own height.
+    // The closed state is shorter to avoid unused space; the open state has room for all controls.
+    preferred-height: (show_style_settings ? 990px : 870px) - (api_settings_collapsed ? api_settings_saved_height : 0px);
+    min-height: (show_style_settings ? 990px : 870px) - (api_settings_collapsed ? api_settings_saved_height : 0px);
+    max-height: (show_style_settings ? 990px : 870px) - (api_settings_collapsed ? api_settings_saved_height : 0px);
+    background: dark_theme
+        ? #2b2b31
+        : @linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+    default-font-family: "Yu Gothic UI";
+
+    // Keep std-widgets (LineEdit, TextEdit, ComboBox, etc.) on the same palette as the
+    // application theme. Without this, the widgets follow the OS palette independently and
+    // can remain light while the OCR window is dark.
+    init => {
+        Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light;
+    }
+    changed dark_theme => {
+        Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    in-out property <bool> is_running: false;
+    in-out property <string> api_type: "LMStudio";
+    in-out property <int> api_type_index: 0;
+    in property <[string]> provider_options: ["LMStudio", "Google Gemini", "Cerebras", "Ollama", "Ollama Cloud", "Unsloth Desktop", "OpenCode Go", "OpenCode Zen"];
+    in-out property <string> api_endpoint: "http://localhost:1234/v1";
+    in-out property <string> api_key: "";
+    in-out property <string> model_name: "google/gemma-4-26b-a4b";
+    in property <[string]> model_options: ["google/gemma-4-26b-a4b", "qwen/qwen3.5-9b"];
+    in-out property <int> model_index: 0;
+    in-out property <float> interval: 0;
+    in-out property <bool> overlay_visible: true;
+    in-out property <string> system_prompt: "naturally translate into korean. only show translated texts.";
+    in-out property <string> translation_glossary;
+    in-out property <bool> skip_empty_ocr: false;
+    private property <bool> translation_options_open: false;
+    in-out property <float> base_font_size: 16;
+    in-out property <float> temperature: 0.7;
+    in-out property <string> thinking_level: "default";
+    in property <[string]> thinking_level_options: ["default", "disable", "low", "medium", "high", "xhigh", "max"];
+    in-out property <color> overlay_bg_color: #ffffff;
+    in-out property <color> overlay_text_color: #1e293b;
+    in-out property <float> overlay_bg_opacity: 0.9;
+    in-out property <bool> show_style_settings: false;
+    // Fold state of the API card; the saved height is the window height the fold gives back.
+    in-out property <bool> api_settings_collapsed: false;
+    in-out property <length> api_settings_saved_height: 0px;
+    in-out property <bool> dark_theme: false;
+    in-out property <bool> use_textbox: false;
+    in-out property <string> last_translated_text: "";
+    in-out property <string> app_mode: "ocr";
+    in-out property <string> capture_folder: "";
+    in-out property <string> select_area_shortcut_label: "Win + Alt + A";
+    in-out property <string> start_shortcut_label: "Win + Alt + P";
+    // System prompt presets: the combo box lists the stored names and the index selects one.
+    in-out property <[string]> preset_options: [];
+    in-out property <int> preset_index: -1;
+    in-out property <bool> preset_dialog_open: false;
+    in-out property <string> preset_name: "";
+
+    
+    
+    callback start_stop_clicked();
+    callback select_area_clicked();
+    callback api_type_changed(string);
+    callback api_key_changed(string);
+    callback overlay_toggle_clicked(bool);
+    callback refresh_models_clicked();
+    callback sync_lmstudio_models();
+    callback style_panel_toggled(bool);
+    callback api_settings_toggled(bool);
+    callback style_changed();
+    callback folder_select_clicked();
+    callback capture_folder_changed(string);
+    callback system_prompt_changed(string);
+    callback translation_options_saved();
+    callback preset_selected(string);
+    callback preset_save_clicked();
+    callback preset_save_confirmed(string);
+    callback preset_delete_clicked();
+
+    callback model_changed(string);
+    callback thinking_level_changed(string);
+    callback theme_toggle_clicked();
+    callback mode_toggle_clicked(string);
+    callback shortcut_settings_clicked();
+    VerticalLayout {
+        alignment: start;
+        padding: 14px;
+        padding-bottom: 30px; // Increased bottom padding to lift content
+        spacing: 10px;
+
+        HorizontalLayout {
+            height: 30px;
+            spacing: 8px;
+
+            Image {
+                source: @image-url("../../app.ico");
+                width: 26px;
+                height: 26px;
+            }
+
+            Text {
+                text: "OCR Translator";
+                font-size: 18px;
+                color: dark_theme ? #45b8ed : #2563eb;
+                vertical-alignment: center;
+                font-weight: 800;
+            }
+
+            Rectangle { }
+
+            // Keep the theme action immediately to the left of the mode switch.
+            ToolbarButton {
+                icon: @image-url("../icons/theme.svg");
+                dark_theme: dark_theme;
+                active: dark_theme;
+                width: 30px;
+                icon_size: 16px;
+                pressed => { theme_toggle_clicked(); }
+            }
+
+            // OCR mode exposes a plain Capture button; the old switch's white knob is not needed.
+            ToolbarButton {
+                icon: @image-url("../icons/ui.svg");
+                dark_theme: dark_theme;
+                active: app_mode == "capture";
+                width: 78px;
+                icon_size: 15px;
+                label: app_mode == "capture" ? "OCR" : "Capture";
+                pressed => {
+                    mode_toggle_clicked(app_mode == "capture" ? "ocr" : "capture");
+                }
+            }
+        }
+
+        api-card := Rectangle {
+            background: dark_theme ? #37373f : #ffffff;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: dark_theme ? transparent : #e2e8f0;
+            
+            VerticalLayout {
+                spacing: 8px;
+                padding: 10px;
+                // Header row doubles as the fold toggle, mirroring the style panel's ▲/▼ button.
+                Rectangle {
+                    background: transparent;
+                    HorizontalLayout {
+                        height: 22px;
+                        spacing: 6px;
+                        Text {
+                            text: "API SETTINGS";
+                            font-weight: 700;
+                            color: dark_theme ? #45b8ed : #2563eb;
+                            font-size: 14px;
+                            vertical-alignment: center;
+                        }
+                        Rectangle { } // Flexible spacer keeps the chevron on the right
+                        Image {
+                            source: @image-url("../icons/chevron-down.svg");
+                            width: 14px;
+                            height: 14px;
+                            colorize: dark_theme ? #e2e8f0 : #334155;
+                            // Match the style panel: ▲ while expanded, ▼ while folded.
+                            transform-rotation: api_settings_collapsed ? 0deg : 180deg;
+                            animate transform-rotation { duration: 150ms; }
+                        }
+                    }
+                    TouchArea {
+                        clicked => {
+                            if (!api_settings_collapsed) {
+                                // Folded, the card keeps only its 10px vertical padding and the
+                                // 22px header row; remember the height the window can reclaim.
+                                api_settings_saved_height = api-card.height - 42px;
+                            }
+                            api_settings_collapsed = !api_settings_collapsed;
+                            api_settings_toggled(api_settings_collapsed);
+                        }
+                    }
+                }
+
+                if (!api_settings_collapsed) : VerticalLayout {
+                    spacing: 8px;
+
+                    VerticalLayout {
+                        spacing: 6px;
+                        Text { text: "Provider:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                        ComboBox {
+                            model: provider_options;
+                            current-value <=> api_type;
+                            current-index <=> api_type_index;
+                            selected(value) => {
+                                api_type_changed(value);
+                                if (value == "LMStudio" || value == "Ollama" || value == "Ollama Cloud" || value == "Unsloth Desktop" || value == "OpenCode Go" || value == "OpenCode Zen") { sync_lmstudio_models(); }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text { text: "Endpoint:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                        LineEdit {
+                            text <=> api_endpoint;
+                            placeholder-text: "http://localhost:1234/v1";
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text { text: "API Key:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                        LineEdit {
+                            text <=> api_key;
+                            input-type: password;
+                            placeholder-text: "Leave empty for local providers";
+                            edited(value) => { api_key_changed(value); }
+                            accepted(value) => { api_key_changed(value); }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text { text: "Model Name:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            ComboBox {
+                                model: model_options;
+                                current-value <=> model_name;
+                                current-index <=> model_index;
+                                selected(value) => { model_changed(value); }
+                            }
+                            ToolbarButton {
+                                icon: @image-url("../icons/sync.svg");
+                                dark_theme: dark_theme;
+                                width: 32px;
+                                height: 32px;
+                                icon_size: 18px;
+                                pressed => { refresh_models_clicked(); }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        HorizontalLayout {
+                            spacing: 4px;
+                            Text { text: "Temperature:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            Text { text: round(temperature * 10) / 10; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; font-weight: 700; }
+                            Rectangle { } // Flexible spacer to push content left
+                        }
+                        Slider {
+                            minimum: 0.0;
+                            maximum: 1.0;
+                            value <=> temperature;
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text { text: "Thinking Level:"; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                        ComboBox {
+                            model: thinking_level_options;
+                            current-value <=> thinking_level;
+                            selected(value) => { thinking_level_changed(value); }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+                        HorizontalLayout {
+                            spacing: 4px;
+                            Text { text: "System Prompt:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            Rectangle { } // Flexible spacer keeps the preset controls on the right
+                            ComboBox {
+                                width: 124px;
+                                height: 26px;
+                                model: preset_options;
+                                current-index <=> preset_index;
+                                selected(value) => { preset_selected(value); }
+                            }
+                            ToolbarButton {
+                                icon: @image-url("../icons/save.svg");
+                                dark_theme: dark_theme;
+                                width: 26px;
+                                height: 26px;
+                                icon_size: 15px;
+                                pressed => { preset_save_clicked(); }
+                            }
+                            ToolbarButton {
+                                icon: @image-url("../icons/trash.svg");
+                                dark_theme: dark_theme;
+                                width: 26px;
+                                height: 26px;
+                                icon_size: 15px;
+                                pressed => { preset_delete_clicked(); }
+                            }
+                        }
+                        Rectangle {
+                            background: dark_theme ? #2b2b31 : #f8fafc;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: dark_theme ? transparent : #e2e8f0;
+                            height: 64px;
+                            TextEdit {
+                                text <=> system_prompt;
+                                width: 100%;
+                                height: 100%;
+                                font-size: 13px;
+                                edited(value) => { system_prompt_changed(value); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            background: dark_theme ? #37373f : #ffffff;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: dark_theme ? transparent : #e2e8f0;
+            
+            VerticalLayout {
+                spacing: 8px;
+                padding: 10px;
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "CAPTURE SETTINGS";
+                        font-weight: 700;
+                        color: dark_theme ? #45b8ed : #2563eb;
+                        font-size: 14px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { } // Flexible spacer keeps the shortcut button on the right
+                    Button {
+                        text: "Translation…";
+                        height: 26px;
+                        clicked => { translation_options_open = true; }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("../icons/keyboard.svg");
+                        dark_theme: dark_theme;
+                        width: 26px;
+                        height: 26px;
+                        icon_size: 16px;
+                        pressed => { shortcut_settings_clicked(); }
+                    }
+                }
+                
+                HorizontalLayout {
+                    spacing: 4px;
+                    Text { text: "Interval (s): "; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; }
+                    Text { text: interval == 0 ? "Once" : (round(interval * 10) / 10); vertical-alignment: center; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; }
+                    Rectangle { } // Flexible spacer to push content left
+                }
+                Slider {
+                    minimum: 0;
+                    maximum: 10;
+                    value: interval;
+                    changed(val) => {
+                        if (val < 0.25) {
+                            interval = 0;
+                        } else {
+                            interval = round(val * 2) / 2;
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    height: 30px;
+                    spacing: 6px;
+                    Text {
+                        text: "Save folder:";
+                        width: 74px;
+                        vertical-alignment: center;
+                        color: dark_theme ? #cbd5e1 : #64748b;
+                        font-size: 12px;
+                    }
+                    LineEdit {
+                        text <=> capture_folder;
+                        placeholder-text: "Pictures";
+                        edited(value) => { capture_folder_changed(value); }
+                        accepted(value) => { capture_folder_changed(value); }
+                    }
+                    Button {
+                        text: "Browse";
+                        width: 68px;
+                        height: 28px;
+                        primary: false;
+                        clicked => { folder_select_clicked(); }
+                    }
+                }
+                HorizontalLayout {
+                    Text { text: "Font Size: "; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; }
+                    Text { text: round(base_font_size); vertical-alignment: center; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; }
+                    
+                    Rectangle { } // Flexible spacer
+                    
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text { text: "Textbox"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                        CheckBox { 
+                            checked <=> use_textbox;
+                            toggled => { style_changed(); }
+                        }
+                    }
+                    
+                    Rectangle { width: 8px; }
+                    
+                    Button {
+                        text: show_style_settings ? "▲ Style" : "▼ Style";
+                        height: 24px;
+                        primary: false;
+                        clicked => {
+                            show_style_settings = !show_style_settings;
+                            style_panel_toggled(show_style_settings);
+                        }
+                    }
+                }
+                Slider {
+                    minimum: 8;
+                    maximum: 72; // Increased max font size
+                    value: base_font_size;
+                    changed(val) => { base_font_size = val; style_changed(); }
+                }
+
+                if (show_style_settings) : VerticalLayout {
+                    spacing: 8px;
+                    padding-top: 4px;
+                    padding-bottom: 8px;
+                    
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text { text: "Background:"; font-size: 11px; color: dark_theme ? #cbd5e1 : #64748b; }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Rectangle { 
+                                    background: #ffffff; 
+                                    border-width: overlay_bg_color == #ffffff ? 2px : 1px; 
+                                    border-color: overlay_bg_color == #ffffff ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_bg_color = #ffffff; style_changed(); } } 
+                                }
+                                Rectangle { 
+                                    background: #000000; 
+                                    border-width: overlay_bg_color == #000000 ? 2px : 1px; 
+                                    border-color: overlay_bg_color == #000000 ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_bg_color = #000000; style_changed(); } } 
+                                }
+                                Rectangle { 
+                                    background: #1e293b; 
+                                    border-width: overlay_bg_color == #1e293b ? 2px : 1px; 
+                                    border-color: overlay_bg_color == #1e293b ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_bg_color = #1e293b; style_changed(); } } 
+                                }
+                                Rectangle { 
+                                    background: #fef08a; 
+                                    border-width: overlay_bg_color == #fef08a ? 2px : 1px; 
+                                    border-color: overlay_bg_color == #fef08a ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_bg_color = #fef08a; style_changed(); } } 
+                                }
+                                Rectangle { 
+                                    background: #dcfce7; 
+                                    border-width: overlay_bg_color == #dcfce7 ? 2px : 1px; 
+                                    border-color: overlay_bg_color == #dcfce7 ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_bg_color = #dcfce7; style_changed(); } } 
+                                }
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: 4px;
+                            HorizontalLayout {
+                                Text { text: "Text Color:"; font-size: 11px; color: dark_theme ? #cbd5e1 : #64748b; vertical-alignment: center; }
+                                Rectangle { } // Flexible spacer
+                            }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Rectangle { 
+                                    background: #1e293b; 
+                                    border-width: overlay_text_color == #1e293b ? 2px : 1px; 
+                                    border-color: overlay_text_color == #1e293b ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_text_color = #1e293b; style_changed(); } } 
+                                }
+                                Rectangle { 
+                                    background: #ffffff; 
+                                    border-width: overlay_text_color == #ffffff ? 2px : 1px; 
+                                    border-color: overlay_text_color == #ffffff ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_text_color = #ffffff; style_changed(); } } 
+                                }
+                                Rectangle { 
+                                    background: #ef4444; 
+                                    border-width: overlay_text_color == #ef4444 ? 2px : 1px; 
+                                    border-color: overlay_text_color == #ef4444 ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_text_color = #ef4444; style_changed(); } } 
+                                }
+                                Rectangle { 
+                                    background: #2563eb; 
+                                    border-width: overlay_text_color == #2563eb ? 2px : 1px; 
+                                    border-color: overlay_text_color == #2563eb ? #2563eb : #e2e8f0; 
+                                    width: 22px; height: 22px; border-radius: 4px; 
+                                    TouchArea { clicked => { overlay_text_color = #2563eb; style_changed(); } } 
+                                }
+                            }
+                        }
+                    }
+
+                    Text { text: "Background Opacity:"; font-size: 11px; color: dark_theme ? #cbd5e1 : #64748b; }
+                    Slider {
+                        minimum: 0.1;
+                        maximum: 1.0;
+                        value: overlay_bg_opacity;
+                        changed(val) => { overlay_bg_opacity = val; style_changed(); }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button {
+                        text: "SELECT AREA (" + select_area_shortcut_label + ")";
+                        clicked => { select_area_clicked(); }
+                    }
+                    Rectangle {
+                        background: dark_theme ? #2b2b31 : #f8fafc;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: dark_theme ? transparent : #e2e8f0;
+                        height: 32px;
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 4px;
+                            Text { text: "Overlay"; vertical-alignment: center; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b; }
+                            CheckBox {
+                                checked <=> overlay_visible;
+                                toggled => { overlay_toggle_clicked(self.checked); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+
+        VerticalLayout {
+            spacing: 6px; // Keep the Idle marker clear of the bottom edge
+            
+            Button {
+                text: is_running ? "STOP (" + start_shortcut_label + ")" : "START (" + start_shortcut_label + ")";
+                height: 42px;
+                primary: true;
+                clicked => { start_stop_clicked(); }
+            }
+
+            Text {
+                text: is_running ? "● Active" : "○ Idle";
+                color: is_running ? #4caf50 : #94a3b8;
+                horizontal-alignment: center;
+                font-size: 12px;
+            }
+        }
+
+        Rectangle { height: 10px; } // Extra spacer at the very bottom to lift it slightly more
+    }
+
+    if translation_options_open : Rectangle {
+        x: 0px; y: 0px; width: 100%; height: 100%;
+        background: #0f172a66;
+        TouchArea { width: 100%; height: 100%; }
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: parent.width - 28px; height: 330px;
+            background: dark_theme ? #37373f : #ffffff;
+            border-radius: 10px;
+            VerticalLayout {
+                padding: 14px; spacing: 8px;
+                Text { text: "Translation options"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; }
+                CheckBox { text: "Skip frames with empty Windows OCR"; checked <=> skip_empty_ocr; }
+                Text {
+                    text: "Clears subtitles without an API request. May miss outlined fonts. Off: use pixel comparison.";
+                    wrap: word-wrap; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b;
+                }
+                Text { text: "Glossary (one source=translation per line)"; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b; }
+                TextEdit { text <=> translation_glossary; height: 110px; font-size: 13px; }
+                Text { text: "Continuous translation also refers to the last 3 completed lines."; wrap: word-wrap; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b; }
+                Button {
+                    text: "Done";
+                    clicked => { translation_options_saved(); translation_options_open = false; }
+                }
+            }
+        }
+    }
+
+    // In-window dialog for naming a preset. Keeping it inside the window avoids resizing the
+    // fixed-height settings window while a preset name is entered.
+    if preset_dialog_open : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        background: #0f172a66;
+        TouchArea { x: 0px; y: 0px; width: 100%; height: 100%; }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 268px;
+            height: 106px;
+            background: dark_theme ? #37373f : #ffffff;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: dark_theme ? #4a4a55 : #e2e8f0;
+
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+
+                Text {
+                    text: "Preset name";
+                    font-size: 12px;
+                    color: dark_theme ? #cbd5e1 : #64748b;
+                }
+
+                LineEdit {
+                    text <=> preset_name;
+                    placeholder-text: "Preset name";
+                    accepted(value) => { preset_save_confirmed(value); }
+                }
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    Rectangle { } // Flexible spacer keeps the buttons on the right
+                    Button {
+                        text: "Cancel";
+                        width: 64px;
+                        height: 26px;
+                        primary: false;
+                        clicked => { preset_dialog_open = false; }
+                    }
+                    Button {
+                        text: "Save";
+                        width: 64px;
+                        height: 26px;
+                        primary: true;
+                        clicked => { preset_save_confirmed(preset_name); }
+                    }
+                }
+            }
+        }
+    }
+}

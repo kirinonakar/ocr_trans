@@ -1,0 +1,24 @@
+// Markdown result data shared by the Slint renderer and Rust markdown parser.
+
+export struct MarkdownCell {
+    content: styled-text,
+    heading: bool,
+}
+
+export struct MarkdownRow {
+    cells: [MarkdownCell],
+}
+
+export struct MarkdownBlock {
+    cells: [MarkdownCell],
+    rows: [MarkdownRow],
+    prefix: string,
+    font-scale: float,
+    indent: int,
+    heading: bool,
+    code: bool,
+    quote: bool,
+    table: bool,
+    columns: int,
+    rule: bool,
+}

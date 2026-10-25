@@ -1,0 +1,124 @@
+// Resizable capture frame and the recording-area border overlay.
+
+import { ToolbarButton } from "../components/toolbar-button.slint";
+
+export component CaptureFrameWindow inherits Window {
+    title: "Capture frame";
+    always-on-top: true;
+    no-frame: true;
+    // Winit handles hit-testing, directional cursors, and the live resize loop natively for
+    // undecorated windows when this border is set.
+    resize-border-width: 9px;
+    background: transparent;
+    default-font-family: "Yu Gothic UI";
+    preferred-width: 720px;
+    preferred-height: 450px;
+    min-width: 300px;
+    min-height: 190px;
+
+    in-out property <bool> dark_theme: false;
+
+    callback drag_requested();
+    callback capture_clicked();
+    callback record_clicked();
+    callback close_clicked();
+
+    // The opening starts at y=42px and 3px inside the remaining edges. Rust uses the same
+    // measurements when translating this window into the physical screen capture rectangle.
+    Rectangle {
+        x: 0px;
+        y: 39px;
+        width: 100%;
+        height: parent.height - 39px;
+        background: transparent;
+        border-width: 3px;
+        // Continue the title strip around the opening instead of using an accent-blue outline.
+        border-color: dark_theme ? #2b2b31f5 : #f8fafcf5;
+    }
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 42px;
+        background: dark_theme ? #2b2b31f5 : #f8fafcf5;
+        border-radius: 7px;
+        border-width: 1px;
+        border-color: dark_theme ? #52525b : #cbd5e1;
+        drop-shadow-color: dark_theme ? #00000080 : #00000035;
+        drop-shadow-blur: 10px;
+        drop-shadow-offset-y: 3px;
+
+        HorizontalLayout {
+            padding-left: 7px;
+            padding-right: 7px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+            spacing: 6px;
+
+            ToolbarButton {
+                icon: @image-url("../icons/drag.svg");
+                dark_theme: dark_theme;
+                width: 28px;
+                height: 34px;
+                tooltip: "Move frame";
+                press_on_down: true;
+                pressed => { drag_requested(); }
+            }
+
+            Text {
+                text: "FRAME";
+                color: dark_theme ? #cbd5e1 : #475569;
+                font-size: 11px;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            ToolbarButton {
+                icon: @image-url("../icons/capture.svg");
+                label: "Capture";
+                dark_theme: dark_theme;
+                width: 78px;
+                height: 34px;
+                pressed => { capture_clicked(); }
+            }
+
+            ToolbarButton {
+                icon: @image-url("../icons/record.svg");
+                label: "Record";
+                dark_theme: dark_theme;
+                width: 74px;
+                height: 34px;
+                pressed => { record_clicked(); }
+            }
+
+            ToolbarButton {
+                icon: @image-url("../icons/close.svg");
+                dark_theme: dark_theme;
+                width: 30px;
+                height: 34px;
+                icon_size: 15px;
+                pressed => { close_clicked(); }
+            }
+        }
+    }
+
+}
+
+export component RecordingBorderWindow inherits Window {
+    always-on-top: true;
+    no-frame: true;
+    background: transparent;
+    in-out property <color> border_color: #ef4444;
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        border-width: 2px;
+        border-color: border_color;
+    }
+}

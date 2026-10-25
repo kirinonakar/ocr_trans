@@ -91,10 +91,16 @@ You can download the latest version from the [Releases Page](https://github.com/
 
 ## Project Structure
 - `src/main.rs`: Orchestration, event loop, and UI logic.
-- `src/capture.rs`: Screen capture and change detection.
+- `src/capture.rs`: Shared capture types and entry points.
+- `src/capture/desktop.rs`, `window.rs`: Desktop/monitor capture and window shape handling.
+- `src/capture/output.rs`, `change_detection.rs`: File/clipboard export and frame comparison.
+- `src/capture/scrolling.rs`, `scrolling/alignment.rs`: Scroll capture/stitching and frame alignment.
+- `src/capture/recording.rs`, `recording/`: FFmpeg lifecycle, video delivery, and WASAPI audio.
 - `src/api.rs`: Multi-modal AI client (Gemini/OpenAI).
 - `src/win_utils.rs`: Windows-specific UI hacks (layered windows, click-through, Mica).
-- `ui/main.slint`: Modern UI definitions for Slint.
+- `ui/main.slint`: Public Slint window/type exports compiled by `build.rs`.
+- `ui/windows/`: OCR settings, capture toolbar/frame, results, translation overlay, selector, and shortcuts.
+- `ui/components/`, `ui/types/`: Shared toolbar button and markdown result data types.
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

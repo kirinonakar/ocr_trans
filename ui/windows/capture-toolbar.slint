@@ -1,0 +1,500 @@
+// Compact capture tools, language selection, recording controls, and status.
+
+import { ToolbarButton } from "../components/toolbar-button.slint";
+
+export component CaptureToolbarWindow inherits Window {
+    title: "Capture & record";
+    always-on-top: true;
+    no-frame: true;
+    background: transparent;
+    default-font-family: "Yu Gothic UI";
+    preferred-width: 703px;
+    preferred-height: recording ? 48px : ((status_text == "" && active_tooltip == "") ? 48px : 68px);
+    min-width: 703px;
+
+    in-out property <bool> record_mode: false;
+    in-out property <bool> frame_mode: false;
+    in-out property <bool> recording: false;
+    in-out property <bool> recording_paused: false;
+    in-out property <bool> textbox_visible: false;
+    in-out property <bool> dark_theme: false;
+    in-out property <string> recording_elapsed: "00:00";
+    in-out property <string> status_text: "";
+    in-out property <string> active_tooltip: "";
+    in-out property <string> color_picker_tooltip: "Color Picker";
+    in-out property <string> ruler_tooltip: "Ruler";
+    in property <[string]> ocr_language_options;
+    in property <[string]> ocr_language_tags;
+    in-out property <int> ocr_language_index: -1;
+    out property <string> ocr_language_tag: ocr_language_index >= 0 ? ocr_language_tags[ocr_language_index] : "";
+    callback ocr_language_menu_requested(float, float);
+
+    callback drag_requested();
+    callback theme_toggle_clicked();
+    callback ui_toggle_clicked();
+    callback capture_mode_clicked();
+    callback record_mode_clicked();
+    callback fullscreen_clicked();
+    callback window_clicked();
+    callback scroll_clicked();
+    callback frame_clicked();
+    callback region_clicked();
+    callback textbox_toggle_clicked();
+    callback ocr_clicked();
+    callback translate_clicked();
+    callback vlm_clicked();
+    callback color_picker_clicked();
+    callback ruler_clicked();
+    callback close_clicked();
+    callback pause_recording_clicked();
+    callback stop_recording_clicked();
+    callback tooltip_visibility_changed(string);
+
+    changed recording => {
+        active_tooltip = "";
+    }
+
+    VerticalLayout {
+        width: 100%;
+        height: 100%;
+        spacing: 0px;
+
+        Rectangle {
+            width: 100%;
+            height: 48px;
+            background: dark_theme ? #2b2b31f5 : #f1f5f9f5;
+            border-radius: 9px;
+            border-width: 0px;
+            border-color: transparent;
+            // Keep the area outside the rounded toolbar fully transparent.
+
+        if (!recording) : HorizontalLayout {
+            x: 0px;
+            y: 0px;
+            width: 100%;
+            height: 48px;
+            padding-left: 7px;
+            padding-right: 7px;
+            padding-top: 7px;
+            padding-bottom: 7px;
+            spacing: 5px;
+
+            ToolbarButton {
+                icon: @image-url("../icons/drag.svg");
+                dark_theme: dark_theme;
+                width: 24px;
+                height: 34px;
+                tooltip: "Move toolbar";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
+                press_on_down: true;
+                pressed => { drag_requested(); }
+            }
+
+            ToolbarButton {
+                icon: @image-url("../icons/theme.svg");
+                dark_theme: dark_theme;
+                active: dark_theme;
+                width: 30px;
+                height: 34px;
+                icon_size: 16px;
+                tooltip: "Toggle dark mode";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
+                pressed => { theme_toggle_clicked(); }
+            }
+
+            // This is the requested UI toggle immediately to the right of the theme button.
+            ToolbarButton {
+                icon: @image-url("../icons/ui.svg");
+                dark_theme: dark_theme;
+                width: 64px;
+                height: 34px;
+                icon_size: 14px;
+                label: "OCR";
+                tooltip: "Return to OCR settings";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
+                pressed => { ui_toggle_clicked(); }
+            }
+
+            Rectangle {
+                width: 68px;
+                height: 34px;
+                background: dark_theme ? #37373fff : #ffffffaa;
+                border-radius: 7px;
+                border-width: 0px;
+                border-color: transparent;
+                HorizontalLayout {
+                    width: 100%;
+                    height: 100%;
+                    padding: 2px;
+                    spacing: 3px;
+                    ToolbarButton {
+                        icon: @image-url("../icons/capture.svg");
+                        dark_theme: dark_theme;
+                        active: !record_mode;
+                        tooltip: "Capture mode";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { capture_mode_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("../icons/record.svg");
+                        dark_theme: dark_theme;
+                        active: record_mode;
+                        tooltip: "Record mode";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { record_mode_clicked(); }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 167px;
+                height: 34px;
+                background: dark_theme ? #37373fff : #ffffffaa;
+                border-radius: 7px;
+                border-width: 0px;
+                border-color: transparent;
+                HorizontalLayout {
+                    width: 100%;
+                    height: 100%;
+                    padding: 2px;
+                    spacing: 3px;
+                    ToolbarButton {
+                        icon: @image-url("../icons/fullscreen.svg");
+                        dark_theme: dark_theme;
+                        tooltip: "Capture full screen";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { fullscreen_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("../icons/window.svg");
+                        dark_theme: dark_theme;
+                        tooltip: "Capture window";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { window_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("../icons/scroll.svg");
+                        dark_theme: dark_theme;
+                        available: !record_mode;
+                        tooltip: "Scrolling capture";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { scroll_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("../icons/frame.svg");
+                        dark_theme: dark_theme;
+                        active: frame_mode;
+                        tooltip: frame_mode ? "Close capture frame" : "Open capture frame";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { frame_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("../icons/region.svg");
+                        dark_theme: dark_theme;
+                        tooltip: "Capture region";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { region_clicked(); }
+                    }
+                }
+            }
+
+            ToolbarButton {
+                icon: @image-url("../icons/textbox.svg");
+                dark_theme: dark_theme;
+                active: textbox_visible;
+                width: 30px;
+                height: 34px;
+                icon_size: 17px;
+                tooltip: textbox_visible ? "Hide result text box" : "Show result text box";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
+                pressed => { textbox_toggle_clicked(); }
+            }
+
+            Rectangle {
+                width: 104px;
+                height: 34px;
+                background: dark_theme ? #37373fff : #ffffffaa;
+                border-radius: 7px;
+                border-width: 0px;
+                border-color: transparent;
+                HorizontalLayout {
+                    width: 100%;
+                    height: 100%;
+                    padding: 2px;
+                    spacing: 3px;
+                    ToolbarButton {
+                        icon: @image-url("../icons/ocr.svg");
+                        dark_theme: dark_theme;
+                        width: 30px;
+                        tooltip: "OCR selected area";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { ocr_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("../icons/translate.svg");
+                        dark_theme: dark_theme;
+                        width: 34px;
+                        tooltip: "OCR and translate";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { translate_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("../icons/vlm.svg");
+                        dark_theme: dark_theme;
+                        width: 30px;
+                        tooltip: "VLM";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { vlm_clicked(); }
+                    }
+                }
+            }
+
+            // Winit draws Slint popups inside the parent window. A native menu can extend
+            // beyond this 48px toolbar and is positioned within the monitor work area.
+            // The drop-down arrow is an SVG overlay: the "▾" text glyph is missing
+            // from some default fonts (for example Yu Gothic UI) and renders as a
+            // broken box.
+            // A std-widgets Button followed the OS color scheme, so its gray background
+            // clashed with dark_theme. The picker now draws the toolbar palette directly.
+            language-button := Rectangle {
+                width: 60px;
+                height: 34px;
+                horizontal-stretch: 0;
+                opacity: ocr_language_index >= 0 ? 1.0 : 0.38;
+                background: dark_theme
+                    ? (language-touch.has-hover ? #4a4a55 : #3a3a43)
+                    : (language-touch.has-hover ? #e2e8f0 : #ffffffcc);
+                border-radius: 7px;
+                border-width: 0px;
+                border-color: transparent;
+                Text {
+                    x: 6px;
+                    width: parent.width - 23px;
+                    height: parent.height;
+                    text: ocr_language_index >= 0 ? ocr_language_options[ocr_language_index] : "OCR —";
+                    color: dark_theme ? #f8fafc : #1e293b;
+                    font-size: 11px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                if (ocr_language_index >= 0) : Image {
+                    source: @image-url("../icons/chevron-down.svg");
+                    width: 9px;
+                    height: 9px;
+                    x: parent.width - 6px - self.width;
+                    y: (parent.height - self.height) / 2;
+                    colorize: dark_theme ? #e2e8f0 : #334155;
+                }
+                language-touch := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    enabled: ocr_language_index >= 0;
+                    changed has-hover => {
+                        active_tooltip = self.has-hover ? "Select OCR language" : "";
+                        tooltip_visibility_changed(self.has-hover ? "Select OCR language" : "");
+                    }
+                    clicked => {
+                        // The cursor is on the button while it is clicked. Anchoring the native
+                        // menu from these in-button offsets keeps it right below the button even
+                        // when the window origin or monitor DPI scaling changes.
+                        ocr_language_menu_requested(self.mouse-x / 1px, (language-button.height - self.mouse-y) / 1px);
+                    }
+                }
+            }
+
+            // Keep the utility tools together, with a little extra separation from OCR/VLM.
+            Rectangle {
+                width: 67px;
+                height: 34px;
+                background: dark_theme ? #37373fff : #ffffffaa;
+                border-radius: 7px;
+                border-width: 0px;
+                border-color: transparent;
+                HorizontalLayout {
+                    width: 100%;
+                    height: 100%;
+                    padding: 2px;
+                    spacing: 3px;
+                    ToolbarButton {
+                        icon: @image-url("../icons/color.svg");
+                        dark_theme: dark_theme;
+                        tooltip: color_picker_tooltip;
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { color_picker_clicked(); }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("../icons/ruler.svg");
+                        dark_theme: dark_theme;
+                        tooltip: ruler_tooltip;
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { ruler_clicked(); }
+                    }
+                }
+            }
+
+            ToolbarButton {
+                icon: @image-url("../icons/close.svg");
+                dark_theme: dark_theme;
+                height: 34px;
+                icon_size: 16px;
+                tooltip: "Exit application";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
+                pressed => { close_clicked(); }
+            }
+        }
+
+        if (recording) : HorizontalLayout {
+            x: 0px;
+            y: 0px;
+            width: 100%;
+            height: 48px;
+            padding-left: 9px;
+            padding-right: 9px;
+            padding-top: 7px;
+            padding-bottom: 7px;
+            spacing: 8px;
+            ToolbarButton {
+                icon: @image-url("../icons/drag.svg");
+                dark_theme: dark_theme;
+                width: 24px;
+                tooltip: "Move toolbar";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
+                press_on_down: true;
+                pressed => { drag_requested(); }
+            }
+            Rectangle {
+                width: 12px;
+                height: 34px;
+                background: transparent;
+                Rectangle {
+                    x: 0px;
+                    y: (parent.height - self.height) / 2;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 6px;
+                    background: #c42b1c;
+                }
+            }
+            Text {
+                text: recording_elapsed;
+                font-family: "Consolas";
+                font-size: 16px;
+                font-weight: 650;
+                color: dark_theme ? #f8fafc : #111827;
+                vertical-alignment: center;
+            }
+            ToolbarButton {
+                icon: recording_paused ? @image-url("../icons/play.svg") : @image-url("../icons/pause.svg");
+                dark_theme: dark_theme;
+                width: 34px;
+                tooltip: recording_paused ? "Resume recording" : "Pause recording";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
+                pressed => { pause_recording_clicked(); }
+            }
+            ToolbarButton {
+                icon: @image-url("../icons/stop.svg");
+                dark_theme: dark_theme;
+                active: true;
+                width: 38px;
+                tooltip: "Stop recording";
+                hovered_tooltip_changed(value) => {
+                    active_tooltip = value;
+                    tooltip_visibility_changed(value);
+                }
+                pressed => { stop_recording_clicked(); }
+            }
+            }
+        }
+
+        if (!recording && active_tooltip != "") : Rectangle {
+            width: 100%;
+            height: 20px;
+            background: dark_theme ? #2b2b31f5 : #ffffffee;
+            border-width: 0px;
+            border-color: transparent;
+            drop-shadow-color: dark_theme ? #00000080 : #00000030;
+            drop-shadow-blur: 8px;
+            drop-shadow-offset-y: 2px;
+            Text {
+                width: 100%;
+                height: 100%;
+                text: active_tooltip;
+                color: dark_theme ? #e2e8f0 : #334155;
+                font-size: 11px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        if (!recording && active_tooltip == "" && status_text != "") : Text {
+            width: 100%;
+            height: 20px;
+            text: status_text;
+            color: dark_theme ? #cbd5e1 : #475569;
+            font-size: 11px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}

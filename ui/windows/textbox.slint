@@ -1,0 +1,148 @@
+// Scrollable markdown result window.
+
+import { ScrollView, Palette } from "std-widgets.slint";
+import { MarkdownBlock } from "../types/markdown.slint";
+
+export component TextboxWindow inherits Window {
+    title: "Result";
+    icon: @image-url("../../app.ico");
+    always-on-top: true;
+    preferred-width: 600px;
+    preferred-height: 200px;
+    min-width: 320px;
+    min-height: 100px;
+    background: dark_theme ? #2b2b31 : #f8fafc;
+    default-font-family: "Yu Gothic UI";
+    
+    in-out property <string> text: "";
+    in-out property <color> text_color: #1e293b;
+    in-out property <length> font_size: 15px;
+    in-out property <bool> dark_theme: false;
+    pure callback render-markdown(string) -> [MarkdownBlock];
+    callback copy-original();
+    private property <[MarkdownBlock]> blocks: render-markdown(text);
+    private property <color> foreground: dark_theme
+        ? (text_color == #1e293b || text_color == #000000 ? #f8fafc : text_color)
+        : (text_color == #ffffff ? #1e293b : text_color);
+    forward-focus: copy-keys;
+
+    // ScrollView and its hover states use the standard widget palette. Keep that palette in
+    // sync even while the main settings window is hidden in capture mode.
+    init => {
+        Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light;
+    }
+    changed dark_theme => {
+        Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    copy-keys := FocusScope {
+        key-pressed(event) => {
+            if (event.modifiers.control && (event.text == "c" || event.text == "C")) {
+                root.copy-original();
+                return accept;
+            }
+            return reject;
+        }
+        VerticalLayout {
+            padding: 12px;
+            spacing: 6px;
+            Rectangle {
+                background: dark_theme ? #37373f : #ffffff;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: dark_theme ? #52525b : #e2e8f0;
+                ScrollView {
+                    // The Flickable only derives its viewport from the content's minimum
+                    // height, and the block rows clamp that to 0px, so bind the viewport
+                    // to the height the content actually needs; otherwise long results
+                    // can't scroll and get clipped.
+                    viewport-height: max(self.visible-height, content-layout.preferred-height);
+                    content-layout := VerticalLayout {
+                        width: parent.width;
+                        padding: 8px;
+                        spacing: 6px;
+                        alignment: start;
+                        for block in root.blocks: Rectangle {
+                            vertical-stretch: 0;
+                            min-height: block.rule ? 1px : 0px;
+                            background: block.rule ? (root.dark_theme ? #52525b : #cbd5e1)
+                                : block.code ? (root.dark_theme ? #292930 : #f1f5f9)
+                                : transparent;
+                            border-radius: block.code ? 4px : 0px;
+                            // The block keeps a single always-present layout child so its
+                            // implicit size stays derived from the content; the table and
+                            // text variants only pick what is instantiated inside.
+                            VerticalLayout {
+                                // A table renders as one grid so the columns are shared
+                                // across rows; the 1px spacing lets the frame color show
+                                // through as the table lines, and the start alignment keeps
+                                // the grid at its content width instead of stretching it
+                                // across the full row.
+                                if block.table : HorizontalLayout {
+                                    alignment: start;
+                                    padding-left: block.indent * 18px;
+                                    Rectangle {
+                                        background: root.dark_theme ? #52525b : #cbd5e1;
+                                        border-radius: 6px;
+                                        clip: true;
+                                        GridLayout {
+                                            padding: 1px;
+                                            spacing-horizontal: 1px;
+                                            spacing-vertical: 1px;
+                                            for table_row in block.rows: Row {
+                                                for cell in table_row.cells: Rectangle {
+                                                    background: cell.heading
+                                                        ? (root.dark_theme ? #41414b : #f1f5f9)
+                                                        : (root.dark_theme ? #37373f : #ffffff);
+                                                    HorizontalLayout {
+                                                        padding-left: 10px;
+                                                        padding-right: 10px;
+                                                        padding-top: 5px;
+                                                        padding-bottom: 5px;
+                                                        StyledText {
+                                                            horizontal-stretch: 1;
+                                                            text: cell.content;
+                                                            default-font-size: root.font_size * block.font-scale;
+                                                            default-font-family: "Yu Gothic UI";
+                                                            default-color: root.foreground;
+                                                            vertical-alignment: top;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if !block.table : HorizontalLayout {
+                                    padding: block.code ? 8px : 0px;
+                                    padding-left: block.indent * 18px + (block.code ? 8px : 0px);
+                                    spacing: 8px;
+                                    if block.quote: Rectangle {
+                                        width: 3px;
+                                        background: root.dark_theme ? #94a3b8 : #64748b;
+                                    }
+                                    if block.prefix != "": Text {
+                                        text: block.prefix;
+                                        color: root.foreground;
+                                        font-size: root.font_size;
+                                        vertical-alignment: top;
+                                    }
+                                    for cell in block.cells: StyledText {
+                                        horizontal-stretch: 1;
+                                        min-width: 0px;
+                                        preferred-width: 0px;
+                                        text: block.heading ? @markdown("**\{cell.content}**") : cell.content;
+                                        default-font-size: root.font_size * block.font-scale;
+                                        default-font-family: block.code ? "Consolas" : "Yu Gothic UI";
+                                        default-color: root.foreground;
+                                        vertical-alignment: top;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

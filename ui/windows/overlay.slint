@@ -1,0 +1,76 @@
+// Floating translated-text overlay and its close control.
+
+export component OverlayWindow inherits Window {
+    always-on-top: true;
+    background: transparent;
+    no-frame: true;
+    icon: @image-url("../../app.ico");
+    default-font-family: "Yu Gothic UI";
+    
+    in-out property <length> window_x;
+    in-out property <length> window_y;
+    in-out property <length> window_w;
+    in-out property <length> window_h;
+
+    x: window_x;
+    y: window_y;
+    width: window_w;
+    height: window_h;
+
+    in-out property <string> translated_text: "";
+    in-out property <bool> is_searching: false;
+    in-out property <bool> show_text: false;
+    in-out property <length> font_size: 16px;
+    in-out property <color> bg_color: #ffffff;
+    in-out property <color> text_color: #1e293b;
+    in-out property <float> bg_opacity: 0.9;
+    in-out property <bool> hide_text: false;
+    in property <bool> is_textbox_mode: false;
+    callback close_clicked();
+
+    Rectangle {
+        visible: show_text && translated_text != "";
+        background: bg_color.with-alpha(bg_opacity);
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: bg_color.darker(0.2);
+        
+        // Close Button (X)
+        Rectangle {
+            visible: !is_textbox_mode;
+            x: parent.width - 28px;
+            y: 4px;
+            width: 24px;
+            height: 24px;
+            border-radius: 12px;
+            background: close_touch.has-hover ? #0000001a : #00000000;
+            
+            Text {
+                text: "×";
+                font-size: 20px;
+                color: close_touch.has-hover ? #ef4444 : #64748b;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            
+            close_touch := TouchArea {
+                clicked => { close_clicked(); }
+            }
+        }
+        
+        VerticalLayout {
+            visible: !hide_text;
+            padding: 16px;
+            padding-top: 24px; // Spacing for the close button
+            Text {
+                text: translated_text;
+                color: text_color;
+                font-size: font_size;
+                wrap: word-wrap;
+                horizontal-alignment: left;
+                vertical-alignment: center; // Auto font-size handles fitting, center looks better
+                font-weight: 500;
+            }
+        }
+    }
+}
