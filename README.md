@@ -1,5 +1,10 @@
 # Rust OCR Translator powered by VLM
 
+[![Slint](https://img.shields.io/badge/Slint-1.17-2379F4?logo=slint&logoColor=white)](https://slint.dev)
+[![Rust](https://img.shields.io/badge/Rust-1.80+-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+<a href="https://slint.dev"><img src="https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-light-whitebg.svg" alt="Made with Slint" height="28"></a>
+
 A real-time screen OCR, translation and capture tool built with Rust and Slint powered by VLM (Vision-Language Model).
 
 <img src="screenshot1.png" alt="screenshot1" width="49%"> <img src="screenshot3.png" alt="screenshot3" width="49%">
@@ -104,3 +109,17 @@ You can download the latest version from the [Releases Page](https://github.com/
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+### Slint license notice
+
+This application uses **Slint** (version 1.17) as its UI toolkit. Slint is copyright © SixtyFPS GmbH and is **not** covered by this project's MIT license. It is available separately under:
+
+- **GPLv3** — for open source applications, provided the complete work is made available under the GPLv3.
+- **Slint Royalty-free Desktop, Mobile, and Web Applications License** — for proprietary desktop, mobile, and web applications, with attribution to Slint.
+- **Commercial licenses** — see [slint.dev/pricing](https://slint.dev/pricing).
+
+This repository relies on the Slint Royalty-free license and satisfies its attribution requirement by displaying the [Slint attribution badge](https://github.com/slint-ui/slint/tree/master/logo) in this README, linked to <https://slint.dev>. If you publish builds of this application, keep that badge on the download page (or show the `AboutSlint` widget in an About dialog) to stay compliant.
+
+The MIT license above applies only to this project's own source code. Slint and its bundled third-party components remain under their respective licenses; see the [Slint license files](https://github.com/slint-ui/slint/tree/master/LICENSES) for details.
+
+<a href="https://slint.dev"><img src="https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-light-whitebg.svg" alt="Made with Slint" height="32"></a>
