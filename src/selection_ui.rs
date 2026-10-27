@@ -13,6 +13,110 @@ use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+    use slint::platform::{Key, WindowEvent};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn arrow_adjusted_endpoint_is_used_on_mouse_release_without_a_move_event() {
+        struct Headless;
+        impl slint::platform::Platform for Headless {
+            fn create_window_adapter(
+                &self,
+            ) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+                Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+            }
+        }
+        slint::platform::set_platform(Box::new(Headless)).unwrap();
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let selection = SelectionWindow::new().unwrap();
+            selection
+                .window()
+                .set_size(slint::PhysicalSize::new(400, 300));
+            selection.show().unwrap();
+            selection
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            let state = Rc::new(AppState {
+                selection_scale: scale,
+                selection_screenshot: Some(Arc::new(image::RgbaImage::new(400, 300))),
+                ..Default::default()
+            });
+            let weak = selection.as_weak();
+            selection.on_selection_hovered(move |_, _| {
+                weak.upgrade().unwrap().set_magnifier_visible(true);
+            });
+            // Replace only the OS cursor warp; exercise real Slint pointer/key handling.
+            let weak = selection.as_weak();
+            selection.on_selection_nudged(move |x, y, dx, dy| {
+                let (px, py) = nudged_selection_position(&state, x, y, dx, dy).unwrap();
+                weak.upgrade()
+                    .unwrap()
+                    .invoke_move_selection_cursor(px as f32 / scale, py as f32 / scale);
+            });
+            let result = Rc::new(Cell::new(None));
+            let selected = result.clone();
+            selection.on_area_selected(move |x, y, w, h| selected.set(Some((x, y, w, h))));
+            for (start, end, expected) in [
+                ((30.0, 40.0), (90.0, 100.0), (30.0, 40.0, 61.0, 59.0)),
+                ((90.0, 100.0), (30.0, 40.0), (31.0, 39.0, 59.0, 61.0)),
+            ] {
+                selection.invoke_reset();
+                result.set(None);
+                selection
+                    .window()
+                    .dispatch_event(WindowEvent::PointerPressed {
+                        position: slint::LogicalPosition::new(start.0 / scale, start.1 / scale),
+                        button: slint::platform::PointerEventButton::Left,
+                    });
+                let endpoint = slint::LogicalPosition::new(end.0 / scale, end.1 / scale);
+                selection
+                    .window()
+                    .dispatch_event(WindowEvent::PointerMoved { position: endpoint });
+                for key in [
+                    Key::LeftArrow,
+                    Key::DownArrow,
+                    Key::RightArrow,
+                    Key::UpArrow,
+                    Key::RightArrow,
+                    Key::UpArrow,
+                ] {
+                    selection
+                        .window()
+                        .dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+                    selection
+                        .window()
+                        .dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+                }
+                selection
+                    .window()
+                    .dispatch_event(WindowEvent::PointerReleased {
+                        position: endpoint,
+                        button: slint::platform::PointerEventButton::Left,
+                    });
+                let (x, y, w, h) = result.get().expect("mouse release must finish selection");
+                assert_eq!(
+                    (
+                        (x * scale).round(),
+                        (y * scale).round(),
+                        (w * scale).round(),
+                        (h * scale).round()
+                    ),
+                    expected,
+                    "adjusted region at scale {scale}"
+                );
+            }
+            selection.hide().unwrap();
+        }
+    }
+}
+
 pub(crate) fn register_callbacks(
     main_window: &MainWindow,
     overlay_window: &OverlayWindow,
@@ -122,6 +226,31 @@ pub(crate) fn register_callbacks(
             } else {
                 selection.set_magnifier_visible(false);
             }
+        }
+    });
+
+    let selection_weak_nudge = selection_window.as_weak();
+    let state_nudge = state.clone();
+    selection_window.on_selection_nudged(move |x, y, dx, dy| {
+        let Some(selection) = selection_weak_nudge.upgrade() else {
+            return;
+        };
+        let position = {
+            let state = state_nudge.lock().unwrap();
+            nudged_selection_position(&state, x, y, dx, dy)
+        };
+        let Some((pixel_x, pixel_y)) = position else {
+            return;
+        };
+        let moved = selection.window().with_winit_window(|window| {
+            window.set_cursor_position(i_slint_backend_winit::winit::dpi::PhysicalPosition::new(
+                pixel_x, pixel_y,
+            ))
+        });
+        if let Some(Ok(())) = moved {
+            // Update the endpoint immediately: pointer-up can arrive before the synthetic move.
+            let scale = selection.window().scale_factor().max(1.0);
+            selection.invoke_move_selection_cursor(pixel_x as f32 / scale, pixel_y as f32 / scale);
         }
     });
 

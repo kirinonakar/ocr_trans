@@ -16,7 +16,7 @@ Capture toolbar (dark theme)
 ## Features
 - **Modern UI**: Dark mode, glassmorphism, and Windows 11 Mica backdrop for the main control window.
 - **Toggleable Overlay**: Dedicated toggle and logic to hide/show the translation box without stopping the OCR process.
-- **Interactive Region Selection**: Drag your mouse to select exactly what you want to translate. Supports **Escape** to cancel.
+- **Interactive Region Selection**: Drag your mouse to select exactly what you want to translate. While the magnifier is visible, use the **arrow keys** to move the cursor by one physical screen pixel, including while dragging. Release the mouse button to capture the adjusted region. Supports **Escape** to cancel.
 - **Auto-Automation**: Selecting a region automatically starts the capture process for immediate results.
 - **Change Detection**: Continuous mode compares Windows OCR text and waits for two identical consecutive samples before calling the VLM. Animated backgrounds do not trigger requests when the recognized text stays the same. Empty/unavailable OCR falls back to stable pixel comparison. Interval 0 performs an immediate one-shot request.
 - **Responsive cancellation and retry**: Stop or changing regions cancels pending requests. Transient failures retry with backoff or `Retry-After`; HTTP 4xx errors except 429 stop translation and show a short error.

@@ -69,6 +69,25 @@ pub(crate) fn selection_magnifier_at(state: &AppState, x: f32, y: f32) -> Option
     selection_magnifier_pixels(state, x, y).map(rgba_to_slint_image)
 }
 
+/// Return a screenshot-local physical pixel, independent of desktop origin and DPI scaling.
+pub(crate) fn nudged_selection_position(
+    state: &AppState,
+    x: f32,
+    y: f32,
+    dx: i32,
+    dy: i32,
+) -> Option<(i32, i32)> {
+    let screenshot = state.selection_screenshot.as_ref()?;
+    if screenshot.width() == 0 || screenshot.height() == 0 {
+        return None;
+    }
+    let scale = state.selection_scale.max(1.0);
+    Some((
+        ((x * scale).round() as i32 + dx).clamp(0, screenshot.width() as i32 - 1),
+        ((y * scale).round() as i32 + dy).clamp(0, screenshot.height() as i32 - 1),
+    ))
+}
+
 pub(crate) fn sync_capture_state(state: &mut AppState, main: &MainWindow) {
     state.api_endpoint = main.get_api_endpoint().to_string();
     state.api_key = main.get_api_key().to_string();
@@ -1257,10 +1276,66 @@ pub(crate) async fn run_toolbar_action(
 
 #[cfg(test)]
 mod tests {
-    use super::{capture_frame_rect_from_geometry, selection_magnifier_pixels};
+    use super::{
+        capture_frame_rect_from_geometry, nudged_selection_position, physical_selection_rect,
+        selection_magnifier_pixels,
+    };
     use crate::state::AppState;
     use image::{Rgba, RgbaImage};
     use std::sync::Arc;
+
+    #[test]
+    fn arrow_nudges_move_capture_endpoint_one_physical_pixel_at_each_scale() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let state = AppState {
+                selection_scale: scale,
+                selection_origin_x: -1920,
+                selection_origin_y: -200,
+                selection_screenshot: Some(Arc::new(RgbaImage::new(200, 200))),
+                ..Default::default()
+            };
+            let mut x = 90.0 / scale;
+            let mut y = 90.0 / scale;
+            // Include repeated presses and both axes, without accumulated logical-pixel drift.
+            for _ in 0..10 {
+                let (px, py) = nudged_selection_position(&state, x, y, 1, -1).unwrap();
+                x = px as f32 / scale;
+                y = py as f32 / scale;
+            }
+            let rect = physical_selection_rect(
+                &state,
+                30.0 / scale,
+                30.0 / scale,
+                x - 30.0 / scale,
+                y - 30.0 / scale,
+            );
+            assert_eq!(rect.x, -1890);
+            assert_eq!(rect.y, -170);
+            assert_eq!(rect.width, 70);
+            assert_eq!(rect.height, 50);
+        }
+    }
+
+    #[test]
+    fn arrow_nudges_stop_at_screenshot_edges() {
+        let state = AppState {
+            selection_scale: 1.5,
+            selection_screenshot: Some(Arc::new(RgbaImage::new(11, 9))),
+            ..Default::default()
+        };
+        assert_eq!(
+            nudged_selection_position(&state, 0.0, 0.0, -1, -1),
+            Some((0, 0))
+        );
+        assert_eq!(
+            nudged_selection_position(&state, 10.0 / 1.5, 8.0 / 1.5, 1, 1),
+            Some((10, 8))
+        );
+        assert_eq!(
+            nudged_selection_position(&AppState::default(), 0.0, 0.0, 1, 0),
+            None
+        );
+    }
 
     #[test]
     fn magnifier_contains_nine_by_nine_pixels_centered_on_cursor() {

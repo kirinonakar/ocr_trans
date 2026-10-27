@@ -52,8 +52,19 @@ export component SelectionWindow inherits Window {
     callback color_hovered(length, length);
     callback color_picked(length, length);
     callback selection_hovered(length, length);
+    callback selection_nudged(length, length, int, int);
     callback area_updated(length, length, length, length);
     callback closed();
+
+    public function move_selection_cursor(x: length, y: length) {
+        selection_cursor_x = x;
+        selection_cursor_y = y;
+        if (selecting) {
+            current_x = x;
+            current_y = y;
+        }
+        selection_hovered(x, y);
+    }
 
     public function reset() {
         start_x = 0px;
@@ -135,21 +146,19 @@ export component SelectionWindow inherits Window {
                     color_cursor_y = i_touch.mouse-y;
                     color_hovered(color_cursor_x, color_cursor_y);
                 } else {
-                    selection_cursor_x = i_touch.mouse-x;
-                    selection_cursor_y = i_touch.mouse-y;
-                    if (!ruler_mode) {
-                        selection_hovered(selection_cursor_x, selection_cursor_y);
-                    }
-                    if (selecting) {
-                        current_x = selection_cursor_x;
-                        current_y = selection_cursor_y;
-                        if (ruler_mode) {
+                    if (ruler_mode) {
+                        if (selecting) {
+                            current_x = i_touch.mouse-x;
+                            current_y = i_touch.mouse-y;
                             area_updated(sel_x, sel_y, sel_w, sel_h);
                         }
+                    } else {
+                        move_selection_cursor(i_touch.mouse-x, i_touch.mouse-y);
                     }
                 }
             } else if (event.button == PointerEventButton.left) {
                 if (event.kind == PointerEventKind.down) {
+                    key-handler.focus();
                     selecting = true;
                     start_x = i_touch.mouse-x;
                     start_y = i_touch.mouse-y;
@@ -345,6 +354,24 @@ export component SelectionWindow inherits Window {
                 closed();
                 return accept;
             }
+            if (!window_mode && !color_picker_mode && !ruler_mode && magnifier_visible) {
+                if (event.text == Key.LeftArrow) {
+                    selection_nudged(selection_cursor_x, selection_cursor_y, -1, 0);
+                    return accept;
+                }
+                if (event.text == Key.RightArrow) {
+                    selection_nudged(selection_cursor_x, selection_cursor_y, 1, 0);
+                    return accept;
+                }
+                if (event.text == Key.UpArrow) {
+                    selection_nudged(selection_cursor_x, selection_cursor_y, 0, -1);
+                    return accept;
+                }
+                if (event.text == Key.DownArrow) {
+                    selection_nudged(selection_cursor_x, selection_cursor_y, 0, 1);
+                    return accept;
+                }
+            }
             return reject;
         }
     }
@@ -361,11 +388,11 @@ export component SelectionWindow inherits Window {
         visible: !color_picker_mode;
     }
     
-    VerticalLayout {
+    if (color_picker_mode || window_mode || ruler_mode) : VerticalLayout {
         alignment: start;
         padding: 40px;
         Text {
-            text: color_picker_mode ? "Click a pixel to copy its color" : (window_mode ? "Click a window to select it" : (ruler_mode ? "Drag to measure an area" : "Drag your mouse to select capture area"));
+            text: color_picker_mode ? "Click a pixel to copy its color" : (window_mode ? "Click a window to select it" : "Drag to measure an area");
             color: white;
             font-size: 24px;
             font-weight: 700;
