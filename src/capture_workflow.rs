@@ -197,7 +197,7 @@ pub(crate) fn sync_capture_toolbar_size(toolbar: &CaptureToolbarWindow) {
         .set_size(slint::LogicalSize::new(CAPTURE_TOOLBAR_WIDTH, height));
 }
 
-pub(crate) const CAPTURE_TOOLBAR_WIDTH: f32 = 703.0;
+pub(crate) const CAPTURE_TOOLBAR_WIDTH: f32 = 736.0;
 pub(crate) const CAPTURE_FRAME_HEADER: f32 = 42.0;
 pub(crate) const CAPTURE_FRAME_BORDER: f32 = 3.0;
 pub(crate) const OCR_WINDOW_WIDTH: f32 = 400.0;
@@ -1256,7 +1256,8 @@ pub(crate) async fn run_toolbar_action(
             }
             SelectionPurpose::ContinuousOcr
             | SelectionPurpose::ColorPicker
-            | SelectionPurpose::Ruler => {
+            | SelectionPurpose::Ruler
+            | SelectionPurpose::MagnifyWindow => {
                 anyhow::bail!("This action requires a different selection flow")
             }
         }

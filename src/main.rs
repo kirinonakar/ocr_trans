@@ -9,6 +9,7 @@ mod capture_workflow;
 mod credentials;
 mod image_processing;
 mod markdown;
+mod magnifier;
 mod ocr;
 mod ocr_ui;
 mod provider_ui;

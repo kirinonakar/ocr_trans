@@ -48,6 +48,7 @@ pub(crate) enum SelectionPurpose {
     Vlm,
     ColorPicker,
     Ruler,
+    MagnifyWindow,
 }
 
 /// A single revision wakes interval waits and cancels the previous async request.

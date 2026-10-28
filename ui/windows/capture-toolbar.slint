@@ -8,9 +8,9 @@ export component CaptureToolbarWindow inherits Window {
     no-frame: true;
     background: transparent;
     default-font-family: "Yu Gothic UI";
-    preferred-width: 703px;
+    preferred-width: 736px;
     preferred-height: recording ? 48px : ((status_text == "" && active_tooltip == "") ? 48px : 68px);
-    min-width: 703px;
+    min-width: 736px;
 
     in-out property <bool> record_mode: false;
     in-out property <bool> frame_mode: false;
@@ -45,6 +45,7 @@ export component CaptureToolbarWindow inherits Window {
     callback vlm_clicked();
     callback color_picker_clicked();
     callback ruler_clicked();
+    callback magnify_window_clicked();
     callback close_clicked();
     callback pause_recording_clicked();
     callback stop_recording_clicked();
@@ -348,7 +349,7 @@ export component CaptureToolbarWindow inherits Window {
 
             // Keep the utility tools together, with a little extra separation from OCR/VLM.
             Rectangle {
-                width: 67px;
+                width: 100px;
                 height: 34px;
                 background: dark_theme ? #37373fff : #ffffffaa;
                 border-radius: 7px;
@@ -379,6 +380,16 @@ export component CaptureToolbarWindow inherits Window {
                         }
                         pressed => { ruler_clicked(); }
                     }
+                    ToolbarButton {
+                        icon: @image-url("../icons/magnify-window.svg");
+                        dark_theme: dark_theme;
+                        tooltip: "Magnify window";
+                        hovered_tooltip_changed(value) => {
+                            active_tooltip = value;
+                            tooltip_visibility_changed(value);
+                        }
+                        pressed => { magnify_window_clicked(); }
+                    }
                 }
             }
 
@@ -394,6 +405,7 @@ export component CaptureToolbarWindow inherits Window {
                 }
                 pressed => { close_clicked(); }
             }
+
         }
 
         if (recording) : HorizontalLayout {

@@ -123,6 +123,11 @@ pub(crate) async fn run() -> Result<()> {
     );
 
     let recorder_slot: Arc<Mutex<Option<capture::ScreenRecorder>>> = Arc::new(Mutex::new(None));
+    let magnifier = crate::magnifier::WindowMagnifier::new(&capture_toolbar, state.clone())?;
+    magnifier.register_recording(
+        &main_window, &recording_border_window, &textbox_window,
+        recorder_slot.clone(), http_client.clone(),
+    );
 
     crate::toolbar_ui::register_callbacks(
         &capture_toolbar,
@@ -167,6 +172,7 @@ pub(crate) async fn run() -> Result<()> {
         hotkey_manager.clone(),
         esc_hotkey,
         main_hwnd,
+        magnifier,
     );
 
     crate::runtime_workers::start(

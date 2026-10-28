@@ -131,6 +131,7 @@ pub(crate) fn register_callbacks(
     esc_hotkey: HotKey,
     #[cfg(target_os = "windows")] main_hwnd: Option<windows::Win32::Foundation::HWND>,
     #[cfg(not(target_os = "windows"))] main_hwnd: Option<()>,
+    magnifier: std::rc::Rc<crate::magnifier::WindowMagnifier>,
 ) {
     let selection_weak = selection_window.as_weak();
     let overlay_weak = overlay_window.as_weak();
@@ -710,6 +711,7 @@ pub(crate) fn register_callbacks(
         let http = http_window_selected.clone();
         let recording_border = recording_border_window_selected.clone();
         let textbox = textbox_weak_window_selected.clone();
+        let magnifier = magnifier.clone();
         slint::Timer::single_shot(Duration::from_millis(1), move || {
             // Keep a visible window while closing the selector; otherwise capture mode's
             // selection window would be the last registered window and stop the event loop.
@@ -726,6 +728,15 @@ pub(crate) fn register_callbacks(
                 }
             } else {
                 state.lock().unwrap().scroll_cancel = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+            }
+
+            if purpose == SelectionPurpose::MagnifyWindow {
+                if let Some(toolbar) = toolbar {
+                    if let Err(error) = magnifier.open(target, toolbar.get_dark_theme()) {
+                        set_capture_toolbar_status(&toolbar, format!("Unable to magnify window: {error}"));
+                    }
+                }
+                return;
             }
 
             if let (Some(main), Some(toolbar)) = (main_weak.upgrade(), toolbar) {

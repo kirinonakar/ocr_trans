@@ -1,0 +1,128 @@
+import { Slider, Palette } from "std-widgets.slint";
+import { ToolbarButton } from "../components/toolbar-button.slint";
+
+export component MagnifierWindow inherits Window {
+    title: source_title + " — " + zoom_percent + "%";
+    no-frame: true;
+    always-on-top: true;
+    resize-border-width: 9px;
+    preferred-width: 720px;
+    preferred-height: 450px;
+    min-width: 480px;
+    min-height: 190px;
+    background: dark_theme ? #2b2b31 : #f8fafc;
+    default-font-family: "Yu Gothic UI";
+
+    in-out property <bool> dark_theme: false;
+    in-out property <bool> source_available: false;
+    in-out property <bool> capture_busy: false;
+    in-out property <bool> recording: false;
+    in-out property <bool> record_available: true;
+    in-out property <string> source_title: "Window magnifier";
+    in-out property <float> zoom_percent: 200;
+    in-out property <string> status_text: "";
+    in-out property <string> scale_text: "";
+    callback drag_requested();
+    callback zoom_changed(float);
+    callback capture_clicked();
+    callback record_clicked();
+    callback close_clicked();
+
+    init => { Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light; }
+    changed dark_theme => { Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light; }
+
+    // Match the capture frame's header. Explicit geometry keeps every control
+    // together in the reserved strip above the DWM thumbnail.
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: 42px;
+        background: root.dark_theme ? #2b2b31f5 : #f8fafcf5;
+        border-radius: 7px;
+        border-width: 1px;
+        border-color: root.dark_theme ? #52525b : #cbd5e1;
+        HorizontalLayout {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            padding-left: 7px;
+            padding-right: 7px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+            spacing: 6px;
+            ToolbarButton {
+                icon: @image-url("../icons/drag.svg");
+                dark_theme: root.dark_theme;
+                width: 28px;
+                height: 34px;
+                available: !root.recording;
+                press_on_down: true;
+                pressed => { root.drag_requested(); }
+            }
+            Slider {
+                minimum: 30;
+                maximum: 400;
+                step: 5;
+                value <=> root.zoom_percent;
+                width: 160px;
+                horizontal-stretch: 0;
+                enabled: !root.recording;
+                changed(value) => { root.zoom_changed(value); }
+            }
+            Text {
+                text: root.zoom_percent + "%";
+                width: 42px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                font-size: 12px;
+                color: root.dark_theme ? #f8fafc : #1e293b;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            ToolbarButton {
+                icon: @image-url("../icons/capture.svg");
+                label: "Capture";
+                dark_theme: root.dark_theme;
+                width: 78px;
+                height: 34px;
+                available: root.source_available && !root.capture_busy;
+                pressed => { root.capture_clicked(); }
+            }
+            ToolbarButton {
+                icon: root.recording ? @image-url("../icons/stop.svg") : @image-url("../icons/record.svg");
+                label: root.recording ? "Stop" : "Record";
+                dark_theme: root.dark_theme;
+                width: 74px;
+                height: 34px;
+                available: root.recording || (root.source_available && root.record_available);
+                active: root.recording;
+                pressed => { root.record_clicked(); }
+            }
+            ToolbarButton {
+                icon: @image-url("../icons/close.svg");
+                dark_theme: root.dark_theme;
+                width: 30px;
+                height: 34px;
+                icon_size: 16px;
+                pressed => { root.close_clicked(); }
+            }
+        }
+    }
+    Rectangle {
+        y: root.height - 28px;
+        height: 28px;
+        width: 100%;
+        background: root.dark_theme ? #2b2b31 : #f8fafc;
+        Text {
+            x: 8px;
+            width: parent.width - 16px;
+            height: 100%;
+            text: root.status_text == "" ? root.scale_text : root.status_text;
+            overflow: elide;
+            vertical-alignment: center;
+            font-size: 11px;
+            color: root.dark_theme ? #cbd5e1 : #475569;
+        }
+    }
+}

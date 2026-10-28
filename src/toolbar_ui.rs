@@ -200,6 +200,27 @@ pub(crate) fn register_callbacks(
         }
     });
 
+    let toolbar_weak_magnify = capture_toolbar.as_weak();
+    let selection_weak_magnify = selection_window.as_weak();
+    let state_magnify = state.clone();
+    let initialized_magnify = selection_initialized.clone();
+    let hotkeys_magnify = hotkey_manager.clone();
+    capture_toolbar.on_magnify_window_clicked(move || {
+        if let Some(toolbar) = toolbar_weak_magnify.upgrade() {
+            begin_toolbar_selection(
+                &toolbar,
+                &selection_weak_magnify,
+                &state_magnify,
+                SelectionPurpose::MagnifyWindow,
+                true,
+                false,
+                &initialized_magnify,
+                &hotkeys_magnify,
+                esc_hotkey,
+            );
+        }
+    });
+
     let toolbar_weak_scroll = capture_toolbar.as_weak();
     let selection_weak_scroll = selection_window.as_weak();
     let state_scroll = state.clone();
