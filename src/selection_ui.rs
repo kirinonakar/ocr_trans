@@ -49,7 +49,7 @@ mod tests {
                 ..Default::default()
             });
             let weak = selection.as_weak();
-            selection.on_selection_hovered(move |_, _| {
+            selection.on_selection_hovered(move |_, _, _, _, _, _| {
                 weak.upgrade().unwrap().set_magnifier_visible(true);
             });
             // Replace only the OS cursor warp; exercise real Slint pointer/key handling.
@@ -214,14 +214,19 @@ pub(crate) fn register_callbacks(
 
     let selection_weak_magnifier = selection_window.as_weak();
     let state_magnifier = state.clone();
-    selection_window.on_selection_hovered(move |x, y| {
+    selection_window.on_selection_hovered(move |x, y, selection_x, selection_y, width, height| {
         let magnifier = {
             let state = state_magnifier.lock().unwrap();
-            selection_magnifier_at(&state, x, y)
+            let rect = physical_selection_rect(&state, selection_x, selection_y, width, height);
+            selection_magnifier_at(&state, x, y, rect)
         };
         if let Some(selection) = selection_weak_magnifier.upgrade() {
-            if let Some(image) = magnifier {
+            if let Some((image, bounds)) = magnifier {
                 selection.set_selection_magnifier(image);
+                selection.set_magnifier_capture_x(bounds.x);
+                selection.set_magnifier_capture_y(bounds.y);
+                selection.set_magnifier_capture_width(bounds.width);
+                selection.set_magnifier_capture_height(bounds.height);
                 selection.set_magnifier_visible(true);
             } else {
                 selection.set_magnifier_visible(false);

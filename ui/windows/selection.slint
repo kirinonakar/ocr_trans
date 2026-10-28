@@ -22,6 +22,10 @@ export component SelectionWindow inherits Window {
     in-out property <string> ruler_info_line_2: "";
     in-out property <image> selection_magnifier;
     in-out property <bool> magnifier_visible: false;
+    in-out property <int> magnifier_capture_x: 0;
+    in-out property <int> magnifier_capture_y: 0;
+    in-out property <int> magnifier_capture_width: 0;
+    in-out property <int> magnifier_capture_height: 0;
     property <length> color_cursor_x: 0px;
     property <length> color_cursor_y: 0px;
     property <length> selection_cursor_x: 0px;
@@ -51,7 +55,7 @@ export component SelectionWindow inherits Window {
     callback window_selected(length, length);
     callback color_hovered(length, length);
     callback color_picked(length, length);
-    callback selection_hovered(length, length);
+    callback selection_hovered(length, length, length, length, length, length);
     callback selection_nudged(length, length, int, int);
     callback area_updated(length, length, length, length);
     callback closed();
@@ -63,7 +67,7 @@ export component SelectionWindow inherits Window {
             current_x = x;
             current_y = y;
         }
-        selection_hovered(x, y);
+        selection_hovered(x, y, sel_x, sel_y, sel_w, sel_h);
     }
 
     public function reset() {
@@ -85,6 +89,8 @@ export component SelectionWindow inherits Window {
         selection_cursor_x = 0px;
         selection_cursor_y = 0px;
         magnifier_visible = false;
+        magnifier_capture_width = 0;
+        magnifier_capture_height = 0;
         selecting = false;
     }
 
@@ -173,7 +179,7 @@ export component SelectionWindow inherits Window {
                     } else {
                         selection_cursor_x = start_x;
                         selection_cursor_y = start_y;
-                        selection_hovered(selection_cursor_x, selection_cursor_y);
+                        selection_hovered(selection_cursor_x, selection_cursor_y, sel_x, sel_y, sel_w, sel_h);
                     }
                 } else if (event.kind == PointerEventKind.up) {
                     selecting = false;
@@ -204,7 +210,7 @@ export component SelectionWindow inherits Window {
             } else if (!window_mode && !ruler_mode && self.has-hover) {
                 selection_cursor_x = i_touch.mouse-x;
                 selection_cursor_y = i_touch.mouse-y;
-                selection_hovered(selection_cursor_x, selection_cursor_y);
+                selection_hovered(selection_cursor_x, selection_cursor_y, sel_x, sel_y, sel_w, sel_h);
             } else if (!self.has-hover) {
                 magnifier_visible = false;
             }
@@ -306,6 +312,26 @@ export component SelectionWindow inherits Window {
             background: transparent;
             border-width: 2px;
             border-color: #facc15;
+        }
+
+        // Draw the capture boundary between enlarged pixels, clipped to the image itself.
+        Rectangle {
+            x: 6px;
+            y: 6px;
+            width: 108px;
+            height: 108px;
+            clip: true;
+            background: transparent;
+            visible: magnifier_capture_width > 0 && magnifier_capture_height > 0;
+            Rectangle {
+                x: magnifier_capture_x * 12px;
+                y: magnifier_capture_y * 12px;
+                width: magnifier_capture_width * 12px;
+                height: magnifier_capture_height * 12px;
+                background: transparent;
+                border-width: 2px;
+                border-color: #ff3030;
+            }
         }
     }
 

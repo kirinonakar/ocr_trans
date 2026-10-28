@@ -65,8 +65,22 @@ fn selection_magnifier_pixels(state: &AppState, x: f32, y: f32) -> Option<image:
     Some(pixels)
 }
 
-pub(crate) fn selection_magnifier_at(state: &AppState, x: f32, y: f32) -> Option<slint::Image> {
-    selection_magnifier_pixels(state, x, y).map(rgba_to_slint_image)
+pub(crate) fn selection_magnifier_at(
+    state: &AppState,
+    x: f32,
+    y: f32,
+    selection: capture::CaptureRect,
+) -> Option<(slint::Image, capture::CaptureRect)> {
+    let pixels = selection_magnifier_pixels(state, x, y)?;
+    let scale = state.selection_scale.max(1.0);
+    // Express the final physical capture bounds relative to the 9x9 preview's top-left pixel.
+    let bounds = capture::CaptureRect {
+        x: selection.x - state.selection_origin_x - (x * scale).round() as i32 + 4,
+        y: selection.y - state.selection_origin_y - (y * scale).round() as i32 + 4,
+        width: selection.width,
+        height: selection.height,
+    };
+    Some((rgba_to_slint_image(pixels), bounds))
 }
 
 /// Return a screenshot-local physical pixel, independent of desktop origin and DPI scaling.
