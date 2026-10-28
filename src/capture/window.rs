@@ -229,7 +229,7 @@ fn apply_window_shape(image: &mut RgbaImage, target: WindowTarget) {
                     }
                 }
             }
-            let _ = DeleteObject(region);
+            let _ = DeleteObject(region.into());
             if has_region {
                 return;
             }

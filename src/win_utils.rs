@@ -41,9 +41,9 @@ pub fn choose_popup_item(
         }
         let _ = SetForegroundWindow(hwnd);
         let command = TrackPopupMenu(menu.0, TPM_RETURNCMD | TPM_NONOTIFY,
-            screen_x, screen_y, 0, hwnd, None).0;
+            screen_x, screen_y, None, hwnd, None).0;
         // Ensure a subsequent opening also dismisses correctly on an outside click.
-        let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
         Ok((command > 0).then(|| command as usize - 1).filter(|index| *index < labels.len()))
     }
 }
@@ -129,7 +129,7 @@ pub fn set_topmost(hwnd: HWND) {
         };
         let _ = SetWindowPos(
             hwnd,
-            HWND_TOPMOST,
+            Some(HWND_TOPMOST),
             0,
             0,
             0,
@@ -260,8 +260,8 @@ pub fn begin_window_drag(hwnd: HWND) {
         let _ = SendMessageW(
             hwnd,
             WM_NCLBUTTONDOWN,
-            WPARAM(HTCAPTION as usize),
-            LPARAM(0),
+            Some(WPARAM(HTCAPTION as usize)),
+            Some(LPARAM(0)),
         );
     }
 }

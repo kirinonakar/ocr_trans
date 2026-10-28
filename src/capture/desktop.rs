@@ -4,16 +4,22 @@ use anyhow::{Context, Result};
 use image::{GenericImageView, Rgba, RgbaImage};
 use xcap::Monitor;
 
+/// Read fallible xcap geometry once so capture and recording use consistent bounds.
+pub(super) fn monitor_rect(monitor: &Monitor) -> Result<CaptureRect> {
+    Ok(CaptureRect {
+        x: monitor.x().context("Failed to read monitor x coordinate")?,
+        y: monitor.y().context("Failed to read monitor y coordinate")?,
+        width: monitor.width().context("Failed to read monitor width")? as i32,
+        height: monitor.height().context("Failed to read monitor height")? as i32,
+    })
+}
+
 /// Union of monitor bounds in physical virtual-desktop pixels. Windows anchors the primary
 /// monitor at (0, 0) and lets other monitors sit to its left or above, so the origin can be
 /// negative. The selector and the Win32 APIs use this same coordinate space.
-pub fn virtual_desktop_rect(monitors: &[Monitor]) -> Option<CaptureRect> {
-    union_rects(monitors.iter().map(|monitor| CaptureRect {
-        x: monitor.x(),
-        y: monitor.y(),
-        width: monitor.width() as i32,
-        height: monitor.height() as i32,
-    }))
+pub fn virtual_desktop_rect(monitors: &[Monitor]) -> Result<Option<CaptureRect>> {
+    let rects = monitors.iter().map(monitor_rect).collect::<Result<Vec<_>>>()?;
+    Ok(union_rects(rects.into_iter()))
 }
 
 fn union_rects(rects: impl Iterator<Item = CaptureRect>) -> Option<CaptureRect> {
@@ -42,33 +48,39 @@ fn union_rects(rects: impl Iterator<Item = CaptureRect>) -> Option<CaptureRect> 
     })
 }
 
-fn monitors_overlapping<'a>(rect: &CaptureRect, monitors: &'a [Monitor]) -> Vec<&'a Monitor> {
+fn monitors_overlapping<'a>(
+    rect: &CaptureRect,
+    monitors: &'a [Monitor],
+) -> Result<Vec<(&'a Monitor, CaptureRect)>> {
     let right = rect.x.saturating_add(rect.width.max(1));
     let bottom = rect.y.saturating_add(rect.height.max(1));
-    monitors
-        .iter()
-        .filter(|monitor| {
-            let monitor_right = monitor.x().saturating_add(monitor.width() as i32);
-            let monitor_bottom = monitor.y().saturating_add(monitor.height() as i32);
-            monitor.x() < right
-                && monitor_right > rect.x
-                && monitor.y() < bottom
-                && monitor_bottom > rect.y
-        })
-        .collect()
+    let mut overlapping = Vec::new();
+    for monitor in monitors {
+        let bounds = monitor_rect(monitor)?;
+        let monitor_right = bounds.x.saturating_add(bounds.width);
+        let monitor_bottom = bounds.y.saturating_add(bounds.height);
+        if bounds.x < right
+            && monitor_right > rect.x
+            && bounds.y < bottom
+            && monitor_bottom > rect.y
+        {
+            overlapping.push((monitor, bounds));
+        }
+    }
+    Ok(overlapping)
 }
 
 /// Physical bounds of every monitor combined. This is the surface the selector covers so a
 /// region can be dragged across monitors.
 pub fn virtual_desktop_capture_rect() -> Result<CaptureRect> {
     let monitors = Monitor::all().context("Failed to get monitors")?;
-    virtual_desktop_rect(&monitors).context("No monitors found")
+    virtual_desktop_rect(&monitors)?.context("No monitors found")
 }
 
 /// Captures the complete virtual desktop in physical pixels, stitching every monitor together.
 pub fn capture_virtual_desktop() -> Result<(CaptureRect, RgbaImage)> {
     let monitors = Monitor::all().context("Failed to get monitors")?;
-    let rect = virtual_desktop_rect(&monitors).context("No monitors found")?;
+    let rect = virtual_desktop_rect(&monitors)?.context("No monitors found")?;
     let image = capture_area(&rect, &Some(monitors))?;
     Ok((rect, image))
 }
@@ -76,14 +88,13 @@ pub fn capture_virtual_desktop() -> Result<(CaptureRect, RgbaImage)> {
 /// Copies only the requested desktop rectangle, including negative virtual-desktop coordinates.
 #[cfg(target_os = "windows")]
 fn capture_area_gdi(rect: &CaptureRect) -> Result<RgbaImage> {
-    use windows::Win32::Foundation::{HANDLE, HWND};
     use windows::Win32::Graphics::Gdi::*;
     unsafe {
-        let screen = GetDC(HWND::default());
+        let screen = GetDC(None);
         anyhow::ensure!(!screen.is_invalid(), "GetDC failed");
-        let memory = CreateCompatibleDC(screen);
+        let memory = CreateCompatibleDC(Some(screen));
         if memory.is_invalid() {
-            ReleaseDC(HWND::default(), screen);
+            ReleaseDC(None, screen);
             anyhow::bail!("CreateCompatibleDC failed");
         }
         let info = BITMAPINFO {
@@ -101,14 +112,14 @@ fn capture_area_gdi(rect: &CaptureRect) -> Result<RgbaImage> {
         let mut bits = std::ptr::null_mut();
         let result = (|| -> Result<RgbaImage> {
             let bitmap = CreateDIBSection(
-                screen,
+                Some(screen),
                 &info,
                 DIB_RGB_COLORS,
                 &mut bits,
-                HANDLE::default(),
+                None,
                 0,
             )?;
-            let previous = SelectObject(memory, bitmap);
+            let previous = SelectObject(memory, bitmap.into());
             let result = (|| -> Result<RgbaImage> {
                 anyhow::ensure!(
                     !previous.is_invalid() && previous.0 as isize != -1,
@@ -120,7 +131,7 @@ fn capture_area_gdi(rect: &CaptureRect) -> Result<RgbaImage> {
                     0,
                     rect.width,
                     rect.height,
-                    screen,
+                    Some(screen),
                     rect.x,
                     rect.y,
                     SRCCOPY | CAPTUREBLT,
@@ -137,11 +148,11 @@ fn capture_area_gdi(rect: &CaptureRect) -> Result<RgbaImage> {
                     .context("Invalid capture dimensions")
             })();
             SelectObject(memory, previous);
-            let _ = DeleteObject(bitmap);
+            let _ = DeleteObject(bitmap.into());
             result
         })();
         let _ = DeleteDC(memory);
-        ReleaseDC(HWND::default(), screen);
+        ReleaseDC(None, screen);
         result
     }
 }
@@ -173,17 +184,17 @@ pub fn capture_area(rect: &CaptureRect, monitors: &Option<Vec<Monitor>>) -> Resu
     // A region can span several monitors. Capture every monitor that intersects it and stitch
     // the pieces into one image; the selector, Win32 and xcap all share these physical
     // virtual-desktop coordinates.
-    let overlapping = monitors_overlapping(rect, monitors_ref);
+    let overlapping = monitors_overlapping(rect, monitors_ref)?;
     if overlapping.is_empty() {
         anyhow::bail!("Capture area is outside every monitor");
     }
     if overlapping.len() == 1 {
-        let monitor = overlapping[0];
+        let (monitor, bounds) = overlapping[0];
         let img = monitor
             .capture_image()
             .context("Failed to capture monitor")?;
-        let local_x = (rect.x - monitor.x()).max(0) as u32;
-        let local_y = (rect.y - monitor.y()).max(0) as u32;
+        let local_x = (rect.x - bounds.x).max(0) as u32;
+        let local_y = (rect.y - bounds.y).max(0) as u32;
         if local_x >= img.width() || local_y >= img.height() {
             anyhow::bail!("Capture area is outside the selected monitor");
         }
@@ -196,7 +207,7 @@ pub fn capture_area(rect: &CaptureRect, monitors: &Option<Vec<Monitor>>) -> Resu
     let mut canvas = RgbaImage::new(width, height);
     let mut captured = 0usize;
     let mut last_error: Option<String> = None;
-    for monitor in overlapping {
+    for (monitor, bounds) in overlapping {
         let image = match monitor.capture_image() {
             Ok(image) => image,
             Err(error) => {
@@ -205,21 +216,21 @@ pub fn capture_area(rect: &CaptureRect, monitors: &Option<Vec<Monitor>>) -> Resu
             }
         };
         // Intersection of this monitor and the requested region, in both coordinate spaces.
-        let left = rect.x.max(monitor.x());
-        let top = rect.y.max(monitor.y());
+        let left = rect.x.max(bounds.x);
+        let top = rect.y.max(bounds.y);
         let right = rect
             .x
             .saturating_add(width as i32)
-            .min(monitor.x().saturating_add(monitor.width() as i32));
+            .min(bounds.x.saturating_add(bounds.width));
         let bottom = rect
             .y
             .saturating_add(height as i32)
-            .min(monitor.y().saturating_add(monitor.height() as i32));
+            .min(bounds.y.saturating_add(bounds.height));
         if right <= left || bottom <= top {
             continue;
         }
-        let source_x = (left - monitor.x()).max(0) as u32;
-        let source_y = (top - monitor.y()).max(0) as u32;
+        let source_x = (left - bounds.x).max(0) as u32;
+        let source_y = (top - bounds.y).max(0) as u32;
         if source_x >= image.width() || source_y >= image.height() {
             continue;
         }
@@ -257,12 +268,7 @@ pub fn capture_area(rect: &CaptureRect, monitors: &Option<Vec<Monitor>>) -> Resu
 
 pub fn monitor_rect_at_point(x: i32, y: i32) -> Result<CaptureRect> {
     let monitor = Monitor::from_point(x, y).context("Failed to find monitor")?;
-    Ok(CaptureRect {
-        x: monitor.x(),
-        y: monitor.y(),
-        width: monitor.width() as i32,
-        height: monitor.height() as i32,
-    })
+    monitor_rect(&monitor)
 }
 
 pub fn capture_monitor_at_point(x: i32, y: i32) -> Result<(CaptureRect, RgbaImage)> {
@@ -276,7 +282,7 @@ pub fn capture_full_screen() -> Result<RgbaImage> {
     let monitors = Monitor::all().context("Failed to get monitors")?;
     let monitor = monitors
         .iter()
-        .find(|monitor| monitor.is_primary())
+        .find(|monitor| monitor.is_primary().unwrap_or(false))
         .or_else(|| monitors.first())
         .context("No monitors found")?;
     monitor.capture_image().context("Failed to capture monitor")
@@ -367,8 +373,8 @@ pub fn sample_pixel_at_point(x: i32, y: i32) -> Result<Rgba<u8>> {
     let image = monitor
         .capture_image()
         .context("Failed to capture monitor")?;
-    let local_x = (x - monitor.x()).max(0) as u32;
-    let local_y = (y - monitor.y()).max(0) as u32;
+    let local_x = (x - monitor.x().context("Failed to read monitor x coordinate")?).max(0) as u32;
+    let local_y = (y - monitor.y().context("Failed to read monitor y coordinate")?).max(0) as u32;
     if local_x >= image.width() || local_y >= image.height() {
         anyhow::bail!("The selected point is outside the monitor");
     }

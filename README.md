@@ -1,7 +1,7 @@
 # Rust OCR Translator powered by VLM
 
 [![Slint](https://img.shields.io/badge/Slint-1.17-2379F4?logo=slint&logoColor=white)](https://slint.dev)
-[![Rust](https://img.shields.io/badge/Rust-1.80+-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/Rust-1.92+-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 <a href="https://slint.dev"><img src="https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-light-whitebg.svg" alt="Made with Slint" height="28"></a>
 
@@ -67,7 +67,7 @@ All global shortcuts are configurable. Click the keyboard icon on the right side
 - Shortcuts are registered globally, so they keep working while the application is in the background.
 
 ## Prerequisites
-- **Rust**: [Install Rust](https://www.rust-lang.org/tools/install)
+- **Rust**: 1.92 or newer. [Install Rust](https://www.rust-lang.org/tools/install)
 - **C++ Build Tools**: Required for `windows-rs` and `slint`.
 
 ## Getting Started

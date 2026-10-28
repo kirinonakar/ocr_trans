@@ -143,7 +143,7 @@ pub(crate) fn recognize_text_with_cancel(
     canceled: impl Fn() -> bool,
 ) -> Result<String> {
     use windows::core::HSTRING;
-    use windows::Foundation::AsyncStatus;
+    use windows_future::AsyncStatus;
     use windows::Globalization::Language;
     use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
     use windows::Media::Ocr::OcrEngine;

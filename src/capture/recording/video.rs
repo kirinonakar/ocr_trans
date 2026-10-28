@@ -36,13 +36,17 @@ pub(super) struct DdaGrabConfig {
 #[cfg(target_os = "windows")]
 pub(super) fn ddagrab_config(rect: CaptureRect, fps: u32) -> Result<Option<DdaGrabConfig>> {
     let monitors = Monitor::all().context("Failed to enumerate monitors for ddagrab")?;
-    let Some((enumeration_index, monitor)) = monitors.iter().enumerate().find(|(_, monitor)| {
+    let monitor_rects = monitors
+        .iter()
+        .map(super::super::desktop::monitor_rect)
+        .collect::<Result<Vec<_>>>()?;
+    let Some((enumeration_index, monitor)) = monitor_rects.iter().enumerate().find(|(_, monitor)| {
         let right = rect.x.saturating_add(rect.width);
         let bottom = rect.y.saturating_add(rect.height);
-        rect.x >= monitor.x()
-            && rect.y >= monitor.y()
-            && right <= monitor.x().saturating_add(monitor.width() as i32)
-            && bottom <= monitor.y().saturating_add(monitor.height() as i32)
+        rect.x >= monitor.x
+            && rect.y >= monitor.y
+            && right <= monitor.x.saturating_add(monitor.width)
+            && bottom <= monitor.y.saturating_add(monitor.height)
     }) else {
         // One ddagrab source addresses one DXGI output. Keep cross-monitor selections on the
         // existing raw-frame path instead of silently recording the wrong display.
@@ -54,8 +58,8 @@ pub(super) fn ddagrab_config(rect: CaptureRect, fps: u32) -> Result<Option<DdaGr
     // display can legitimately be DISPLAY2). EnumDisplayMonitors and ddagrab enumerate active
     // outputs in the same primary-first order, so use that zero-based position directly.
     let output_index = enumeration_index;
-    let offset_x = rect.x - monitor.x();
-    let offset_y = rect.y - monitor.y();
+    let offset_x = rect.x - monitor.x;
+    let offset_y = rect.y - monitor.y;
     let (output_width, output_height) = recording_output_size(rect.width, rect.height);
     let mut input_filter = format!(
         "ddagrab=output_idx={output_index}:draw_mouse=1:framerate={fps}:video_size={}x{}:offset_x={offset_x}:offset_y={offset_y}",

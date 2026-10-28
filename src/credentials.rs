@@ -26,7 +26,7 @@ mod platform {
         let target_h = HSTRING::from(target);
         let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
 
-        let read_result = unsafe { CredReadW(&target_h, CRED_TYPE_GENERIC, 0, &mut credential) };
+        let read_result = unsafe { CredReadW(&target_h, CRED_TYPE_GENERIC, None, &mut credential) };
         if let Err(err) = read_result {
             if !is_not_found(&err) {
                 log::warn!("Failed to read credential '{}' from Credential Manager: {err}", target);
@@ -92,7 +92,7 @@ mod platform {
 
     fn delete_credential(target: &str) -> Result<()> {
         let target_h = HSTRING::from(target);
-        match unsafe { CredDeleteW(&target_h, CRED_TYPE_GENERIC, 0) } {
+        match unsafe { CredDeleteW(&target_h, CRED_TYPE_GENERIC, None) } {
             Ok(()) => Ok(()),
             Err(err) if is_not_found(&err) => Ok(()),
             Err(err) => Err(err).context("Failed to delete API key from Credential Manager"),
