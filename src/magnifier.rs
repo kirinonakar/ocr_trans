@@ -1,5 +1,5 @@
-//! Live, movable window preview. DWM owns the source pixels, so covering the source
-//! with the viewer cannot create a recursive screen capture.
+//! Live window preview with original-resolution capture and one-pass resampling.
+//! DWM remains available while high-quality frames are pending or unsupported.
 use crate::{
     capture, state::AppState, win_utils, CaptureToolbarWindow, MagnifierWindow, MainWindow,
     RecordingBorderWindow, TextboxWindow,
@@ -26,17 +26,27 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{GetWindowTextW, IsIconic, IsWindow},
 };
 
+mod quality;
 mod window_bounds;
 
 const HEADER: f64 = 42.0;
-const FOOTER: f64 = 28.0;
 const INSET: f64 = 6.0;
+const RESTORE_SOURCE_NOTICE: &str = "Restore the selected window to resume the preview";
 
 fn snap_zoom_percent(percent: f32) -> f32 {
     if !percent.is_finite() {
         return 200.0;
     }
     (percent / 5.0).round().clamp(6.0, 80.0) * 5.0
+}
+
+fn quality_presentation(
+    rendered: Option<quality::FrameKey>,
+    requested: quality::FrameKey,
+    failed: bool,
+) -> (bool, bool) {
+    let visible = rendered.is_some() && !failed;
+    (visible, visible && rendered == Some(requested))
 }
 
 struct Thumbnail {
@@ -57,6 +67,10 @@ pub(crate) struct WindowMagnifier {
     movement_guard: RefCell<Option<window_bounds::MovementGuard>>,
     window: MagnifierWindow,
     thumbnail: RefCell<Option<Thumbnail>>,
+    quality: RefCell<Option<quality::QualitySession>>,
+    quality_frame_key: Cell<Option<quality::FrameKey>>,
+    quality_pixels: RefCell<Option<Arc<image::RgbaImage>>>,
+    quality_source_size: Cell<Option<(u32, u32)>>,
     zoom: Cell<f64>,
     pending_zoom_resize: Cell<bool>,
     owns_recording: Cell<bool>,
@@ -105,7 +119,7 @@ fn work_area(owner: HWND) -> Result<capture::CaptureRect> {
 fn fitted_window_size(source: (i32, i32), zoom: f64, dpi: f64, work: (i32, i32)) -> (u32, u32) {
     // Use the same per-edge rounding as preview_rect at fractional DPI scales.
     let horizontal = (INSET * dpi).ceil() * 2.0;
-    let vertical = (HEADER * dpi).ceil() + ((FOOTER + INSET) * dpi).ceil();
+    let vertical = (HEADER * dpi).ceil() + (INSET * dpi).ceil();
     let available_w = (work.0 as f64 - horizontal).max(1.0);
     let available_h = (work.1 as f64 - vertical).max(1.0);
     let scale = zoom
@@ -133,7 +147,7 @@ fn preview_rect(
     let left = (INSET * dpi).ceil() as i32;
     let top = (HEADER * dpi).ceil() as i32;
     let right = client.0 - left;
-    let bottom = client.1 - ((FOOTER + INSET) * dpi).ceil() as i32;
+    let bottom = client.1 - left;
     if source.0 <= 0 || source.1 <= 0 || right <= left || bottom <= top {
         return None;
     }
@@ -162,6 +176,10 @@ impl WindowMagnifier {
             movement_guard: RefCell::new(None),
             window: MagnifierWindow::new()?,
             thumbnail: RefCell::new(None),
+            quality: RefCell::new(None),
+            quality_frame_key: Cell::new(None),
+            quality_pixels: RefCell::new(None),
+            quality_source_size: Cell::new(None),
             zoom: Cell::new(2.0),
             pending_zoom_resize: Cell::new(false),
             owns_recording: Cell::new(false),
@@ -169,6 +187,16 @@ impl WindowMagnifier {
             capture_rect: Cell::new(None),
             timer: slint::Timer::default(),
             state,
+        });
+        let toolbar_status = toolbar.as_weak();
+        this.window.on_status_changed(move |message| {
+            if let Some(toolbar) = toolbar_status.upgrade() {
+                if message.is_empty() && toolbar.get_status_text().as_str() != RESTORE_SOURCE_NOTICE
+                {
+                    return;
+                }
+                crate::capture_workflow::set_capture_toolbar_status(&toolbar, message.to_string());
+            }
         });
         let weak = Rc::downgrade(&this);
         this.window.on_close_clicked(move || {
@@ -222,7 +250,7 @@ impl WindowMagnifier {
                 let Some(this) = weak.upgrade() else {
                     return;
                 };
-                if this.window.get_capture_busy() {
+                if this.window.get_capture_busy() || !this.window.get_source_available() {
                     return;
                 }
                 if let Err(error) = this.update() {
@@ -230,11 +258,25 @@ impl WindowMagnifier {
                         .set_status_text(format!("Error: {error}").into());
                     return;
                 }
+                if this.window.get_quality_active() && !this.window.get_quality_exact() {
+                    let weak = weak.clone();
+                    slint::Timer::single_shot(Duration::from_millis(16), move || {
+                        if let Some(this) = weak.upgrade() {
+                            this.window.invoke_capture_clicked();
+                        }
+                    });
+                    return;
+                }
                 let Some(rect) = this.capture_rect.get() else {
                     return;
                 };
-                // Capture exactly the displayed thumbnail, excluding controls and letterboxing.
-                // This window deliberately has no WDA_EXCLUDEFROMCAPTURE affinity.
+                // Save filtered pixels directly, even before Slint's next paint.
+                // Standard previews use the displayed thumbnail without controls.
+                let filtered = if this.window.get_quality_active() {
+                    this.quality_pixels.borrow().clone()
+                } else {
+                    None
+                };
                 unsafe {
                     let _ = DwmFlush();
                 }
@@ -244,7 +286,10 @@ impl WindowMagnifier {
                 let task_weak = weak.clone();
                 if let Err(error) = slint::spawn_local(async move {
                     let result = tokio::task::spawn_blocking(move || {
-                        let image = capture::capture_area(&rect, &None)?;
+                        let image = match filtered {
+                            Some(image) => image,
+                            None => Arc::new(capture::capture_area(&rect, &None)?),
+                        };
                         capture::save_png_and_copy_to(&image, Some(&folder))
                     })
                     .await;
@@ -370,6 +415,7 @@ impl WindowMagnifier {
         self.stop_own_recording();
         self.timer.stop();
         self.thumbnail.borrow_mut().take();
+        self.reset_quality();
         self.capture_rect.set(None);
         self.window.set_dark_theme(dark);
         self.window.set_status_text("".into());
@@ -393,6 +439,10 @@ impl WindowMagnifier {
             });
             let handle = unsafe { DwmRegisterThumbnail(owner, source)? };
             *self.thumbnail.borrow_mut() = Some(Thumbnail { handle, source });
+            match quality::QualitySession::start(target.handle) {
+                Ok(session) => *self.quality.borrow_mut() = Some(session),
+                Err(error) => log::warn!("Unable to start high-quality preview: {error:#}"),
+            }
             self.resize_to_zoom()?;
             self.update()?;
             Ok(())
@@ -402,7 +452,8 @@ impl WindowMagnifier {
             return result;
         }
         let weak = Rc::downgrade(self);
-        // DWM refreshes pixels independently. Only geometry/visibility needs polling.
+        // Capture/resampling runs on its worker. Publish only the latest matching
+        // frame and geometry on the UI thread, including while the slider is held.
         self.timer.start(
             slint::TimerMode::Repeated,
             Duration::from_millis(16),
@@ -413,6 +464,7 @@ impl WindowMagnifier {
                 if let Err(error) = this.update() {
                     this.stop_own_recording();
                     this.thumbnail.borrow_mut().take();
+                    this.reset_quality();
                     this.capture_rect.set(None);
                     this.window.set_source_available(false);
                     this.window
@@ -428,6 +480,7 @@ impl WindowMagnifier {
         self.stop_own_recording();
         self.timer.stop();
         self.thumbnail.borrow_mut().take();
+        self.reset_quality();
         self.capture_rect.set(None);
         self.window.set_source_available(false);
         let _ = self.window.hide();
@@ -439,11 +492,19 @@ impl WindowMagnifier {
             return Ok(());
         };
         let size = unsafe { DwmQueryThumbnailSourceSize(thumbnail.handle)? };
+        let size = self
+            .quality
+            .borrow()
+            .as_ref()
+            .filter(|quality| !quality.failed())
+            .and_then(|quality| quality.source_size())
+            .map(|(width, height)| (width as i32, height as i32))
+            .unwrap_or((size.cx, size.cy));
         let work = work_area(hwnd(&self.window)?)?;
         let dpi = self.window.window().scale_factor() as f64;
         let (frame_w, frame_h) = self.frame_extent();
         let (width, height) = fitted_window_size(
-            (size.cx, size.cy),
+            size,
             self.zoom.get(),
             dpi,
             (
@@ -451,14 +512,24 @@ impl WindowMagnifier {
                 (work.height - frame_h).max(1),
             ),
         );
-        self.window
+        let needs_resize = self
+            .window
             .window()
-            .set_size(slint::PhysicalSize::new(width, height));
+            .with_winit_window(|native| {
+                let size = native.inner_size();
+                (size.width, size.height) != (width, height)
+            })
+            .unwrap_or(true);
+        if needs_resize {
+            self.window
+                .window()
+                .set_size(slint::PhysicalSize::new(width, height));
+        }
         self.window.window().with_winit_window(|native| {
             let position = native
                 .outer_position()
                 .unwrap_or(winit::dpi::PhysicalPosition::new(work.x, work.y));
-            native.set_outer_position(winit::dpi::PhysicalPosition::new(
+            let bounded_position = winit::dpi::PhysicalPosition::new(
                 position.x.clamp(
                     work.x,
                     (work.x + work.width - width as i32 - frame_w).max(work.x),
@@ -467,7 +538,10 @@ impl WindowMagnifier {
                     work.y,
                     (work.y + work.height - height as i32 - frame_h).max(work.y),
                 ),
-            ));
+            );
+            if position != bounded_position {
+                native.set_outer_position(bounded_position);
+            }
         });
         Ok(())
     }
@@ -509,6 +583,10 @@ impl WindowMagnifier {
         self.window.set_source_available(!minimized);
         self.capture_rect.set(None);
         if minimized {
+            self.window.set_quality_active(false);
+            if let Some(quality) = self.quality.borrow().as_ref() {
+                quality.request(None);
+            }
             unsafe {
                 DwmUpdateThumbnailProperties(
                     thumbnail.handle,
@@ -519,29 +597,74 @@ impl WindowMagnifier {
                     },
                 )?;
             }
-            self.window
-                .set_scale_text("Restore the selected window to resume the preview".into());
+            self.window.set_preview_notice(RESTORE_SOURCE_NOTICE.into());
             return Ok(());
         }
         let source = unsafe { DwmQueryThumbnailSourceSize(thumbnail.handle)? };
+        let source = if let Some(size) = self
+            .quality
+            .borrow()
+            .as_ref()
+            .filter(|quality| !quality.failed())
+            .and_then(|quality| quality.source_size())
+        {
+            if self.quality_source_size.replace(Some(size)) != Some(size) && !own_recording {
+                self.pending_zoom_resize.set(true);
+            }
+            (size.0 as i32, size.1 as i32)
+        } else {
+            (source.cx, source.cy)
+        };
         let geometry = self
             .window
             .window()
             .with_winit_window(|native| {
                 let client = native.inner_size();
                 let position = native.inner_position().ok()?;
-                let (rect, scale) = preview_rect(
-                    (source.cx, source.cy),
+                let (rect, _) = preview_rect(
+                    source,
                     (client.width as i32, client.height as i32),
                     native.scale_factor(),
                     self.zoom.get(),
                 )?;
-                Some((rect, scale, position))
+                Some((rect, position, native.scale_factor() as f32))
             })
             .flatten();
-        let Some((rect, scale, position)) = geometry else {
+        let Some((rect, position, dpi)) = geometry else {
             return Ok(());
         };
+        let key = quality::FrameKey {
+            source: (source.0 as u32, source.1 as u32),
+            output: (rect.width as u32, rect.height as u32),
+        };
+        let mut quality_failed = false;
+        if let Some(quality) = self.quality.borrow().as_ref() {
+            quality.request(Some(key.output));
+            quality_failed = quality.failed();
+            if let Some(frame) = quality
+                .take_frame()
+                .filter(|frame| frame.key.source == key.source)
+            {
+                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                    frame.pixels.as_raw(),
+                    frame.pixels.width(),
+                    frame.pixels.height(),
+                );
+                self.window
+                    .set_quality_image(slint::Image::from_rgba8(buffer));
+                self.quality_frame_key.set(Some(frame.key));
+                *self.quality_pixels.borrow_mut() = Some(Arc::new(frame.pixels));
+            }
+        }
+        let (quality_active, quality_exact) =
+            quality_presentation(self.quality_frame_key.get(), key, quality_failed);
+        let was_quality_active = self.window.get_quality_active();
+        self.window.set_quality_x(rect.x as f32 / dpi);
+        self.window.set_quality_y(rect.y as f32 / dpi);
+        self.window.set_quality_width(rect.width as f32 / dpi);
+        self.window.set_quality_height(rect.height as f32 / dpi);
+        self.window.set_quality_active(quality_active);
+        self.window.set_quality_exact(quality_exact);
         unsafe {
             DwmUpdateThumbnailProperties(
                 thumbnail.handle,
@@ -557,7 +680,9 @@ impl WindowMagnifier {
                         bottom: rect.y + rect.height,
                     },
                     opacity: 255,
-                    fVisible: true.into(),
+                    // Let Slint paint the first image before removing the native
+                    // preview. Subsequent zooms keep using the same image surface.
+                    fVisible: (!quality_active || !was_quality_active).into(),
                     fSourceClientAreaOnly: false.into(),
                     ..Default::default()
                 },
@@ -568,16 +693,18 @@ impl WindowMagnifier {
             y: position.y + rect.y,
             ..rect
         }));
-        self.window.set_scale_text(
-            format!(
-                "{}% · {} × {} · Drag title to move; drag edges to resize",
-                (scale * 100.0).round() as i32,
-                rect.width,
-                rect.height
-            )
-            .into(),
-        );
+        self.window.set_preview_notice("".into());
         Ok(())
+    }
+
+    fn reset_quality(&self) {
+        self.quality.borrow_mut().take();
+        self.quality_frame_key.set(None);
+        self.quality_pixels.borrow_mut().take();
+        self.quality_source_size.set(None);
+        self.window.set_quality_active(false);
+        self.window.set_quality_exact(false);
+        self.window.set_quality_image(slint::Image::default());
     }
 
     fn frame_extent(&self) -> (i32, i32) {
@@ -654,6 +781,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pending_zoom_frames_keep_the_image_visible_instead_of_switching_to_dwm() {
+        let rendered = quality::FrameKey {
+            source: (800, 600),
+            output: (800, 600),
+        };
+        assert_eq!(quality_presentation(None, rendered, false), (false, false));
+        assert_eq!(
+            quality_presentation(Some(rendered), rendered, false),
+            (true, true)
+        );
+        for output in [(840, 630), (880, 660), (1200, 900)] {
+            let requested = quality::FrameKey { output, ..rendered };
+            assert_eq!(
+                quality_presentation(Some(rendered), requested, false),
+                (true, false)
+            );
+            assert_eq!(
+                quality_presentation(Some(requested), requested, false),
+                (true, true)
+            );
+        }
+        assert_eq!(
+            quality_presentation(Some(rendered), rendered, true),
+            (false, false)
+        );
+    }
+
+    #[test]
     fn zoom_rounds_to_five_percent_and_clamps_the_slider_limits() {
         for (input, expected) in [
             (-10.0, 30.0),
@@ -728,6 +883,96 @@ mod tests {
                 image::ColorType::Rgb8,
             )
             .unwrap();
+            if name == "light" {
+                let header = image::RgbaImage::from_fn(width, HEADER as u32, |x, y| {
+                    let pixel = high[(y * width + x) as usize];
+                    image::Rgba([pixel.r, pixel.g, pixel.b, 255])
+                });
+                let output = (width * 155 / 100, HEADER as u32 * 155 / 100);
+                quality::resize_original(&mut fast_image_resize::Resizer::new(), &header, output)
+                    .unwrap()
+                    .save(directory.join("header-lanczos-155.png"))
+                    .unwrap();
+                image::imageops::resize(
+                    &header,
+                    output.0,
+                    output.1,
+                    image::imageops::FilterType::Triangle,
+                )
+                .save(directory.join("header-bilinear-155.png"))
+                .unwrap();
+            }
+        }
+
+        // Already-filtered pixels must survive Slint's fractional-DPI layout
+        // without being filtered or shifted again on their way to the screen.
+        let sample = image::RgbaImage::from_fn(63, 47, |x, y| {
+            image::Rgba([
+                (x * 3) as u8,
+                (y * 5) as u8,
+                if (x + y) % 2 == 0 { 240 } else { 15 },
+                255,
+            ])
+        });
+        window.set_quality_image(slint::Image::from_rgba8(slint::SharedPixelBuffer::<
+            slint::Rgba8Pixel,
+        >::clone_from_slice(
+            sample.as_raw(), 63, 47
+        )));
+        window.set_quality_active(true);
+        window.set_quality_exact(true);
+        for dpi in [1.0f32, 1.25, 1.5, 2.0] {
+            window
+                .window()
+                .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged {
+                    scale_factor: dpi,
+                });
+            surface.set_size(slint::PhysicalSize::new(1000, 700));
+            window.set_quality_x(20.0 / dpi);
+            window.set_quality_y(120.0 / dpi);
+            window.set_quality_width(63.0 / dpi);
+            window.set_quality_height(47.0 / dpi);
+            window.window().request_redraw();
+            let mut pixels = vec![slint::Rgb8Pixel::default(); 1000 * 700];
+            assert!(surface.draw_if_needed(|renderer| {
+                renderer.render(&mut pixels, 1000);
+            }));
+            for y in 1..46 {
+                for x in 1..62 {
+                    let expected = sample.get_pixel(x, y);
+                    let actual = pixels[((120 + y) * 1000 + 20 + x) as usize];
+                    assert_eq!(
+                        [actual.r, actual.g, actual.b],
+                        [expected[0], expected[1], expected[2]],
+                        "DPI {dpi} at {x},{y}"
+                    );
+                }
+            }
+        }
+
+        window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: 1.0 });
+        window.set_quality_exact(false);
+        window.set_quality_x(20.0);
+        window.set_quality_y(120.0);
+        // No replacement frame is supplied during these consecutive resizes.
+        // The existing texture must remain painted at every intermediate size.
+        for (width, height) in [(84u32, 63u32), (126, 94), (42, 31), (63, 47)] {
+            surface.set_size(slint::PhysicalSize::new(800 + width, 700));
+            window.set_quality_width(width as f32);
+            window.set_quality_height(height as f32);
+            window.window().request_redraw();
+            let stride = (800 + width) as usize;
+            let mut pixels = vec![slint::Rgb8Pixel::default(); stride * 700];
+            assert!(surface.draw_if_needed(|renderer| {
+                renderer.render(&mut pixels, stride);
+            }));
+            let center = pixels[(120 + height / 2) as usize * stride + (20 + width / 2) as usize];
+            assert!(
+                center.r > 60 && center.g > 80,
+                "Cached image disappeared at {width}x{height}"
+            );
         }
     }
 
@@ -743,7 +988,7 @@ mod tests {
                         preview_rect(source, (w as i32, h as i32), dpi, zoom).unwrap();
                     assert!(rect.x >= 0 && rect.y >= (HEADER * dpi) as i32);
                     assert!(rect.x + rect.width <= w as i32);
-                    assert!(rect.y + rect.height <= h as i32 - (FOOTER * dpi) as i32);
+                    assert!(rect.y + rect.height <= h as i32 - (INSET * dpi).ceil() as i32);
                     assert!((rect.width as f64 - source.0 as f64 * scale).abs() < 1.01);
                     assert!((rect.height as f64 - source.1 as f64 * scale).abs() < 1.01);
                     assert!(scale <= zoom);
@@ -759,6 +1004,19 @@ mod tests {
             let (rect, scale) = preview_rect((300, 200), (w as i32, h as i32), dpi, 2.0).unwrap();
             assert_eq!((rect.width, rect.height), (600, 400));
             assert_eq!(scale, 2.0);
+        }
+    }
+
+    #[test]
+    fn bottom_frame_matches_both_side_frames_at_each_dpi() {
+        for dpi in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            let (w, h) = fitted_window_size((1200, 600), 1.0, dpi, (1920, 1040));
+            let (rect, _) = preview_rect((1200, 600), (w as i32, h as i32), dpi, 1.0).unwrap();
+            let right = w as i32 - rect.x - rect.width;
+            let bottom = h as i32 - rect.y - rect.height;
+            assert_eq!(bottom, rect.x);
+            assert_eq!(bottom, right);
+            assert_eq!(bottom, (INSET * dpi).ceil() as i32);
         }
     }
 

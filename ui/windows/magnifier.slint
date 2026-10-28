@@ -21,15 +21,38 @@ export component MagnifierWindow inherits Window {
     in-out property <string> source_title: "Window magnifier";
     in-out property <float> zoom_percent: 200;
     in-out property <string> status_text: "";
-    in-out property <string> scale_text: "";
+    in-out property <string> preview_notice: "";
+    in-out property <bool> quality_active: false;
+    in-out property <bool> quality_exact: false;
+    in-out property <image> quality_image;
+    in-out property <float> quality_x;
+    in-out property <float> quality_y;
+    in-out property <float> quality_width;
+    in-out property <float> quality_height;
     callback drag_requested();
     callback zoom_changed(float);
     callback capture_clicked();
     callback record_clicked();
     callback close_clicked();
+    callback status_changed(string);
 
     init => { Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light; }
     changed dark_theme => { Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light; }
+    changed status_text => { if root.status_text != "" { root.status_changed(root.status_text); } }
+    changed preview_notice => { root.status_changed(root.preview_notice); }
+
+    Image {
+        visible: root.quality_active;
+        x: root.quality_x * 1px;
+        y: root.quality_y * 1px;
+        width: root.quality_width * 1px;
+        height: root.quality_height * 1px;
+        source: root.quality_image;
+        image-fit: fill;
+        // Keep this image/texture alive through zoom changes. Temporarily stretch
+        // the last frame smoothly until the exact-size Lanczos result arrives.
+        image-rendering: root.quality_exact ? pixelated : smooth;
+    }
 
     // Match the capture frame's header. Explicit geometry keeps every control
     // together in the reserved strip above the DWM thumbnail.
@@ -107,22 +130,6 @@ export component MagnifierWindow inherits Window {
                 icon_size: 16px;
                 pressed => { root.close_clicked(); }
             }
-        }
-    }
-    Rectangle {
-        y: root.height - 28px;
-        height: 28px;
-        width: 100%;
-        background: root.dark_theme ? #2b2b31 : #f8fafc;
-        Text {
-            x: 8px;
-            width: parent.width - 16px;
-            height: 100%;
-            text: root.status_text == "" ? root.scale_text : root.status_text;
-            overflow: elide;
-            vertical-alignment: center;
-            font-size: 11px;
-            color: root.dark_theme ? #cbd5e1 : #475569;
         }
     }
 }
