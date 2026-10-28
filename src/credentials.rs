@@ -1,18 +1,7 @@
 use anyhow::Result;
 
-pub const GOOGLE_API_KEY_TARGET: &str = "ocr_trans/google-gemini-api-key";
-pub const CEREBRAS_API_KEY_TARGET: &str = "ocr_trans/cerebras-api-key";
-pub const OLLAMA_CLOUD_API_KEY_TARGET: &str = "ocr_trans/ollama-cloud-api-key";
-pub const UNSLOTH_API_KEY_TARGET: &str = "ocr_trans/unsloth-api-key";
-pub const OPENCODE_GO_API_KEY_TARGET: &str = "ocr_trans/opencode-go-api-key";
-pub const OPENCODE_ZEN_API_KEY_TARGET: &str = "ocr_trans/opencode-zen-api-key";
-
 #[cfg(target_os = "windows")]
 mod platform {
-    use super::{
-        GOOGLE_API_KEY_TARGET, CEREBRAS_API_KEY_TARGET, OLLAMA_CLOUD_API_KEY_TARGET,
-        UNSLOTH_API_KEY_TARGET, OPENCODE_GO_API_KEY_TARGET, OPENCODE_ZEN_API_KEY_TARGET,
-    };
     use anyhow::{Context, Result};
     use std::ffi::c_void;
     use windows::core::{HSTRING, PWSTR};
@@ -22,14 +11,17 @@ mod platform {
         CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
     };
 
-    fn read_credential(target: &str) -> Option<String> {
+    pub fn read_credential(target: &str) -> Option<String> {
         let target_h = HSTRING::from(target);
         let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
 
         let read_result = unsafe { CredReadW(&target_h, CRED_TYPE_GENERIC, None, &mut credential) };
         if let Err(err) = read_result {
             if !is_not_found(&err) {
-                log::warn!("Failed to read credential '{}' from Credential Manager: {err}", target);
+                log::warn!(
+                    "Failed to read credential '{}' from Credential Manager: {err}",
+                    target
+                );
             }
             return None;
         }
@@ -60,7 +52,12 @@ mod platform {
             .filter(|key| !key.is_empty())
     }
 
-    fn store_credential(target: &str, user_name: &str, comment: &str, api_key: &str) -> Result<()> {
+    pub fn store_credential(
+        target: &str,
+        user_name: &str,
+        comment: &str,
+        api_key: &str,
+    ) -> Result<()> {
         let api_key = api_key.trim();
         if api_key.is_empty() {
             return delete_credential(target);
@@ -114,173 +111,38 @@ mod platform {
             windows::core::HRESULT(((error & 0x0000_FFFF) | (7 << 16) | 0x8000_0000) as i32)
         }
     }
-
-    pub fn read_google_api_key() -> Option<String> {
-        read_credential(GOOGLE_API_KEY_TARGET)
-    }
-
-    pub fn store_google_api_key(api_key: &str) -> Result<()> {
-        store_credential(GOOGLE_API_KEY_TARGET, "Google Gemini", "OCR Translator Google Gemini API key", api_key)
-    }
-
-    pub fn read_cerebras_api_key() -> Option<String> {
-        read_credential(CEREBRAS_API_KEY_TARGET)
-    }
-
-    pub fn store_cerebras_api_key(api_key: &str) -> Result<()> {
-        store_credential(CEREBRAS_API_KEY_TARGET, "Cerebras", "OCR Translator Cerebras API key", api_key)
-    }
-
-    pub fn read_ollama_cloud_api_key() -> Option<String> {
-        read_credential(OLLAMA_CLOUD_API_KEY_TARGET)
-    }
-
-    pub fn store_ollama_cloud_api_key(api_key: &str) -> Result<()> {
-        store_credential(
-            OLLAMA_CLOUD_API_KEY_TARGET,
-            "Ollama Cloud",
-            "OCR Translator Ollama Cloud API key",
-            api_key,
-        )
-    }
-
-    pub fn read_unsloth_api_key() -> Option<String> {
-        read_credential(UNSLOTH_API_KEY_TARGET)
-    }
-
-    pub fn store_unsloth_api_key(api_key: &str) -> Result<()> {
-        store_credential(
-            UNSLOTH_API_KEY_TARGET,
-            "Unsloth Desktop",
-            "OCR Translator Unsloth Desktop API key",
-            api_key,
-        )
-    }
-
-    pub fn read_opencode_go_api_key() -> Option<String> {
-        read_credential(OPENCODE_GO_API_KEY_TARGET)
-    }
-
-    pub fn store_opencode_go_api_key(api_key: &str) -> Result<()> {
-        store_credential(
-            OPENCODE_GO_API_KEY_TARGET,
-            "OpenCode Go",
-            "OCR Translator OpenCode Go API key",
-            api_key,
-        )
-    }
-
-    pub fn read_opencode_zen_api_key() -> Option<String> {
-        read_credential(OPENCODE_ZEN_API_KEY_TARGET)
-    }
-
-    pub fn store_opencode_zen_api_key(api_key: &str) -> Result<()> {
-        store_credential(
-            OPENCODE_ZEN_API_KEY_TARGET,
-            "OpenCode Zen",
-            "OCR Translator OpenCode Zen API key",
-            api_key,
-        )
-    }
 }
 
 #[cfg(not(target_os = "windows"))]
 mod platform {
     use anyhow::Result;
-
-    pub fn read_google_api_key() -> Option<String> {
+    pub fn read_credential(_target: &str) -> Option<String> {
         None
     }
-
-    pub fn store_google_api_key(_api_key: &str) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn read_cerebras_api_key() -> Option<String> {
-        None
-    }
-
-    pub fn store_cerebras_api_key(_api_key: &str) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn read_ollama_cloud_api_key() -> Option<String> {
-        None
-    }
-
-    pub fn store_ollama_cloud_api_key(_api_key: &str) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn read_unsloth_api_key() -> Option<String> {
-        None
-    }
-
-    pub fn store_unsloth_api_key(_api_key: &str) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn read_opencode_go_api_key() -> Option<String> {
-        None
-    }
-
-    pub fn store_opencode_go_api_key(_api_key: &str) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn read_opencode_zen_api_key() -> Option<String> {
-        None
-    }
-
-    pub fn store_opencode_zen_api_key(_api_key: &str) -> Result<()> {
+    pub fn store_credential(_target: &str, _name: &str, _comment: &str, _key: &str) -> Result<()> {
         Ok(())
     }
 }
 
-pub fn read_google_api_key() -> Option<String> {
-    platform::read_google_api_key()
+pub fn read_api_key(provider: &crate::providers::Provider) -> Option<String> {
+    provider.key_target.and_then(platform::read_credential)
 }
 
-pub fn store_google_api_key(api_key: &str) -> Result<()> {
-    platform::store_google_api_key(api_key)
-}
-
-pub fn read_cerebras_api_key() -> Option<String> {
-    platform::read_cerebras_api_key()
-}
-
-pub fn store_cerebras_api_key(api_key: &str) -> Result<()> {
-    platform::store_cerebras_api_key(api_key)
-}
-
-pub fn read_ollama_cloud_api_key() -> Option<String> {
-    platform::read_ollama_cloud_api_key()
-}
-
-pub fn store_ollama_cloud_api_key(api_key: &str) -> Result<()> {
-    platform::store_ollama_cloud_api_key(api_key)
-}
-
-pub fn read_unsloth_api_key() -> Option<String> {
-    platform::read_unsloth_api_key()
-}
-
-pub fn store_unsloth_api_key(api_key: &str) -> Result<()> {
-    platform::store_unsloth_api_key(api_key)
-}
-
-pub fn read_opencode_go_api_key() -> Option<String> {
-    platform::read_opencode_go_api_key()
-}
-
-pub fn store_opencode_go_api_key(api_key: &str) -> Result<()> {
-    platform::store_opencode_go_api_key(api_key)
-}
-
-pub fn read_opencode_zen_api_key() -> Option<String> {
-    platform::read_opencode_zen_api_key()
-}
-
-pub fn store_opencode_zen_api_key(api_key: &str) -> Result<()> {
-    platform::store_opencode_zen_api_key(api_key)
+pub fn store_api_key(provider: &crate::providers::Provider, api_key: &str) -> Result<()> {
+    if let Some(target) = provider.key_target {
+        if platform::read_credential(target)
+            .as_deref()
+            .unwrap_or_default()
+            == api_key.trim()
+        {
+            return Ok(());
+        }
+        platform::store_credential(
+            target,
+            provider.name,
+            &format!("OCR Translator {} API key", provider.name),
+            api_key,
+        )?;
+    }
+    Ok(())
 }

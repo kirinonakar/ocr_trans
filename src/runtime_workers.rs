@@ -188,12 +188,12 @@ pub(crate) fn start(
                                 log::error!("API Error: {error:?}");
                                 gate.retry();
                                 failures = failures.saturating_add(1);
-                                let retry = api::retry_delay(&error, failures);
+                                let retry = continuous_retry_delay(&error, failures);
                                 halted = retry.is_none();
                                 delay = retry.unwrap_or(Duration::from_secs(60));
                                 let summary = api::error_summary(&error);
                                 let message = if halted {
-                                    format!("Stopped: {summary}")
+                                    format!("Stopped after {failures} failure(s): {summary}")
                                 } else {
                                     format!("Retry in {}s: {summary}", delay.as_secs())
                                 };
@@ -212,7 +212,30 @@ pub(crate) fn start(
                         }
                     }
                 }
-                Err(error) => log::warn!("Continuous capture failed: {error:?}"),
+                Err(error) => {
+                    log::warn!("Continuous capture failed: {error:?}");
+                    failures = failures.saturating_add(1);
+                    let retry = continuous_retry_delay(&error, failures);
+                    halted = retry.is_none();
+                    delay = retry.unwrap_or(Duration::from_secs(60));
+                    let summary = api::error_summary(&error);
+                    let message = if halted {
+                        format!("Stopped after {failures} failure(s): {summary}")
+                    } else {
+                        format!("Retry in {}s: {summary}", delay.as_secs())
+                    };
+                    queue_worker_result(
+                        &state_for_worker,
+                        revision,
+                        &overlay_weak_worker,
+                        &main_weak_worker,
+                        &textbox_weak_worker,
+                        message,
+                        false,
+                        false,
+                        halted,
+                    );
+                }
             }
             control.wait(revision, delay);
         }
@@ -309,6 +332,16 @@ fn dispatch_toolbar_action(toolbar: &slint::Weak<CaptureToolbarWindow>, action: 
             ToolbarAction::Ruler => toolbar.invoke_ruler_clicked(),
         }
     });
+}
+
+const MAX_CONSECUTIVE_FAILURES: u32 = 5;
+
+fn continuous_retry_delay(error: &anyhow::Error, failures: u32) -> Option<Duration> {
+    if failures >= MAX_CONSECUTIVE_FAILURES {
+        None
+    } else {
+        api::retry_delay(error, failures)
+    }
 }
 
 async fn in_generation<T>(
@@ -480,6 +513,22 @@ fn queue_worker_result(
 mod tests {
     use super::*;
     use image::{Rgba, RgbaImage};
+
+    #[test]
+    fn capture_and_api_failures_stop_at_five_and_new_sessions_can_retry() {
+        let capture_error = anyhow::anyhow!("capture failed");
+        let server_error = api::ApiFailure::test_failure(503);
+        let rate_limit = api::ApiFailure::test_failure(429);
+        for error in [&capture_error, &server_error, &rate_limit] {
+            for failures in 1..MAX_CONSECUTIVE_FAILURES {
+                assert!(continuous_retry_delay(error, failures).is_some());
+            }
+            assert!(continuous_retry_delay(error, MAX_CONSECUTIVE_FAILURES).is_none());
+            assert!(continuous_retry_delay(error, u32::MAX).is_none());
+            assert!(continuous_retry_delay(error, 1).is_some());
+        }
+        assert!(continuous_retry_delay(&api::ApiFailure::test_failure(401), 1).is_none());
+    }
 
     #[tokio::test]
     async fn stop_cancels_inflight_request_and_rejects_old_generations() {

@@ -28,13 +28,13 @@ export component MainWindow inherits Window {
     }
 
     in-out property <bool> is_running: false;
-    in-out property <string> api_type: "LMStudio";
+    in-out property <string> api_type;
     in-out property <int> api_type_index: 0;
-    in property <[string]> provider_options: ["LMStudio", "Google Gemini", "Cerebras", "Ollama", "Ollama Cloud", "Unsloth Desktop", "OpenCode Go", "OpenCode Zen"];
-    in-out property <string> api_endpoint: "http://localhost:1234/v1";
+    in property <[string]> provider_options;
+    in-out property <string> api_endpoint;
     in-out property <string> api_key: "";
-    in-out property <string> model_name: "google/gemma-4-26b-a4b";
-    in property <[string]> model_options: ["google/gemma-4-26b-a4b", "qwen/qwen3.5-9b"];
+    in-out property <string> model_name;
+    in property <[string]> model_options;
     in-out property <int> model_index: 0;
     in-out property <float> interval: 0;
     in-out property <bool> overlay_visible: true;
@@ -71,7 +71,7 @@ export component MainWindow inherits Window {
     callback start_stop_clicked();
     callback select_area_clicked();
     callback api_type_changed(string);
-    callback api_key_changed(string);
+    callback api_key_changed(string, string);
     callback overlay_toggle_clicked(bool);
     callback refresh_models_clicked();
     callback sync_lmstudio_models();
@@ -200,7 +200,6 @@ export component MainWindow inherits Window {
                             current-index <=> api_type_index;
                             selected(value) => {
                                 api_type_changed(value);
-                                if (value == "LMStudio" || value == "Ollama" || value == "Ollama Cloud" || value == "Unsloth Desktop" || value == "OpenCode Go" || value == "OpenCode Zen") { sync_lmstudio_models(); }
                             }
                         }
                     }
@@ -221,8 +220,24 @@ export component MainWindow inherits Window {
                             text <=> api_key;
                             input-type: password;
                             placeholder-text: "Leave empty for local providers";
-                            edited(value) => { api_key_changed(value); }
-                            accepted(value) => { api_key_changed(value); }
+                            property <bool> dirty: false;
+                            property <string> edited-provider;
+                            property <string> edited-key;
+                            edited(value) => {
+                                self.dirty = true;
+                                self.edited-provider = api_type;
+                                self.edited-key = value;
+                            }
+                            changed has-focus => {
+                                if (!self.has-focus && self.dirty) {
+                                    api_key_changed(self.edited-provider, self.edited-key);
+                                    self.dirty = false;
+                                }
+                            }
+                            accepted(value) => {
+                                api_key_changed(api_type, value);
+                                self.dirty = false;
+                            }
                         }
                     }
 

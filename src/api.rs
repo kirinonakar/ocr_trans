@@ -1,3 +1,4 @@
+use crate::providers::{provider, Protocol, Thinking};
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{Client, RequestBuilder};
@@ -22,6 +23,18 @@ impl std::fmt::Display for ApiFailure {
     }
 }
 impl std::error::Error for ApiFailure {}
+
+#[cfg(test)]
+impl ApiFailure {
+    pub(crate) fn test_failure(status: u16) -> anyhow::Error {
+        Self {
+            status: reqwest::StatusCode::from_u16(status).unwrap(),
+            retry_after: Some(Duration::from_secs(71)),
+            message: "failure".into(),
+        }
+        .into()
+    }
+}
 
 fn single_line(text: &str) -> String {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -171,7 +184,7 @@ impl ApiClient {
         // Normalize endpoint: ensure it doesn't end with /v1 or /v1beta if it's the base
         let mut endpoint = endpoint.trim_end_matches('/').to_string();
         if endpoint.is_empty() {
-            endpoint = "https://generativelanguage.googleapis.com".to_string();
+            endpoint = crate::providers::provider(&provider).endpoint.to_string();
         }
         Self {
             client,
@@ -226,12 +239,11 @@ impl ApiClient {
     }
 
     fn is_gemini_endpoint(&self) -> bool {
-        self.endpoint.contains("googleapis.com")
+        provider(&self.provider).protocol(&self.model) == Protocol::Gemini
     }
 
     fn is_ollama_endpoint(&self) -> bool {
-        let endpoint = self.endpoint.to_lowercase();
-        endpoint.contains("ollama.com") || endpoint.contains(":11434") || endpoint.ends_with("/api")
+        provider(&self.provider).protocol(&self.model) == Protocol::Ollama
     }
 
     fn normalized_thinking_level(&self) -> Option<String> {
@@ -252,8 +264,7 @@ impl ApiClient {
             });
         }
 
-        let model = self.model.to_lowercase();
-        if model.contains("2.5") {
+        if provider(&self.provider).thinking(&self.model) == Thinking::GeminiBudget {
             let budget = match level.as_str() {
                 "low" => 1024,
                 "medium" => 4096,
@@ -279,19 +290,19 @@ impl ApiClient {
     }
 
     fn is_unsloth_endpoint(&self) -> bool {
-        self.provider == "Unsloth Desktop"
+        provider(&self.provider).thinking(&self.model) == Thinking::Unsloth
     }
 
     fn is_responses_model(&self) -> bool {
-        self.provider == "OpenCode Go" && self.model == "gpt-5.6-luna"
+        provider(&self.provider).protocol(&self.model) == Protocol::Responses
     }
 
     fn is_opencode_mimo_model(&self) -> bool {
-        self.provider == "OpenCode Go" && self.model.starts_with("mimo-v2.5")
+        provider(&self.provider).thinking(&self.model) == Thinking::Mimo
     }
 
     fn is_opencode_provider(&self) -> bool {
-        self.provider == "OpenCode Go" || self.provider == "OpenCode Zen"
+        provider(&self.provider).session_header
     }
 
     fn with_opencode_headers(&self, request: RequestBuilder) -> RequestBuilder {
@@ -726,6 +737,61 @@ mod tests {
             "default".to_string(),
             provider.to_string(),
         )
+    }
+
+    #[test]
+    fn protocol_uses_provider_even_for_misleading_endpoint_paths() {
+        for endpoint in [
+            "http://localhost:11434/api",
+            "https://example.com/api",
+            "https://proxy.googleapis.com/api",
+        ] {
+            let mut client = test_client("LMStudio");
+            client.endpoint = endpoint.into();
+            assert!(client.request_url(true).ends_with("/chat/completions"));
+            let payload = client.request_payload(&Input::Text("hello"));
+            assert_eq!(payload["messages"][1]["role"], "user");
+            assert!(payload.get("contents").is_none());
+            assert!(payload.get("options").is_none());
+        }
+        let mut client = test_client("Ollama");
+        client.endpoint = "https://proxy.example.com/custom".into();
+        assert!(client.request_url(true).ends_with("/api/chat"));
+        client.provider = "Google Gemini".into();
+        assert!(client.request_url(true).contains("streamGenerateContent"));
+    }
+
+    #[test]
+    fn thinking_payloads_preserve_provider_and_model_rules() {
+        let mut client = test_client("Unsloth Desktop");
+        client.thinking_level = "disable".into();
+        let payload = client.request_payload(&Input::Text("hello"));
+        assert_eq!(payload["enable_thinking"], false);
+        client.provider = "OpenCode Go".into();
+        client.model = "mimo-v2.5-test".into();
+        let payload = client.request_payload(&Input::Text("hello"));
+        assert_eq!(payload["thinking"]["type"], "disabled");
+        assert!(payload.get("reasoning_effort").is_none());
+        client.thinking_level = "xhigh".into();
+        assert_eq!(
+            client.request_payload(&Input::Text("hello"))["reasoning_effort"],
+            "high"
+        );
+        client.provider = "Google Gemini".into();
+        client.model = "gemini-2.5-flash".into();
+        assert_eq!(
+            client.gemini_thinking_config().unwrap().thinking_budget,
+            Some(8192)
+        );
+        client.model = "gemini-flash-latest".into();
+        assert_eq!(
+            client
+                .gemini_thinking_config()
+                .unwrap()
+                .thinking_level
+                .as_deref(),
+            Some("HIGH")
+        );
     }
 
     #[test]

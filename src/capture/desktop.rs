@@ -159,6 +159,9 @@ fn capture_area_gdi(rect: &CaptureRect) -> Result<RgbaImage> {
 
 pub fn capture_area(rect: &CaptureRect, monitors: &Option<Vec<Monitor>>) -> Result<RgbaImage> {
     anyhow::ensure!(rect.valid(), "The capture area is invalid");
+    // With xcap's default features the fallback below also uses GDI. A black successful
+    // BitBlt is not evidence of failure (the scene may be black), and retrying that backend
+    // cannot recover protected/overlay video. See README's capture backend limitations.
     #[cfg(target_os = "windows")]
     match capture_area_gdi(rect) {
         Ok(image) => return Ok(image),

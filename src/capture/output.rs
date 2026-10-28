@@ -135,11 +135,47 @@ pub fn unique_output_path_in(extension: &str, configured_folder: Option<&str>) -
     }
 }
 
-pub fn save_png_and_copy_to(image: &RgbaImage, configured_folder: Option<&str>) -> Result<PathBuf> {
+pub struct SavedCapture {
+    pub path: PathBuf,
+    pub clipboard_warning: Option<String>,
+}
+
+impl SavedCapture {
+    pub fn status(&self, prefix: &str) -> String {
+        match &self.clipboard_warning {
+            Some(warning) => format!("{prefix}: {} ({warning})", self.path.display()),
+            None => format!("{prefix} and copied: {}", self.path.display()),
+        }
+    }
+}
+
+/// Clipboard export is secondary to producing a useful capture/OCR/translation result.
+pub fn clipboard_warning(result: Result<()>) -> Option<String> {
+    result.err().map(|error| {
+        log::warn!("Clipboard export failed: {error:#}");
+        format!("clipboard unavailable: {error}")
+    })
+}
+
+pub fn save_png_and_copy_to(
+    image: &RgbaImage,
+    configured_folder: Option<&str>,
+) -> Result<SavedCapture> {
+    save_png_with_clipboard(image, configured_folder, copy_image_to_clipboard)
+}
+
+fn save_png_with_clipboard(
+    image: &RgbaImage,
+    configured_folder: Option<&str>,
+    copy: impl FnOnce(&RgbaImage) -> Result<()>,
+) -> Result<SavedCapture> {
     let path = unique_output_path_in("png", configured_folder)?;
     image.save(&path).context("Failed to save PNG capture")?;
-    copy_image_to_clipboard(image)?;
-    Ok(path)
+    let clipboard_warning = clipboard_warning(copy(image));
+    Ok(SavedCapture {
+        path,
+        clipboard_warning,
+    })
 }
 
 pub fn copy_image_to_clipboard(image: &RgbaImage) -> Result<()> {
@@ -158,4 +194,29 @@ pub fn copy_text_to_clipboard(text: &str) -> Result<()> {
     clipboard
         .set_text(text)
         .context("Failed to copy text to clipboard")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_png_survives_clipboard_failure_and_status_reports_it() {
+        let directory =
+            std::env::temp_dir().join(format!("ocr-clipboard-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let image = RgbaImage::from_pixel(8, 6, image::Rgba([20, 40, 60, 255]));
+        let saved = save_png_with_clipboard(&image, directory.to_str(), |_| {
+            anyhow::bail!("clipboard locked")
+        })
+        .unwrap();
+        assert_eq!(image::open(&saved.path).unwrap().to_rgba8(), image);
+        assert!(saved.status("Saved").contains("clipboard unavailable"));
+        assert!(!saved.status("Saved").contains("and copied"));
+        std::fs::remove_file(saved.path).unwrap();
+        let saved = save_png_with_clipboard(&image, directory.to_str(), |_| Ok(())).unwrap();
+        assert!(saved.status("Saved").contains("and copied"));
+        std::fs::remove_file(saved.path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
 }

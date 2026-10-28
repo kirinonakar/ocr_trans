@@ -139,15 +139,18 @@ pub fn recognize_text(
 
 #[cfg(target_os = "windows")]
 pub(crate) fn recognize_text_with_cancel(
-    bgra_pixels: &[u8], width: u32, height: u32, language_tag: &str,
+    bgra_pixels: &[u8],
+    width: u32,
+    height: u32,
+    language_tag: &str,
     canceled: impl Fn() -> bool,
 ) -> Result<String> {
     use windows::core::HSTRING;
-    use windows_future::AsyncStatus;
     use windows::Globalization::Language;
     use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
     use windows::Media::Ocr::OcrEngine;
     use windows::Security::Cryptography::CryptographicBuffer;
+    use windows_future::AsyncStatus;
 
     if width == 0 || height == 0 || bgra_pixels.len() < (width as usize * height as usize * 4) {
         anyhow::bail!("The OCR image buffer is invalid");
@@ -264,7 +267,46 @@ pub fn recognize_text(
 }
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn recognize_text_with_cancel(
-    pixels: &[u8], width: u32, height: u32, language: &str, _canceled: impl Fn() -> bool,
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    language: &str,
+    _canceled: impl Fn() -> bool,
 ) -> Result<String> {
     recognize_text(pixels, width, height, language)
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod benchmarks {
+    #[test]
+    #[ignore = "Measures installed Windows OCR initialization and blank-image recognition"]
+    fn measure_ocr_initialization() -> anyhow::Result<()> {
+        use std::time::Instant;
+        use windows::{core::HSTRING, Globalization::Language, Media::Ocr::OcrEngine};
+        super::enter_mta_apartment();
+        let menu = super::installed_language_menu("")?;
+        anyhow::ensure!(!menu.languages.is_empty(), "No OCR language installed");
+        let pixels = vec![255u8; 640 * 160 * 4];
+        for language in menu.languages.iter().take(3) {
+            let tag = &language.tag;
+            let mut init = Vec::new();
+            let mut recognize = Vec::new();
+            for _ in 0..21 {
+                let start = Instant::now();
+                let language = Language::CreateLanguage(&HSTRING::from(tag))?;
+                let engine = OcrEngine::TryCreateFromLanguage(&language)?;
+                std::hint::black_box(&engine);
+                init.push(start.elapsed().as_secs_f64() * 1000.0);
+                let start = Instant::now();
+                super::recognize_text(&pixels, 640, 160, tag)?;
+                recognize.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            let first_init = init.remove(0);
+            let first_recognize = recognize.remove(0);
+            init.sort_by(f64::total_cmp);
+            recognize.sort_by(f64::total_cmp);
+            println!("{tag}: first init={first_init:.3}ms, first recognize={first_recognize:.3}ms; warm median init={:.3}ms, full recognize={:.3}ms", init[10], recognize[10]);
+        }
+        Ok(())
+    }
 }

@@ -14,7 +14,7 @@ pub use desktop::{
     virtual_desktop_capture_rect,
 };
 pub use output::{
-    copy_text_to_clipboard, output_directory, save_png_and_copy_to, unique_output_path_in,
+    clipboard_warning, copy_text_to_clipboard, output_directory, save_png_and_copy_to, unique_output_path_in,
 };
 pub use recording::ScreenRecorder;
 pub use scrolling::scrolling_capture;

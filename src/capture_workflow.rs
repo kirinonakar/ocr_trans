@@ -1043,7 +1043,7 @@ pub(crate) async fn run_toolbar_action(
                 })
                 .await
                 .context("Capture save worker stopped")??;
-                Ok(format!("Saved and copied: {}", path.display()))
+                Ok(path.status("Saved"))
             }
             SelectionPurpose::ScrollCapture => {
                 let target = target.context("A window target is required for scrolling capture")?;
@@ -1084,11 +1084,8 @@ pub(crate) async fn run_toolbar_action(
                 .await
                 .context("Scrolling capture save worker stopped")??;
                 Ok(match warning {
-                    Some(warning) => format!(
-                        "Partial capture saved and copied: {} ({warning})",
-                        path.display()
-                    ),
-                    None => format!("Saved and copied: {}", path.display()),
+                    Some(warning) => format!("{} ({warning})", path.status("Partial capture saved")),
+                    None => path.status("Saved"),
                 })
             }
             SelectionPurpose::Record => {
@@ -1161,12 +1158,15 @@ pub(crate) async fn run_toolbar_action(
                         anyhow::bail!("VLM returned no text");
                     }
                     let text = clean_text(&text);
-                    capture::copy_text_to_clipboard(&text)?;
+                    let clipboard_warning = capture::clipboard_warning(capture::copy_text_to_clipboard(&text));
                     main.set_last_translated_text(text.clone().into());
                     if let Some(textbox) = textbox.upgrade() {
                         textbox.set_text(text.into());
                     }
-                    return Ok("VLM result copied to clipboard".to_string());
+                    return Ok(clipboard_warning.map_or_else(
+                        || "VLM result copied to clipboard".to_string(),
+                        |warning| format!("VLM complete ({warning})"),
+                    ));
                 }
 
                 let width = image.width();
@@ -1189,7 +1189,7 @@ pub(crate) async fn run_toolbar_action(
                     return Ok("No text was recognized".to_string());
                 }
                 // Preserve useful OCR output even when the translation service is unavailable.
-                capture::copy_text_to_clipboard(&text)?;
+                let clipboard_warning = capture::clipboard_warning(capture::copy_text_to_clipboard(&text));
                 main.set_last_translated_text(text.clone().into());
                 if let Some(textbox) = textbox.upgrade() {
                     textbox.set_text(text.clone().into());
@@ -1215,22 +1215,30 @@ pub(crate) async fn run_toolbar_action(
                             if let Some(textbox) = textbox.upgrade() {
                                 textbox.set_text(text.clone().into());
                             }
-                            return Ok(format!("OCR copied; translation failed: {}", api::error_summary(&error)));
+                            return Ok(format!("{}; translation failed: {}",
+                                clipboard_warning.as_ref().map_or_else(|| "OCR copied".to_string(), |warning| format!("OCR recognized ({warning})")),
+                                api::error_summary(&error)));
                         }
                     }
                 } else {
                     None
                 };
                 if translation.is_none() {
-                    return Ok(format!("Recognized text copied ({} characters)", text.trim().chars().count()));
+                    return Ok(clipboard_warning.map_or_else(
+                        || format!("Recognized text copied ({} characters)", text.trim().chars().count()),
+                        |warning| format!("OCR recognized ({} characters; {warning})", text.trim().chars().count()),
+                    ));
                 }
                 let composed = compose_ocr_clipboard(&text, translation.as_deref());
-                capture::copy_text_to_clipboard(&composed)?;
+                let clipboard_warning = capture::clipboard_warning(capture::copy_text_to_clipboard(&composed));
                 main.set_last_translated_text(composed.clone().into());
                 if let Some(textbox) = textbox.upgrade() {
                     textbox.set_text(composed.into());
                 }
-                Ok("OCR text and translation copied".to_string())
+                Ok(clipboard_warning.map_or_else(
+                    || "OCR text and translation copied".to_string(),
+                    |warning| format!("OCR and translation complete ({warning})"),
+                ))
             }
             SelectionPurpose::ContinuousOcr
             | SelectionPurpose::ColorPicker

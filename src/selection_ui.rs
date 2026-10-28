@@ -349,14 +349,13 @@ pub(crate) fn register_callbacks(
                     let textbox_weak = textbox_weak.clone();
                     let _ = slint::spawn_local(async move {
                         let result = tokio::task::spawn_blocking(move || {
-                            capture::copy_text_to_clipboard(&clipboard_text)?;
-                            Ok::<(String, String), anyhow::Error>((tooltip, clipboard_text))
+                            let warning = capture::clipboard_warning(capture::copy_text_to_clipboard(&clipboard_text));
+                            (tooltip, clipboard_text, warning)
                         })
                         .await
-                        .context("Ruler clipboard worker stopped")
-                        .and_then(|result| result);
+                        .context("Ruler clipboard worker stopped");
                         match result {
-                            Ok((measurement, textbox_text)) => {
+                            Ok((measurement, textbox_text, warning)) => {
                                 if let Some(textbox) = textbox_weak.upgrade() {
                                     textbox.set_text(textbox_text.into());
                                 }
@@ -364,7 +363,10 @@ pub(crate) fn register_callbacks(
                                 toolbar.set_active_tooltip(measurement.into());
                                 set_capture_toolbar_status(
                                     &toolbar,
-                                    "Copied region coordinates and dimensions".to_string(),
+                                    warning.map_or_else(
+                                        || "Copied region coordinates and dimensions".to_string(),
+                                        |warning| format!("Measured region coordinates and dimensions ({warning})"),
+                                    ),
                                 );
                             }
                             Err(error) => {
@@ -458,15 +460,7 @@ pub(crate) fn register_callbacks(
 
             // Sync with LM Studio if applicable
             // (Removed automatic sync on area selected to prevent model reverting bug)
-            if main.get_api_type().as_str() == PROVIDER_GEMINI {
-                persist_google_api_key(&main.get_api_key().to_string());
-            } else if main.get_api_type().as_str() == PROVIDER_CEREBRAS {
-                persist_cerebras_api_key(&main.get_api_key().to_string());
-            } else if main.get_api_type().as_str() == PROVIDER_OLLAMA_CLOUD {
-                persist_ollama_cloud_api_key(&main.get_api_key().to_string());
-            } else if main.get_api_type().as_str() == PROVIDER_UNSLOTH {
-                persist_unsloth_api_key(&main.get_api_key().to_string());
-            }
+            persist_provider_key(main.get_api_type().as_str(), main.get_api_key().as_str());
 
             let mut s = state_for_selection.lock().unwrap();
             // Convert logical to physical coordinates using scale factor
@@ -823,20 +817,23 @@ pub(crate) fn register_callbacks(
                     let color = capture::sample_pixel_at_point(screen_x, screen_y)?;
                     let tooltip = color_toolbar_tooltip(&color);
                     let clipboard_text = color_selection_tooltip(&color);
-                    capture::copy_text_to_clipboard(&clipboard_text)?;
-                    Ok::<(String, String), anyhow::Error>((tooltip, clipboard_text))
+                    let warning = capture::clipboard_warning(capture::copy_text_to_clipboard(&clipboard_text));
+                    Ok::<_, anyhow::Error>((tooltip, clipboard_text, warning))
                 })
                 .await
                 .context("Color picker worker stopped")
                 .and_then(|result| result);
                 match result {
-                    Ok((color_info, textbox_text)) => {
+                    Ok((color_info, textbox_text, warning)) => {
                         if let Some(textbox) = textbox_weak.upgrade() {
                             textbox.set_text(textbox_text.into());
                         }
                         toolbar.set_color_picker_tooltip(color_info.clone().into());
                         toolbar.set_active_tooltip(color_info.clone().into());
-                        set_capture_toolbar_status(&toolbar, format!("Copied {color_info}"));
+                        set_capture_toolbar_status(&toolbar, warning.map_or_else(
+                            || format!("Copied {color_info}"),
+                            |warning| format!("Sampled {color_info} ({warning})"),
+                        ));
                     }
                     Err(error) => set_capture_toolbar_status(&toolbar, format!("Error: {error}")),
                 }

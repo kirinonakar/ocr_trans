@@ -261,15 +261,7 @@ pub(crate) fn register_callbacks(
 
                 // Sync with LM Studio if applicable
                 // (Removed automatic sync on start to prevent model reverting bug)
-                if main.get_api_type().as_str() == PROVIDER_GEMINI {
-                    persist_google_api_key(&main.get_api_key().to_string());
-                } else if main.get_api_type().as_str() == PROVIDER_CEREBRAS {
-                    persist_cerebras_api_key(&main.get_api_key().to_string());
-                } else if main.get_api_type().as_str() == PROVIDER_OLLAMA_CLOUD {
-                    persist_ollama_cloud_api_key(&main.get_api_key().to_string());
-                } else if main.get_api_type().as_str() == PROVIDER_UNSLOTH {
-                    persist_unsloth_api_key(&main.get_api_key().to_string());
-                }
+                persist_provider_key(main.get_api_type().as_str(), main.get_api_key().as_str());
 
                 let mut s = state_clone.lock().unwrap();
                 if s.capture_rect.is_none() {

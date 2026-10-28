@@ -12,6 +12,7 @@ mod markdown;
 mod ocr;
 mod ocr_ui;
 mod provider_ui;
+mod providers;
 mod runtime_workers;
 mod scroll_alignment;
 mod selection_ui;

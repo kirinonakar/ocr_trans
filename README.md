@@ -95,7 +95,12 @@ You can download the latest version from the [Releases Page](https://github.com/
 - **Textbox Mode**: Optionally display translation results in a separate, resizable window while keeping the overlay active (at 10% opacity) for better focus. In this mode, the overlay's close button is hidden and **Click-Through Interaction** is enabled, allowing you to click on applications behind the capture area.
 
 ## Project Structure
-- `src/main.rs`: Orchestration, event loop, and UI logic.
+- `src/main.rs`: Module declarations and asynchronous entry point.
+- `src/app.rs`, `startup.rs`: Application orchestration, window setup and initial settings.
+- `src/providers.rs`: Shared provider definitions, endpoints, credential targets, model defaults, protocols and model-specific thinking rules. Startup and provider switching use the same definitions.
+- `src/provider_ui.rs`, `settings.rs`, `credentials.rs`: Provider callbacks/model synchronization, compatible INI/legacy settings, and Credential Manager access.
+- `src/runtime_workers.rs`, `capture_workflow.rs`: Continuous translation/cancellation/retries and capture-toolbar action workflows.
+- `src/ocr.rs`: Windows OCR integration and an opt-in initialization benchmark.
 - `src/capture.rs`: Shared capture types and entry points.
 - `src/capture/desktop.rs`, `window.rs`: Desktop/monitor capture and window shape handling.
 - `src/capture/output.rs`, `change_detection.rs`: File/clipboard export and frame comparison.

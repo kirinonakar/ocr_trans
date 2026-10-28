@@ -4,161 +4,30 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-fn read_gemini_txt_key() -> Option<String> {
-    // 1. Check current directory
-    if let Ok(cwd) = std::env::current_dir() {
-        let path = cwd.join("gemini.txt");
-        if let Ok(key) = std::fs::read_to_string(path) {
-            let key = key.trim().to_string();
-            if !key.is_empty() {
-                return Some(key);
-            }
-        }
-    }
-    // 2. Check executable directory
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let path = exe_dir.join("gemini.txt");
-            if let Ok(key) = std::fs::read_to_string(path) {
-                let key = key.trim().to_string();
-                if !key.is_empty() {
-                    return Some(key);
-                }
-            }
-        }
-    }
-    None
+use crate::providers::{provider, PROVIDERS};
+
+fn read_txt_key(file_name: &str) -> Option<String> {
+    let directories = std::env::current_dir().ok().into_iter().chain(
+        std::env::current_exe().ok().and_then(|path| path.parent().map(PathBuf::from)),
+    );
+    directories.filter_map(|directory| std::fs::read_to_string(directory.join(file_name)).ok())
+        .map(|key| key.trim().to_string()).find(|key| !key.is_empty())
 }
 
-pub(crate) fn get_gemini_key() -> Option<String> {
-    if let Some(key) = read_gemini_txt_key() {
-        if let Err(err) = credentials::store_google_api_key(&key) {
-            log::warn!("Failed to save gemini.txt key to Credential Manager: {err:?}");
-        }
-        return Some(key);
+pub(crate) fn get_provider_key(name: &str) -> String {
+    let definition = provider(name);
+    if let Some(key) = definition.key_file.and_then(read_txt_key) {
+        persist_provider_key(name, &key);
+        return key;
     }
-
-    credentials::read_google_api_key()
+    credentials::read_api_key(definition)
+        .or_else(|| definition.key_env.and_then(|name| std::env::var(name).ok()))
+        .unwrap_or_else(|| definition.default_key.to_string())
 }
 
-pub(crate) fn persist_google_api_key(api_key: &str) {
-    if let Err(err) = credentials::store_google_api_key(api_key) {
-        log::warn!("Failed to update Google API key in Credential Manager: {err:?}");
-    }
-}
-
-fn read_cerebras_txt_key() -> Option<String> {
-    // 1. Check current directory
-    if let Ok(cwd) = std::env::current_dir() {
-        let path = cwd.join("cerebras.txt");
-        if let Ok(key) = std::fs::read_to_string(path) {
-            let key = key.trim().to_string();
-            if !key.is_empty() {
-                return Some(key);
-            }
-        }
-    }
-    // 2. Check executable directory
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let path = exe_dir.join("cerebras.txt");
-            if let Ok(key) = std::fs::read_to_string(path) {
-                let key = key.trim().to_string();
-                if !key.is_empty() {
-                    return Some(key);
-                }
-            }
-        }
-    }
-    None
-}
-
-pub(crate) fn get_cerebras_key() -> Option<String> {
-    if let Some(key) = read_cerebras_txt_key() {
-        if let Err(err) = credentials::store_cerebras_api_key(&key) {
-            log::warn!("Failed to save cerebras.txt key to Credential Manager: {err:?}");
-        }
-        return Some(key);
-    }
-    credentials::read_cerebras_api_key()
-}
-
-pub(crate) fn persist_cerebras_api_key(api_key: &str) {
-    if let Err(err) = credentials::store_cerebras_api_key(api_key) {
-        log::warn!("Failed to update Cerebras API key in Credential Manager: {err:?}");
-    }
-}
-
-fn read_ollama_cloud_txt_key() -> Option<String> {
-    // 1. Check current directory
-    if let Ok(cwd) = std::env::current_dir() {
-        let path = cwd.join("ollama_cloud.txt");
-        if let Ok(key) = std::fs::read_to_string(path) {
-            let key = key.trim().to_string();
-            if !key.is_empty() {
-                return Some(key);
-            }
-        }
-    }
-    // 2. Check executable directory
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let path = exe_dir.join("ollama_cloud.txt");
-            if let Ok(key) = std::fs::read_to_string(path) {
-                let key = key.trim().to_string();
-                if !key.is_empty() {
-                    return Some(key);
-                }
-            }
-        }
-    }
-    None
-}
-
-pub(crate) fn get_ollama_cloud_key() -> Option<String> {
-    if let Some(key) = read_ollama_cloud_txt_key() {
-        if let Err(err) = credentials::store_ollama_cloud_api_key(&key) {
-            log::warn!("Failed to save ollama_cloud.txt key to Credential Manager: {err:?}");
-        }
-        return Some(key);
-    }
-
-    credentials::read_ollama_cloud_api_key().or_else(|| std::env::var("OLLAMA_API_KEY").ok())
-}
-
-pub(crate) fn persist_ollama_cloud_api_key(api_key: &str) {
-    if let Err(err) = credentials::store_ollama_cloud_api_key(api_key) {
-        log::warn!("Failed to update Ollama Cloud API key in Credential Manager: {err:?}");
-    }
-}
-
-pub(crate) fn get_unsloth_key() -> Option<String> {
-    credentials::read_unsloth_api_key().or_else(|| std::env::var("UNSLOTH_STUDIO_AUTH_TOKEN").ok())
-}
-
-pub(crate) fn persist_unsloth_api_key(api_key: &str) {
-    if let Err(err) = credentials::store_unsloth_api_key(api_key) {
-        log::warn!("Failed to update Unsloth Desktop API key in Credential Manager: {err:?}");
-    }
-}
-
-pub(crate) fn get_opencode_go_key() -> Option<String> {
-    credentials::read_opencode_go_api_key().or_else(|| std::env::var("OPENCODE_GO_API_KEY").ok())
-}
-
-pub(crate) fn persist_opencode_go_api_key(api_key: &str) {
-    if let Err(err) = credentials::store_opencode_go_api_key(api_key) {
-        log::warn!("Failed to update OpenCode Go API key in Credential Manager: {err:?}");
-    }
-}
-
-pub(crate) fn get_opencode_zen_key() -> Option<String> {
-    credentials::read_opencode_zen_api_key().or_else(|| std::env::var("OPENCODE_ZEN_API_KEY").ok())
-}
-
-pub(crate) fn persist_opencode_zen_api_key(api_key: &str) {
-    if let Err(err) = credentials::store_opencode_zen_api_key(api_key) {
-        log::warn!("Failed to update OpenCode Zen API key in Credential Manager: {err:?}");
+pub(crate) fn persist_provider_key(name: &str, api_key: &str) {
+    if let Err(err) = credentials::store_api_key(provider(name), api_key) {
+        log::warn!("Failed to update {name} API key in Credential Manager: {err:?}");
     }
 }
 
@@ -190,7 +59,7 @@ fn read_legacy_system_prompt() -> Option<String> {
 }
 
 pub(crate) fn get_model_name() -> String {
-    let default = "unsloth/gemma-4-26b-a4b-it";
+    let default = PROVIDERS[0].models[0];
     // 1. Check current directory
     if let Ok(model) = std::fs::read_to_string("model.txt") {
         return model.trim().to_string();
@@ -210,32 +79,12 @@ pub(crate) fn get_model_name() -> String {
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub(crate) struct ProviderConfig {
     pub(crate) provider: String,
-    pub(crate) lm_model: String,
-    pub(crate) gemini_model: String,
-    #[serde(default)]
-    pub(crate) cerebras_model: String,
-    #[serde(default)]
-    pub(crate) ollama_model: String,
-    #[serde(default)]
-    pub(crate) ollama_cloud_model: String,
-    #[serde(default)]
-    pub(crate) unsloth_model: String,
     #[serde(default)]
     pub(crate) thinking_level: String,
-    #[serde(default)]
-    pub(crate) opencode_go_model: String,
-    #[serde(default)]
-    pub(crate) opencode_zen_model: String,
+    // Keep the former JSON/INI model keys for migration and backwards compatibility.
+    #[serde(flatten)]
+    pub(crate) models: HashMap<String, String>,
 }
-
-pub(crate) const PROVIDER_LMSTUDIO: &str = "LMStudio";
-pub(crate) const PROVIDER_GEMINI: &str = "Google Gemini";
-pub(crate) const PROVIDER_CEREBRAS: &str = "Cerebras";
-pub(crate) const PROVIDER_OLLAMA: &str = "Ollama";
-pub(crate) const PROVIDER_OLLAMA_CLOUD: &str = "Ollama Cloud";
-pub(crate) const PROVIDER_UNSLOTH: &str = "Unsloth Desktop";
-pub(crate) const PROVIDER_OPENCODE_GO: &str = "OpenCode Go";
-pub(crate) const PROVIDER_OPENCODE_ZEN: &str = "OpenCode Zen";
 
 pub(crate) fn configured_thinking_level(config: &ProviderConfig) -> String {
     match config.thinking_level.trim().to_lowercase().as_str() {
@@ -246,33 +95,11 @@ pub(crate) fn configured_thinking_level(config: &ProviderConfig) -> String {
 }
 
 pub(crate) fn saved_model_for_provider(config: &ProviderConfig, provider: &str) -> String {
-    match provider {
-        PROVIDER_GEMINI => config.gemini_model.clone(),
-        PROVIDER_CEREBRAS => config.cerebras_model.clone(),
-        PROVIDER_OLLAMA => config.ollama_model.clone(),
-        PROVIDER_OLLAMA_CLOUD => config.ollama_cloud_model.clone(),
-        PROVIDER_UNSLOTH => config.unsloth_model.clone(),
-        PROVIDER_OPENCODE_GO => config.opencode_go_model.clone(),
-        PROVIDER_OPENCODE_ZEN => config.opencode_zen_model.clone(),
-        _ => config.lm_model.clone(),
-    }
+    config.models.get(crate::providers::provider(provider).model_key).cloned().unwrap_or_default()
 }
 
-pub(crate) fn set_saved_model_for_provider(
-    config: &mut ProviderConfig,
-    provider: &str,
-    model: String,
-) {
-    match provider {
-        PROVIDER_GEMINI => config.gemini_model = model,
-        PROVIDER_CEREBRAS => config.cerebras_model = model,
-        PROVIDER_OLLAMA => config.ollama_model = model,
-        PROVIDER_OLLAMA_CLOUD => config.ollama_cloud_model = model,
-        PROVIDER_UNSLOTH => config.unsloth_model = model,
-        PROVIDER_OPENCODE_GO => config.opencode_go_model = model,
-        PROVIDER_OPENCODE_ZEN => config.opencode_zen_model = model,
-        _ => config.lm_model = model,
-    }
+pub(crate) fn set_saved_model_for_provider(config: &mut ProviderConfig, name: &str, model: String) {
+    config.models.insert(provider(name).model_key.to_string(), model);
 }
 
 #[derive(Default, Clone)]
@@ -584,55 +411,13 @@ fn read_app_settings() -> AppSettings {
             let values = parse_ini(&contents);
             settings.provider.provider =
                 ini_value(&values, "provider", "provider", settings.provider.provider);
-            settings.provider.lm_model =
-                ini_value(&values, "provider", "lm_model", settings.provider.lm_model);
-            settings.provider.gemini_model = ini_value(
-                &values,
-                "provider",
-                "gemini_model",
-                settings.provider.gemini_model,
-            );
-            settings.provider.cerebras_model = ini_value(
-                &values,
-                "provider",
-                "cerebras_model",
-                settings.provider.cerebras_model,
-            );
-            settings.provider.ollama_model = ini_value(
-                &values,
-                "provider",
-                "ollama_model",
-                settings.provider.ollama_model,
-            );
-            settings.provider.ollama_cloud_model = ini_value(
-                &values,
-                "provider",
-                "ollama_cloud_model",
-                settings.provider.ollama_cloud_model,
-            );
-            settings.provider.unsloth_model = ini_value(
-                &values,
-                "provider",
-                "unsloth_model",
-                settings.provider.unsloth_model,
-            );
+            for definition in PROVIDERS {
+                let saved = saved_model_for_provider(&settings.provider, definition.name);
+                let model = ini_value(&values, "provider", definition.model_key, saved);
+                set_saved_model_for_provider(&mut settings.provider, definition.name, model);
+            }
             settings.provider.thinking_level = ini_value(
-                &values,
-                "provider",
-                "thinking_level",
-                settings.provider.thinking_level,
-            );
-            settings.provider.opencode_go_model = ini_value(
-                &values,
-                "provider",
-                "opencode_go_model",
-                settings.provider.opencode_go_model,
-            );
-            settings.provider.opencode_zen_model = ini_value(
-                &values,
-                "provider",
-                "opencode_zen_model",
-                settings.provider.opencode_zen_model,
+                &values, "provider", "thinking_level", settings.provider.thinking_level,
             );
             settings.capture_folder =
                 ini_value(&values, "app", "capture_folder", settings.capture_folder);
@@ -717,19 +502,15 @@ fn atomic_write(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> 
     result
 }
 
-fn write_app_settings(settings: &AppSettings) {
+fn serialize_app_settings(settings: &AppSettings) -> String {
+    let models = PROVIDERS.iter().map(|definition| {
+        format!("{}={}\n", definition.model_key, ini_escape(&saved_model_for_provider(&settings.provider, definition.name)))
+    }).collect::<String>();
     let mut contents = format!(
-        "[provider]\nprovider={}\nlm_model={}\ngemini_model={}\ncerebras_model={}\nollama_model={}\nollama_cloud_model={}\nunsloth_model={}\nthinking_level={}\nopencode_go_model={}\nopencode_zen_model={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nuse_textbox={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
+        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nuse_textbox={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
         ini_escape(&settings.provider.provider),
-        ini_escape(&settings.provider.lm_model),
-        ini_escape(&settings.provider.gemini_model),
-        ini_escape(&settings.provider.cerebras_model),
-        ini_escape(&settings.provider.ollama_model),
-        ini_escape(&settings.provider.ollama_cloud_model),
-        ini_escape(&settings.provider.unsloth_model),
+        models,
         ini_escape(&settings.provider.thinking_level),
-        ini_escape(&settings.provider.opencode_go_model),
-        ini_escape(&settings.provider.opencode_zen_model),
         ini_escape(settings.capture_folder.trim()),
         ini_escape(&settings.system_prompt),
         ini_escape(&serde_json::to_string(&settings.system_prompt_presets).unwrap_or_default()),
@@ -758,6 +539,11 @@ fn write_app_settings(settings: &AppSettings) {
         settings.skip_empty_ocr,
         ini_escape(&settings.translation_glossary)
     ));
+    contents
+}
+
+fn write_app_settings(settings: &AppSettings) {
+    let contents = serialize_app_settings(settings);
     if let Some(path) = settings_write_path() {
         if let Err(error) = atomic_write(&path, contents.as_bytes()) {
             log::warn!("Failed to save settings: {error}");
@@ -889,6 +675,27 @@ pub(crate) fn save_shortcut_config(config: &ShortcutConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_models_keep_legacy_json_and_ini_keys() {
+        let mut legacy = serde_json::json!({"provider": "OpenCode Zen", "thinking_level": "high"});
+        for definition in PROVIDERS {
+            legacy[definition.model_key] = format!("saved {}", definition.name).into();
+        }
+        let mut config: ProviderConfig = serde_json::from_value(legacy).unwrap();
+        for definition in PROVIDERS {
+            assert_eq!(saved_model_for_provider(&config, definition.name), format!("saved {}", definition.name));
+            set_saved_model_for_provider(&mut config, definition.name, format!("custom {}", definition.name));
+        }
+        let contents = serialize_app_settings(&AppSettings { provider: config.clone(), ..Default::default() });
+        let ini = parse_ini(&contents);
+        for definition in PROVIDERS {
+            assert_eq!(ini_value(&ini, "provider", definition.model_key, String::new()), saved_model_for_provider(&config, definition.name));
+        }
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["opencode_zen_model"], "custom OpenCode Zen");
+        assert_eq!(configured_thinking_level(&config), "high");
+    }
 
     #[test]
     fn atomic_settings_replace_existing_file_and_leave_old_data_on_failure() {
