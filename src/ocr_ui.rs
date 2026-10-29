@@ -100,6 +100,7 @@ pub(crate) fn register_callbacks(
     let main_weak_style = main_window.as_weak();
     let overlay_weak_style = overlay_window.as_weak();
     let textbox_weak_style = textbox_window.as_weak();
+    let toolbar_weak_style = capture_toolbar.as_weak();
     let state_style = state.clone();
     main_window.on_style_changed(move || {
         let use_textbox = main_weak_style
@@ -114,7 +115,6 @@ pub(crate) fn register_callbacks(
         if let Some(main) = main_weak_style.upgrade() {
             save_style_settings(
                 main.get_base_font_size(),
-                use_textbox,
                 &color_to_hex(main.get_overlay_bg_color()),
                 &color_to_hex(main.get_overlay_text_color()),
                 main.get_overlay_bg_opacity(),
@@ -136,6 +136,7 @@ pub(crate) fn register_callbacks(
                 overlay.set_bg_opacity(0.1);
                 overlay.set_hide_text(true);
                 overlay.set_is_textbox_mode(true);
+                textbox.set_dark_theme(main.get_dark_theme());
                 let _ = textbox.show();
                 #[cfg(target_os = "windows")]
                 schedule_textbox_native_theme(textbox.as_weak(), 0);
@@ -146,6 +147,9 @@ pub(crate) fn register_callbacks(
                 overlay.set_hide_text(false);
                 overlay.set_is_textbox_mode(false);
                 let _ = textbox.hide();
+            }
+            if let Some(toolbar) = toolbar_weak_style.upgrade() {
+                toolbar.set_textbox_visible(textbox.window().is_visible());
             }
 
             #[cfg(target_os = "windows")]
@@ -190,15 +194,10 @@ pub(crate) fn register_callbacks(
     let toolbar_weak_tb_close = capture_toolbar.as_weak();
     let state_tb_close = state.clone();
     textbox_window.window().on_close_requested(move || {
-        let capture_mode = main_weak_tb_close
-            .upgrade()
-            .map(|main| main.get_app_mode() == "capture")
-            .unwrap_or(false);
-        if capture_mode {
-            if let Some(toolbar) = toolbar_weak_tb_close.upgrade() {
-                toolbar.set_textbox_visible(false);
-            }
-        } else if let (Some(main), Some(overlay)) = (
+        if let Some(toolbar) = toolbar_weak_tb_close.upgrade() {
+            toolbar.set_textbox_visible(false);
+        }
+        if let (Some(main), Some(overlay)) = (
             main_weak_tb_close.upgrade(),
             overlay_weak_tb_close.upgrade(),
         ) {
@@ -209,7 +208,6 @@ pub(crate) fn register_callbacks(
             main.set_use_textbox(false);
             save_style_settings(
                 main.get_base_font_size(),
-                false,
                 &color_to_hex(main.get_overlay_bg_color()),
                 &color_to_hex(main.get_overlay_text_color()),
                 main.get_overlay_bg_opacity(),

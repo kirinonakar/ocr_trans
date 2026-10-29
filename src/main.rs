@@ -27,6 +27,7 @@ mod text_layout;
 mod toolbar_ui;
 mod win_utils;
 mod window_mode;
+mod window_position;
 
 fn main() -> anyhow::Result<()> {
     if magnifier::run_restore_watchdog()? {

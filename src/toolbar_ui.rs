@@ -87,28 +87,32 @@ pub(crate) fn register_callbacks(
         let textbox_weak = textbox_weak_toggle.clone();
         let main_weak = main_weak_textbox_toggle.clone();
         slint::Timer::single_shot(Duration::from_millis(1), move || {
-            let (Some(toolbar), Some(textbox)) = (toolbar_weak.upgrade(), textbox_weak.upgrade())
+            let (Some(toolbar), Some(textbox), Some(main)) = (
+                toolbar_weak.upgrade(),
+                textbox_weak.upgrade(),
+                main_weak.upgrade(),
+            )
             else {
                 return;
             };
-            if visible {
-                if let Some(main) = main_weak.upgrade() {
-                    textbox.set_dark_theme(toolbar.get_dark_theme());
-                    textbox.set_text_color(main.get_overlay_text_color());
-                    textbox.set_font_size(main.get_base_font_size());
-                }
-                if textbox.show().is_ok() {
-                    #[cfg(target_os = "windows")]
-                    schedule_textbox_native_theme(textbox.as_weak(), 0);
-                } else {
-                    toolbar.set_textbox_visible(false);
-                    set_capture_toolbar_status(
-                        &toolbar,
-                        "Unable to open result text box".to_string(),
-                    );
-                }
-            } else {
-                let _ = textbox.hide();
+            // Use the OCR checkbox's path so the worker state, overlay and saved setting
+            // follow the toolbar toggle even while the OCR settings window is hidden.
+            main.set_use_textbox(visible);
+            main.invoke_style_changed();
+            let actual_visible = textbox.window().is_visible();
+            toolbar.set_textbox_visible(actual_visible);
+            if actual_visible != visible {
+                main.set_use_textbox(actual_visible);
+                main.invoke_style_changed();
+                set_capture_toolbar_status(
+                    &toolbar,
+                    if visible {
+                        "Unable to open result text box"
+                    } else {
+                        "Unable to hide result text box"
+                    }
+                    .to_string(),
+                );
             }
         });
     });

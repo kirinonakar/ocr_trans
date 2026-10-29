@@ -115,13 +115,14 @@ pub(crate) struct AppSettings {
     pub(crate) translation_glossary: String,
     pub(crate) base_font_size: f32,
     pub(crate) result_font_family: String,
-    pub(crate) use_textbox: bool,
     pub(crate) overlay_bg_color: String,
     pub(crate) overlay_text_color: String,
     pub(crate) overlay_bg_opacity: f32,
     pub(crate) style_panel_open: bool,
     pub(crate) api_settings_collapsed: bool,
     pub(crate) api_settings_saved_height: f32,
+    pub(crate) ocr_window_position: Option<(i32, i32)>,
+    pub(crate) textbox_window_position: Option<(i32, i32)>,
     pub(crate) shortcuts: ShortcutConfig,
 }
 
@@ -292,6 +293,19 @@ fn ini_bool(
     )
 }
 
+fn ini_window_position(
+    values: &HashMap<(String, String), String>,
+    window: &str,
+) -> Option<(i32, i32)> {
+    let x = ini_value(values, "windows", &format!("{window}_x"), String::new())
+        .parse()
+        .ok()?;
+    let y = ini_value(values, "windows", &format!("{window}_y"), String::new())
+        .parse()
+        .ok()?;
+    Some((x, y))
+}
+
 fn ini_float(
     values: &HashMap<(String, String), String>,
     section: &str,
@@ -398,13 +412,14 @@ fn read_app_settings() -> AppSettings {
         translation_glossary: String::new(),
         base_font_size: 16.0,
         result_font_family: crate::fonts::default_result_font().to_string(),
-        use_textbox: false,
         overlay_bg_color: "#ffffff".to_string(),
         overlay_text_color: "#1e293b".to_string(),
         overlay_bg_opacity: 0.9,
         style_panel_open: false,
         api_settings_collapsed: false,
         api_settings_saved_height: 0.0,
+        ocr_window_position: None,
+        textbox_window_position: None,
         shortcuts: ShortcutConfig::default(),
     };
 
@@ -444,7 +459,6 @@ fn read_app_settings() -> AppSettings {
             settings.base_font_size =
                 ini_float(&values, "style", "base_font_size", settings.base_font_size)
                     .clamp(8.0, 72.0);
-            settings.use_textbox = ini_bool(&values, "style", "use_textbox", settings.use_textbox);
             settings.result_font_family = crate::fonts::result_font_family(&ini_value(
                 &values, "style", "result_font_family", settings.result_font_family,
             )).to_string();
@@ -486,6 +500,8 @@ fn read_app_settings() -> AppSettings {
             settings.shortcuts.toolbar2_key = ini_value(&values, "shortcuts", "toolbar2_key", settings.shortcuts.toolbar2_key);
             settings.shortcuts.toolbar3_action = ini_value(&values, "shortcuts", "toolbar3_action", settings.shortcuts.toolbar3_action);
             settings.shortcuts.toolbar3_key = ini_value(&values, "shortcuts", "toolbar3_key", settings.shortcuts.toolbar3_key);
+            settings.ocr_window_position = ini_window_position(&values, "ocr");
+            settings.textbox_window_position = ini_window_position(&values, "textbox");
         }
     }
     settings
@@ -512,7 +528,7 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         format!("{}={}\n", definition.model_key, ini_escape(&saved_model_for_provider(&settings.provider, definition.name)))
     }).collect::<String>();
     let mut contents = format!(
-        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nresult_font_family={}\nuse_textbox={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
+        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nresult_font_family={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
         ini_escape(&settings.provider.provider),
         models,
         ini_escape(&settings.provider.thinking_level),
@@ -524,7 +540,6 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         ini_escape(settings.ocr_language.trim()),
         settings.base_font_size,
         ini_escape(&settings.result_font_family),
-        if settings.use_textbox { "true" } else { "false" },
         ini_escape(&settings.overlay_bg_color),
         ini_escape(&settings.overlay_text_color),
         settings.overlay_bg_opacity,
@@ -540,6 +555,15 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         ini_escape(&settings.shortcuts.toolbar3_action),
         ini_escape(&settings.shortcuts.toolbar3_key),
     );
+    contents.push_str("\n[windows]\n");
+    for (window, position) in [
+        ("ocr", settings.ocr_window_position),
+        ("textbox", settings.textbox_window_position),
+    ] {
+        if let Some((x, y)) = position {
+            contents.push_str(&format!("{window}_x={x}\n{window}_y={y}\n"));
+        }
+    }
     contents.push_str(&format!(
         "\n[translation]\nskip_empty_ocr={}\nglossary={}\n",
         settings.skip_empty_ocr,
@@ -613,6 +637,14 @@ pub(crate) fn save_dark_theme(dark_theme: bool) {
     });
 }
 
+pub(crate) fn save_ocr_window_position(position: (i32, i32)) {
+    update_settings(|settings| settings.ocr_window_position = Some(position));
+}
+
+pub(crate) fn save_textbox_window_position(position: (i32, i32)) {
+    update_settings(|settings| settings.textbox_window_position = Some(position));
+}
+
 pub(crate) fn save_ocr_language(language: &str) {
     update_settings(|settings| {
         settings.ocr_language = language.trim().to_string();
@@ -629,14 +661,12 @@ pub(crate) fn save_result_font_family(family: &str) {
 /// Persists the Style panel values so the overlay keeps its last look across restarts.
 pub(crate) fn save_style_settings(
     base_font_size: f32,
-    use_textbox: bool,
     overlay_bg_color: &str,
     overlay_text_color: &str,
     overlay_bg_opacity: f32,
 ) {
     update_settings(|settings| {
         settings.base_font_size = base_font_size.clamp(8.0, 72.0);
-        settings.use_textbox = use_textbox;
         settings.overlay_bg_color = overlay_bg_color.to_string();
         settings.overlay_text_color = overlay_text_color.to_string();
         settings.overlay_bg_opacity = overlay_bg_opacity.clamp(0.1, 1.0);
@@ -688,6 +718,29 @@ pub(crate) fn save_shortcut_config(config: &ShortcutConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_positions_roundtrip_independently_and_reject_incomplete_or_invalid_pairs() {
+        let settings = AppSettings {
+            ocr_window_position: Some((-1840, 120)),
+            textbox_window_position: Some((2400, -600)),
+            ..Default::default()
+        };
+        let values = parse_ini(&serialize_app_settings(&settings));
+        assert_eq!(ini_window_position(&values, "ocr"), Some((-1840, 120)));
+        assert_eq!(ini_window_position(&values, "textbox"), Some((2400, -600)));
+        for contents in [
+            "[ui]\nstyle_panel_open=true\n",
+            "[windows]\nocr_x=-1920\n",
+            "[windows]\nocr_x=invalid\nocr_y=100\n",
+            "[windows]\nocr_x=2147483648\nocr_y=100\n",
+        ] {
+            assert_eq!(ini_window_position(&parse_ini(contents), "ocr"), None);
+        }
+        let values = parse_ini(&serialize_app_settings(&AppSettings::default()));
+        assert_eq!(ini_window_position(&values, "ocr"), None);
+        assert_eq!(ini_window_position(&values, "textbox"), None);
+    }
 
     #[test]
     fn provider_models_keep_legacy_json_and_ini_keys() {

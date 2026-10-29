@@ -138,7 +138,9 @@ pub(crate) fn initialize_ui(
     main_window.set_result_font_options(slint::ModelRc::from(font_options.as_slice()));
     main_window.set_result_font_family(initial_settings.result_font_family.clone().into());
     textbox_window.set_result_font_family(initial_settings.result_font_family.clone().into());
-    main_window.set_use_textbox(initial_settings.use_textbox);
+    // Result visibility is session-only: every launch starts with the textbox closed.
+    main_window.set_use_textbox(false);
+    capture_toolbar.set_textbox_visible(false);
     if let Some(color) = color_from_hex(&initial_settings.overlay_bg_color) {
         main_window.set_overlay_bg_color(color);
     }
@@ -151,6 +153,17 @@ pub(crate) fn initialize_ui(
     main_window.set_api_settings_collapsed(initial_settings.api_settings_collapsed);
     main_window.set_api_settings_saved_height(initial_settings.api_settings_saved_height);
     sync_ocr_window_size(main_window);
+
+    crate::window_position::track(
+        main_window.window(),
+        initial_settings.ocr_window_position,
+        save_ocr_window_position,
+    );
+    crate::window_position::track(
+        textbox_window.window(),
+        initial_settings.textbox_window_position,
+        save_textbox_window_position,
+    );
 
     if crate::providers::provider(main_window.get_api_type().as_str()).auto_sync {
         slint::spawn_local(crate::provider_ui::sync_models(
