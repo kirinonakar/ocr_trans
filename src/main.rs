@@ -7,6 +7,7 @@ mod app;
 mod capture;
 mod capture_workflow;
 mod credentials;
+mod fonts;
 mod image_processing;
 mod markdown;
 mod magnifier;

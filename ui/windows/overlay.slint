@@ -5,7 +5,7 @@ export component OverlayWindow inherits Window {
     background: transparent;
     no-frame: true;
     icon: @image-url("../../app.ico");
-    default-font-family: "Yu Gothic UI";
+    default-font-family: root.result_font_family;
     
     in-out property <length> window_x;
     in-out property <length> window_y;
@@ -21,6 +21,7 @@ export component OverlayWindow inherits Window {
     in-out property <bool> is_searching: false;
     in-out property <bool> show_text: false;
     in-out property <length> font_size: 16px;
+    in-out property <string> result_font_family: "Yu Gothic UI";
     in-out property <color> bg_color: #ffffff;
     in-out property <color> text_color: #1e293b;
     in-out property <float> bg_opacity: 0.9;

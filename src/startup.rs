@@ -126,6 +126,18 @@ pub(crate) fn initialize_ui(
     main_window.set_interval(0.0);
     // Restore the Style panel values so the overlay keeps its last look across restarts.
     main_window.set_base_font_size(initial_settings.base_font_size);
+    let font_families = crate::fonts::font_menu(&initial_settings.result_font_family);
+    main_window.set_result_font_index(
+        font_families.iter()
+            .position(|name| name.eq_ignore_ascii_case(&initial_settings.result_font_family))
+            .map_or(-1, |index| index as i32),
+    );
+    let font_options: Vec<slint::SharedString> = font_families.iter()
+        .map(|name| name.as_str().into())
+        .collect();
+    main_window.set_result_font_options(slint::ModelRc::from(font_options.as_slice()));
+    main_window.set_result_font_family(initial_settings.result_font_family.clone().into());
+    textbox_window.set_result_font_family(initial_settings.result_font_family.clone().into());
     main_window.set_use_textbox(initial_settings.use_textbox);
     if let Some(color) = color_from_hex(&initial_settings.overlay_bg_color) {
         main_window.set_overlay_bg_color(color);

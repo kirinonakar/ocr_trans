@@ -44,6 +44,7 @@ pub(crate) async fn run() -> Result<()> {
         &http_client,
     );
     let initial_capture_folder = startup.capture_folder;
+    overlay_window.set_result_font_family(main_window.get_result_font_family());
     let initial_dark_theme = startup.dark_theme;
     let initial_app_mode = startup.app_mode;
     capture_frame_window.set_dark_theme(initial_dark_theme);

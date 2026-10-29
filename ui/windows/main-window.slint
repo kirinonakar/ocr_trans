@@ -1,6 +1,6 @@
 // OCR provider, translation, capture, and appearance settings window.
 
-import { Button, CheckBox, Slider, LineEdit, ComboBox, TextEdit, Palette } from "std-widgets.slint";
+import { Button, CheckBox, Slider, LineEdit, ComboBox, TextEdit, ScrollView, Palette } from "std-widgets.slint";
 import { ToolbarButton } from "../components/toolbar-button.slint";
 
 export component MainWindow inherits Window {
@@ -43,6 +43,9 @@ export component MainWindow inherits Window {
     in-out property <bool> skip_empty_ocr: false;
     private property <bool> translation_options_open: false;
     in-out property <float> base_font_size: 16;
+    in-out property <string> result_font_family: "Yu Gothic UI";
+    in property <[string]> result_font_options;
+    in-out property <int> result_font_index: -1;
     in-out property <float> temperature: 0.7;
     in-out property <string> thinking_level: "default";
     in property <[string]> thinking_level_options: ["default", "disable", "low", "medium", "high", "xhigh", "max"];
@@ -82,6 +85,7 @@ export component MainWindow inherits Window {
     callback capture_folder_changed(string);
     callback system_prompt_changed(string);
     callback translation_options_saved();
+    callback result_font_changed(string);
     callback preset_selected(string);
     callback preset_save_clicked();
     callback preset_save_confirmed(string);
@@ -601,20 +605,44 @@ export component MainWindow inherits Window {
         Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: parent.width - 28px; height: 330px;
+            width: parent.width - 28px; height: min(440px, parent.height - 28px);
             background: dark_theme ? #37373f : #ffffff;
             border-radius: 10px;
             VerticalLayout {
                 padding: 14px; spacing: 8px;
-                Text { text: "Translation options"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; }
-                CheckBox { text: "Skip frames with empty Windows OCR"; checked <=> skip_empty_ocr; }
-                Text {
-                    text: "Clears subtitles without an API request. May miss outlined fonts. Off: use pixel comparison.";
-                    wrap: word-wrap; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b;
+                Text { text: "Options"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; }
+                ScrollView {
+                    viewport-height: max(self.visible-height, options-content.preferred-height);
+                    options-content := VerticalLayout {
+                        width: parent.width;
+                        spacing: 8px;
+                        alignment: start;
+                        Text { text: "Font (Textbox & Overlay)"; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b; }
+                        ComboBox {
+                            model: result_font_options;
+                            current-index <=> result_font_index;
+                            selected(value) => {
+                                result_font_family = value;
+                                result_font_changed(value);
+                            }
+                        }
+                        Text {
+                            text: "가나다 あいうえお Aa 123";
+                            font-family: root.result_font_family;
+                            font-size: 16px;
+                            color: dark_theme ? #e2e8f0 : #1e293b;
+                            overflow: elide;
+                        }
+                        CheckBox { text: "Skip frames with empty Windows OCR"; checked <=> skip_empty_ocr; }
+                        Text {
+                            text: "Clears subtitles without an API request. May miss outlined fonts. Off: use pixel comparison.";
+                            wrap: word-wrap; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b;
+                        }
+                        Text { text: "Glossary (one source=translation per line)"; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b; }
+                        TextEdit { text <=> translation_glossary; height: 110px; font-size: 13px; }
+                        Text { text: "Continuous translation also refers to the last 3 completed lines."; wrap: word-wrap; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b; }
+                    }
                 }
-                Text { text: "Glossary (one source=translation per line)"; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b; }
-                TextEdit { text <=> translation_glossary; height: 110px; font-size: 13px; }
-                Text { text: "Continuous translation also refers to the last 3 completed lines."; wrap: word-wrap; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b; }
                 Button {
                     text: "Done";
                     clicked => { translation_options_saved(); translation_options_open = false; }

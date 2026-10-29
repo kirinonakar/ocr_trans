@@ -12,11 +12,12 @@ export component TextboxWindow inherits Window {
     min-width: 320px;
     min-height: 100px;
     background: dark_theme ? #2b2b31 : #f8fafc;
-    default-font-family: "Yu Gothic UI";
+    default-font-family: root.result_font_family;
     
     in-out property <string> text: "";
     in-out property <color> text_color: #1e293b;
     in-out property <length> font_size: 15px;
+    in-out property <string> result_font_family: "Yu Gothic UI";
     in-out property <bool> dark_theme: false;
     pure callback render-markdown(string) -> [MarkdownBlock];
     callback copy-original();
@@ -103,7 +104,7 @@ export component TextboxWindow inherits Window {
                                                             horizontal-stretch: 1;
                                                             text: cell.content;
                                                             default-font-size: root.font_size * block.font-scale;
-                                                            default-font-family: "Yu Gothic UI";
+                                                            default-font-family: root.result_font_family;
                                                             default-color: root.foreground;
                                                             vertical-alignment: top;
                                                         }
@@ -133,7 +134,7 @@ export component TextboxWindow inherits Window {
                                         preferred-width: 0px;
                                         text: block.heading ? @markdown("**\{cell.content}**") : cell.content;
                                         default-font-size: root.font_size * block.font-scale;
-                                        default-font-family: block.code ? "Consolas" : "Yu Gothic UI";
+                                        default-font-family: root.result_font_family;
                                         default-color: root.foreground;
                                         vertical-alignment: top;
                                     }

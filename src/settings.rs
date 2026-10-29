@@ -114,6 +114,7 @@ pub(crate) struct AppSettings {
     pub(crate) skip_empty_ocr: bool,
     pub(crate) translation_glossary: String,
     pub(crate) base_font_size: f32,
+    pub(crate) result_font_family: String,
     pub(crate) use_textbox: bool,
     pub(crate) overlay_bg_color: String,
     pub(crate) overlay_text_color: String,
@@ -396,6 +397,7 @@ fn read_app_settings() -> AppSettings {
         skip_empty_ocr: false,
         translation_glossary: String::new(),
         base_font_size: 16.0,
+        result_font_family: crate::fonts::default_result_font().to_string(),
         use_textbox: false,
         overlay_bg_color: "#ffffff".to_string(),
         overlay_text_color: "#1e293b".to_string(),
@@ -443,6 +445,9 @@ fn read_app_settings() -> AppSettings {
                 ini_float(&values, "style", "base_font_size", settings.base_font_size)
                     .clamp(8.0, 72.0);
             settings.use_textbox = ini_bool(&values, "style", "use_textbox", settings.use_textbox);
+            settings.result_font_family = crate::fonts::result_font_family(&ini_value(
+                &values, "style", "result_font_family", settings.result_font_family,
+            )).to_string();
             settings.overlay_bg_color = ini_value(
                 &values,
                 "style",
@@ -507,7 +512,7 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         format!("{}={}\n", definition.model_key, ini_escape(&saved_model_for_provider(&settings.provider, definition.name)))
     }).collect::<String>();
     let mut contents = format!(
-        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nuse_textbox={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
+        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nresult_font_family={}\nuse_textbox={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
         ini_escape(&settings.provider.provider),
         models,
         ini_escape(&settings.provider.thinking_level),
@@ -518,6 +523,7 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         if settings.dark_theme { "true" } else { "false" },
         ini_escape(settings.ocr_language.trim()),
         settings.base_font_size,
+        ini_escape(&settings.result_font_family),
         if settings.use_textbox { "true" } else { "false" },
         ini_escape(&settings.overlay_bg_color),
         ini_escape(&settings.overlay_text_color),
@@ -610,6 +616,13 @@ pub(crate) fn save_dark_theme(dark_theme: bool) {
 pub(crate) fn save_ocr_language(language: &str) {
     update_settings(|settings| {
         settings.ocr_language = language.trim().to_string();
+    });
+}
+
+/// Persists the shared textbox and overlay font.
+pub(crate) fn save_result_font_family(family: &str) {
+    update_settings(|settings| {
+        settings.result_font_family = crate::fonts::result_font_family(family).to_string();
     });
 }
 

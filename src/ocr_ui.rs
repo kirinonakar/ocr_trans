@@ -24,6 +24,17 @@ pub(crate) fn register_callbacks(
     #[cfg(target_os = "windows")] main_hwnd: Option<windows::Win32::Foundation::HWND>,
     #[cfg(not(target_os = "windows"))] main_hwnd: Option<()>,
 ) {
+    let font_overlay = overlay_window.as_weak();
+    let font_textbox = textbox_window.as_weak();
+    main_window.on_result_font_changed(move |family| {
+        save_result_font_family(family.as_str());
+        if let Some(overlay) = font_overlay.upgrade() {
+            overlay.set_result_font_family(family.clone());
+        }
+        if let Some(textbox) = font_textbox.upgrade() {
+            textbox.set_result_font_family(family);
+        }
+    });
     let options_main = main_window.as_weak();
     let options_state = state.clone();
     main_window.on_translation_options_saved(move || {
