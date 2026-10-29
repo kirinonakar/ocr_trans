@@ -28,7 +28,7 @@ fn absolute_axis(value: i32, origin: i32, extent: i32) -> i32 {
     ((offset * 65536 + 32768) / extent).clamp(0, 65535) as i32
 }
 
-fn mouse_input(flags: MOUSE_EVENT_FLAGS, data: u32, point: Option<POINT>) -> INPUT {
+fn mouse_input(flags: MOUSE_EVENT_FLAGS, data: u32, point: Option<POINT>, desktop: RECT) -> INPUT {
     let mut mi = MOUSEINPUT {
         dwFlags: flags,
         mouseData: data,
@@ -36,23 +36,38 @@ fn mouse_input(flags: MOUSE_EVENT_FLAGS, data: u32, point: Option<POINT>) -> INP
         ..Default::default()
     };
     if let Some(point) = point {
-        unsafe {
-            mi.dx = absolute_axis(
-                point.x,
-                GetSystemMetrics(SM_XVIRTUALSCREEN),
-                GetSystemMetrics(SM_CXVIRTUALSCREEN),
-            );
-            mi.dy = absolute_axis(
-                point.y,
-                GetSystemMetrics(SM_YVIRTUALSCREEN),
-                GetSystemMetrics(SM_CYVIRTUALSCREEN),
-            );
-        }
+        mi.dx = absolute_axis(point.x, desktop.left, desktop.right - desktop.left);
+        mi.dy = absolute_axis(point.y, desktop.top, desktop.bottom - desktop.top);
         mi.dwFlags |= MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
     }
     INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 { mi },
+    }
+}
+
+struct InputBatch {
+    events: [INPUT; 2],
+    len: usize,
+}
+
+impl InputBatch {
+    fn new(screen: POINT, actual: POINT, desktop: RECT) -> Self {
+        let mut batch = Self {
+            events: [INPUT::default(); 2],
+            len: 0,
+        };
+        if (screen.x, screen.y) != (actual.x, actual.y) {
+            batch.push(mouse_input(MOUSE_EVENT_FLAGS(0), 0, Some(screen), desktop));
+        }
+        batch
+    }
+    fn push(&mut self, input: INPUT) {
+        self.events[self.len] = input;
+        self.len += 1;
+    }
+    fn as_slice(&self) -> &[INPUT] {
+        &self.events[..self.len]
     }
 }
 
@@ -102,7 +117,7 @@ impl NativePointer {
         self.active
     }
 
-    fn enter(&mut self, bridge: &InputBridge) -> Result<()> {
+    fn enter(&mut self, bridge: &mut InputBridge) -> Result<()> {
         // A layered transparent window passes input across process/thread
         // boundaries. HTTRANSPARENT alone only searches the same UI thread.
         unsafe {
@@ -152,7 +167,7 @@ impl NativePointer {
         .zip([0, 0, 0, 1 << 16, 2 << 16])
         .filter_map(|(message, data)| button_event(message, data))
         .filter(|(mask, _, _, _)| self.held & mask != 0)
-        .map(|(_, _, flags, data)| mouse_input(flags, data, None))
+        .map(|(_, _, flags, data)| mouse_input(flags, data, None, RECT::default()))
         .collect();
         if !releases.is_empty() {
             inject(&releases);
@@ -194,6 +209,7 @@ impl NativePointer {
                         x: origin.x.saturating_add(bridge.cursor.0.round() as i32),
                         y: origin.y.saturating_add(bridge.cursor.1.round() as i32),
                     }),
+                    desktop_bounds(),
                 )]);
             }
         }
@@ -213,26 +229,32 @@ impl NativePointer {
         if !self.active && !related && message == WM_MOUSEMOVE {
             return false;
         }
-        if !bridge.source.valid() || (self.active && !related) {
+        if !self.active
+            && message != WM_MOUSEMOVE
+            && !button_event(message, data.mouseData).is_some_and(|(_, down, _, _)| down)
+        {
+            return false;
+        }
+        if (message != WM_MOUSEMOVE && !bridge.source.valid()) || (self.active && !related) {
             let was_active = self.active;
             self.leave(bridge, true);
             return was_active;
         }
         if !self.active {
-            // Do not turn an existing drag from another window into a click.
-            if message != WM_MOUSEMOVE
-                && !button_event(message, data.mouseData).is_some_and(|(_, down, _, _)| down)
-            {
+            if message != WM_MOUSEMOVE {
+                bridge.refresh_geometry();
+            }
+            // A cheap cached bounds rejection keeps unrelated desktop motion
+            // out of WindowFromPoint and the source's message queue.
+            let Some(geometry) = bridge.geometry else {
+                return false;
+            };
+            let cursor = viewer_local_point(data.pt, geometry.viewer_origin);
+            bridge.cursor = cursor;
+            if bridge.source_point(false).is_none() {
                 return false;
             }
             if unsafe { WindowFromPoint(data.pt) } != bridge.viewer {
-                return false;
-            }
-            let Some(cursor) = viewer_point(bridge.viewer, data.pt) else {
-                return false;
-            };
-            bridge.cursor = cursor;
-            if bridge.source_point(false).is_none() {
                 return false;
             }
             if unsafe {
@@ -247,35 +269,46 @@ impl NativePointer {
                 bridge.error = Some(format!("Window interaction unavailable: {error}"));
                 return false;
             }
+            bridge.refresh_geometry();
         } else if message == WM_MOUSEMOVE {
             // Hardware points are relative to the real source cursor, whereas
             // virtual motion remains in unscaled preview pixels.
             advance_virtual(&mut bridge.cursor, data.pt, origin);
+        } else {
+            bridge.refresh_geometry();
+            bridge.set_overlay_rects(crate::win_utils::set_preview_topmost(bridge.viewer));
         }
         // The system cursor is over the source, but overlay controls are at the
         // displayed pointer position. Hand input back when that pointer reaches
         // one of our visible overlays so its close button/textbox stays usable.
-        let mut viewer_origin = POINT::default();
-        if unsafe { ClientToScreen(bridge.viewer, &mut viewer_origin) }.as_bool() {
+        if let Some(geometry) = bridge.geometry {
             let virtual_screen = POINT {
-                x: viewer_origin
+                x: geometry
+                    .viewer_origin
                     .x
                     .saturating_add(bridge.cursor.0.round() as i32),
-                y: viewer_origin
+                y: geometry
+                    .viewer_origin
                     .y
                     .saturating_add(bridge.cursor.1.round() as i32),
             };
-            let hit = unsafe { GetAncestor(WindowFromPoint(virtual_screen), GA_ROOT) };
-            let mut pid = 0;
-            unsafe {
-                GetWindowThreadProcessId(hit, Some(&mut pid));
-            }
-            if hit != bridge.viewer
-                && pid == std::process::id()
-                && unsafe { GetWindowLongW(hit, GWL_EXSTYLE) } & WS_EX_TOPMOST.0 as i32 != 0
+            if bridge
+                .overlay_rects
+                .iter()
+                .any(|rect| contains(*rect, virtual_screen))
             {
-                self.leave(bridge, true);
-                return true;
+                let hit = unsafe { GetAncestor(WindowFromPoint(virtual_screen), GA_ROOT) };
+                let mut pid = 0;
+                unsafe {
+                    GetWindowThreadProcessId(hit, Some(&mut pid));
+                }
+                if hit != bridge.viewer
+                    && pid == std::process::id()
+                    && unsafe { GetWindowLongW(hit, GWL_EXSTYLE) } & WS_EX_TOPMOST.0 as i32 != 0
+                {
+                    self.leave(bridge, true);
+                    return true;
+                }
             }
         }
         let Some(screen) = bridge.source_point(self.held != 0) else {
@@ -285,11 +318,11 @@ impl NativePointer {
         };
         // Never send a native press to an exposed caption/outside the source.
         // Owned popup windows (menus/tooltips) retain Windows' own hit testing.
-        if bridge.recipient(screen).is_none() && self.held == 0 {
+        if message != WM_MOUSEMOVE && self.held == 0 && !bridge.source_client_contains(screen) {
             self.leave(bridge, true);
             return true;
         }
-        if self.held == 0 {
+        if message != WM_MOUSEMOVE && self.held == 0 {
             let hit = unsafe { WindowFromPoint(screen) };
             if unsafe { GetAncestor(hit, GA_ROOT) } != bridge.source.window
                 && unsafe { GetAncestor(hit, GA_ROOTOWNER) } != bridge.source.window
@@ -298,13 +331,14 @@ impl NativePointer {
                 return true;
             }
         }
-        unsafe {
-            let _ = ClipCursor(None);
-        }
-        let mut events = vec![mouse_input(MOUSE_EVENT_FLAGS(0), 0, Some(screen))];
+        let Some(geometry) = bridge.geometry else {
+            self.leave(bridge, true);
+            return true;
+        };
+        let mut events = InputBatch::new(screen, origin, geometry.desktop);
         if let Some((mask, down, flags, mouse_data)) = button_event(message, data.mouseData) {
-            events.push(mouse_input(flags, mouse_data, None));
-            if inject(&events) {
+            events.push(mouse_input(flags, mouse_data, None, geometry.desktop));
+            if inject(events.as_slice()) {
                 if down {
                     self.held |= mask;
                 } else {
@@ -325,9 +359,10 @@ impl NativePointer {
                     },
                     ((data.mouseData >> 16) as i16 as i32) as u32,
                     None,
+                    geometry.desktop,
                 ));
             }
-            if !inject(&events) {
+            if events.len != 0 && !inject(events.as_slice()) {
                 bridge.error = Some("Windows blocked mouse input to the selected window".into());
                 self.leave(bridge, true);
             }
@@ -354,7 +389,12 @@ impl NativePointer {
                 self.leave(bridge, true);
                 return;
             }
-            if !inject(&[mouse_input(MOUSE_EVENT_FLAGS(0), 0, Some(screen))]) {
+            if !inject(&[mouse_input(
+                MOUSE_EVENT_FLAGS(0),
+                0,
+                Some(screen),
+                bridge.geometry.unwrap().desktop,
+            )]) {
                 self.leave(bridge, true);
             }
         }
@@ -375,6 +415,73 @@ impl Drop for NativePointer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stationary_clicks_and_wheel_are_injected_without_an_extra_move() {
+        let desktop = RECT {
+            left: -1920,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let point = POINT { x: -500, y: 400 };
+        for (flags, data) in [
+            (MOUSEEVENTF_LEFTDOWN, 0),
+            (MOUSEEVENTF_LEFTUP, 0),
+            (MOUSEEVENTF_WHEEL, (-120i32) as u32),
+        ] {
+            let mut batch = InputBatch::new(point, point, desktop);
+            batch.push(mouse_input(flags, data, None, desktop));
+            assert_eq!(batch.len, 1);
+            let mi = unsafe { batch.as_slice()[0].Anonymous.mi };
+            assert_eq!(mi.dwFlags, flags);
+            assert_eq!(mi.mouseData, data);
+        }
+        let mut batch = InputBatch::new(point, POINT { x: 0, y: 0 }, desktop);
+        batch.push(mouse_input(MOUSEEVENTF_LEFTDOWN, 0, None, desktop));
+        assert_eq!(batch.len, 2);
+        assert_ne!(
+            unsafe { batch.as_slice()[0].Anonymous.mi }.dwFlags & MOUSEEVENTF_MOVE,
+            MOUSE_EVENT_FLAGS(0)
+        );
+        assert_eq!(
+            unsafe { batch.as_slice()[1].Anonymous.mi }.dwFlags,
+            MOUSEEVENTF_LEFTDOWN
+        );
+    }
+
+    #[test]
+    fn fourfold_zoom_avoids_duplicate_native_pixel_moves() {
+        let desktop = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let view = crate::capture::CaptureRect {
+            x: 0,
+            y: 0,
+            width: 4000,
+            height: 2000,
+        };
+        let source = RECT {
+            left: 0,
+            top: 0,
+            right: 1000,
+            bottom: 500,
+        };
+        let mut actual = POINT::default();
+        let mut injected = 0;
+        for x in 0..=1000 {
+            let screen = map_point(view, source, (x as f64, 0.0), false).unwrap();
+            let batch = InputBatch::new(screen, actual, desktop);
+            if batch.len != 0 {
+                injected += 1;
+                actual = screen;
+            }
+        }
+        assert_eq!(injected, 250);
+        assert_eq!(actual.x, 250);
+    }
     #[test]
     fn virtual_motion_uses_each_hardware_origin_even_when_native_moves_intervene() {
         let mut cursor = (200.5, 100.25);

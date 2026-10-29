@@ -28,6 +28,23 @@ pub(super) struct HardwareEvent {
     pub data: MSLLHOOKSTRUCT,
     pub origin: POINT,
 }
+
+fn queue_pending(queue: &mut VecDeque<HardwareEvent>, event: HardwareEvent) {
+    if event.message == WM_MOUSEMOVE {
+        if let Some(last) = queue.back_mut().filter(|last| last.message == WM_MOUSEMOVE) {
+            // Positions were sampled against different native cursor origins.
+            // Sum relative deltas, rather than keeping only the last position.
+            let sum = |first: i32, next: i32, next_origin: i32| {
+                (i64::from(first) + i64::from(next) - i64::from(next_origin))
+                    .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+            };
+            last.data.pt.x = sum(last.data.pt.x, event.data.pt.x, event.origin.x);
+            last.data.pt.y = sum(last.data.pt.y, event.data.pt.y, event.origin.y);
+            return;
+        }
+    }
+    queue.push_back(event);
+}
 const HOTKEY_ID: i32 = 0x4f43;
 const SUBCLASS_ID: usize = 0x4f435249;
 type SubclassProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM, usize, usize) -> LRESULT;
@@ -92,10 +109,12 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
         // Sample BEFORE Windows applies this hardware event. Store the origin
         // with queued events: intervening injected moves must not change their
         // deltas when a re-entrant event is replayed later.
-        let _dpi = super::TargetDpi::physical();
-        let mut origin = POINT::default();
-        if GetCursorPos(&mut origin).is_err() {
-            return CallNextHookEx(None, code, wparam, lparam);
+        let mut origin = data.pt;
+        if NATIVE_ACTIVE.get() && message == WM_MOUSEMOVE {
+            let _dpi = super::TargetDpi::physical();
+            if GetCursorPos(&mut origin).is_err() {
+                return CallNextHookEx(None, code, wparam, lparam);
+            }
         }
         let event = HardwareEvent {
             message,
@@ -105,7 +124,7 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
         match with_input(|input| input.native_mouse(event)) {
             Some(true) => return LRESULT(1),
             None if NATIVE_ACTIVE.get() => {
-                PENDING.with(|slot| slot.borrow_mut().push_back(event));
+                PENDING.with(|slot| queue_pending(&mut slot.borrow_mut(), event));
                 return LRESULT(1);
             }
             _ => {}
@@ -179,5 +198,68 @@ impl Drop for NativeHooks {
                 RemoveWindowSubclass(self.viewer, Some(window_proc), SUBCLASS_ID);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn event(message: u32, origin_x: i32, dx: i32, dy: i32) -> HardwareEvent {
+        HardwareEvent {
+            message,
+            origin: POINT {
+                x: origin_x,
+                y: 300,
+            },
+            data: MSLLHOOKSTRUCT {
+                pt: POINT {
+                    x: origin_x + dx,
+                    y: 300 + dy,
+                },
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn pending_motion_combines_deltas_without_crossing_click_or_wheel_boundaries() {
+        let mut queue = VecDeque::new();
+        for input in [
+            event(WM_MOUSEMOVE, -1000, 2, 3),
+            event(WM_MOUSEMOVE, -900, 4, 1),
+            event(WM_LBUTTONDOWN, -850, 0, 0),
+            event(WM_MOUSEMOVE, -850, -3, 2),
+            event(WM_MOUSEMOVE, -860, 1, -1),
+            event(WM_MOUSEWHEEL, -850, 0, 0),
+            event(WM_LBUTTONUP, -850, 0, 0),
+        ] {
+            queue_pending(&mut queue, input);
+        }
+        assert_eq!(
+            queue.iter().map(|event| event.message).collect::<Vec<_>>(),
+            [
+                WM_MOUSEMOVE,
+                WM_LBUTTONDOWN,
+                WM_MOUSEMOVE,
+                WM_MOUSEWHEEL,
+                WM_LBUTTONUP
+            ]
+        );
+        let first = queue[0];
+        assert_eq!(
+            (
+                first.data.pt.x - first.origin.x,
+                first.data.pt.y - first.origin.y
+            ),
+            (6, 4)
+        );
+        let second = queue[2];
+        assert_eq!(
+            (
+                second.data.pt.x - second.origin.x,
+                second.data.pt.y - second.origin.y
+            ),
+            (-2, 1)
+        );
     }
 }

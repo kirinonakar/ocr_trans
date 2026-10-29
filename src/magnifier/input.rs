@@ -31,6 +31,32 @@ pub(super) struct InputBridge {
     frame_size: (u32, u32),
     cursor: (f64, f64),
     error: Option<String>,
+    geometry: Option<InputGeometry>,
+    overlay_rects: Vec<RECT>,
+}
+
+#[derive(Clone, Copy)]
+struct InputGeometry {
+    source: RECT,
+    viewer_origin: POINT,
+    desktop: RECT,
+}
+
+fn contains(rect: RECT, point: POINT) -> bool {
+    point.x >= rect.left && point.y >= rect.top && point.x < rect.right && point.y < rect.bottom
+}
+
+fn desktop_bounds() -> RECT {
+    unsafe {
+        let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        RECT {
+            left,
+            top,
+            right: left + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            bottom: top + GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        }
+    }
 }
 
 struct TargetDpi(DPI_AWARENESS_CONTEXT);
@@ -104,16 +130,6 @@ fn viewer_local_point(screen: POINT, origin: POINT) -> (f64, f64) {
     )
 }
 
-fn viewer_point(viewer: HWND, screen: POINT) -> Option<(f64, f64)> {
-    let _dpi = TargetDpi::physical();
-    let mut origin = POINT::default();
-    unsafe {
-        ClientToScreen(viewer, &mut origin)
-            .as_bool()
-            .then(|| viewer_local_point(screen, origin))
-    }
-}
-
 fn map_point(
     view: crate::capture::CaptureRect,
     source: RECT,
@@ -148,7 +164,7 @@ impl InputBridge {
         unsafe {
             SetWindowLongW(viewer, GWL_EXSTYLE, style | WS_EX_NOACTIVATE.0 as i32);
         }
-        let this = Self {
+        let mut this = Self {
             native: Some(native),
             hooks: Some(hooks),
             source,
@@ -158,21 +174,26 @@ impl InputBridge {
             frame_size: (0, 0),
             cursor: (-1.0, -1.0),
             error: None,
+            geometry: None,
+            overlay_rects: Vec::new(),
         };
         this.activate();
         Ok(this)
     }
 
     pub fn set_view(&mut self, view: crate::capture::CaptureRect, frame_size: (u32, u32)) {
-        if self.frame_size != frame_size
+        let changed = self.frame_size != frame_size
             || self.view.is_some_and(|old| {
                 (old.x, old.y, old.width, old.height) != (view.x, view.y, view.width, view.height)
-            })
-        {
+            });
+        if changed {
             self.suspend_mouse();
         }
         self.view = Some(view);
         self.frame_size = frame_size;
+        if changed {
+            self.refresh_geometry();
+        }
     }
 
     pub fn source_covered(&self) -> bool {
@@ -183,56 +204,49 @@ impl InputBridge {
     }
 
     fn source_point(&self, dragging: bool) -> Option<POINT> {
-        map_point(
-            self.view?,
-            capture_bounds(self.source.window, self.frame_size)?,
-            self.cursor,
-            dragging,
-        )
+        map_point(self.view?, self.geometry?.source, self.cursor, dragging)
     }
 
-    fn recipient(&self, screen: POINT) -> Option<(HWND, POINT)> {
-        let mut child = self.source.window;
-        for _ in 0..16 {
-            let mut point = screen;
-            let mut origin = POINT::default();
-            unsafe {
-                {
-                    let _dpi = TargetDpi::physical();
-                    if !ClientToScreen(child, &mut origin).as_bool() {
-                        return None;
-                    }
-                }
-                if !PhysicalToLogicalPointForPerMonitorDPI(Some(child), &mut point).as_bool() {
-                    return None;
-                }
-                if !PhysicalToLogicalPointForPerMonitorDPI(Some(child), &mut origin).as_bool() {
-                    return None;
-                }
-                point.x -= origin.x;
-                point.y -= origin.y;
-                let _dpi = TargetDpi::enter(child);
-                let next = ChildWindowFromPointEx(
-                    child,
-                    point,
-                    CWP_SKIPDISABLED | CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT,
-                );
-                if next.0.is_null() || next == child {
-                    let mut client = RECT::default();
-                    GetClientRect(child, &mut client).ok()?;
-                    if point.x < 0
-                        || point.y < 0
-                        || point.x >= client.right
-                        || point.y >= client.bottom
-                    {
-                        return None;
-                    }
-                    return Some((child, point));
-                }
-                child = next;
+    fn refresh_geometry(&mut self) {
+        let _dpi = TargetDpi::physical();
+        self.geometry = (|| {
+            let source = capture_bounds(self.source.window, self.frame_size)?;
+            let mut viewer_origin = POINT::default();
+            if !unsafe { ClientToScreen(self.viewer, &mut viewer_origin) }.as_bool() {
+                return None;
             }
+            Some(InputGeometry {
+                source,
+                viewer_origin,
+                desktop: desktop_bounds(),
+            })
+        })();
+    }
+
+    // Native Windows input selects child controls itself. Only button/wheel
+    // events need this live client check; traversing every child on every move
+    // adds cross-process work without affecting native routing.
+    fn source_client_contains(&self, mut point: POINT) -> bool {
+        let window = self.source.window;
+        let mut origin = POINT::default();
+        unsafe {
+            let _dpi = TargetDpi::physical();
+            if !ClientToScreen(window, &mut origin).as_bool()
+                || !PhysicalToLogicalPointForPerMonitorDPI(Some(window), &mut point).as_bool()
+                || !PhysicalToLogicalPointForPerMonitorDPI(Some(window), &mut origin).as_bool()
+            {
+                return false;
+            }
+            point.x -= origin.x;
+            point.y -= origin.y;
+            let _target_dpi = TargetDpi::enter(window);
+            let mut client = RECT::default();
+            GetClientRect(window, &mut client).is_ok() && contains(client, point)
         }
-        None
+    }
+
+    pub fn set_overlay_rects(&mut self, rects: Vec<RECT>) {
+        self.overlay_rects = rects;
     }
 
     fn native_mouse(&mut self, event: hooks::HardwareEvent) -> bool {
@@ -255,16 +269,17 @@ impl InputBridge {
         self.error.take()
     }
 
-    fn activate(&self) {
+    fn activate(&mut self) {
         unsafe {
             if GetForegroundWindow() != self.source.window {
                 let _ = SetForegroundWindow(self.source.window);
             }
         }
-        crate::win_utils::set_preview_topmost(self.viewer);
+        self.overlay_rects = crate::win_utils::set_preview_topmost(self.viewer);
     }
 
     pub fn flush(&mut self) {
+        self.refresh_geometry();
         if let Some(mut native) = self.native.take() {
             let foreground = unsafe { GetForegroundWindow() };
             let related = foreground == self.viewer
@@ -275,7 +290,20 @@ impl InputBridge {
             }
             if native.active() && related {
                 unsafe {
-                    let _ = ClipCursor(None);
+                    let mut clip = RECT::default();
+                    if let Some(geometry) = self.geometry {
+                        if GetClipCursor(&mut clip).is_ok()
+                            && (clip.left, clip.top, clip.right, clip.bottom)
+                                != (
+                                    geometry.desktop.left,
+                                    geometry.desktop.top,
+                                    geometry.desktop.right,
+                                    geometry.desktop.bottom,
+                                )
+                        {
+                            let _ = ClipCursor(None);
+                        }
+                    }
                 }
                 native.maintain(self);
             }

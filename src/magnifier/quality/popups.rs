@@ -16,12 +16,21 @@ struct Popup {
     window: HWND,
     capture: WindowCapture,
     pixels: Option<RgbaImage>,
+    rect: Option<RECT>,
+    visible: bool,
 }
 
 pub(super) struct Popups {
     source: HWND,
     windows: Vec<Popup>,
     last_scan: Instant,
+    source_rect: Option<RECT>,
+}
+
+pub(super) enum CompositeUpdate {
+    Unchanged,
+    Clear,
+    Frame(RgbaImage),
 }
 
 fn bounds(window: HWND) -> Option<RECT> {
@@ -142,16 +151,24 @@ impl Popups {
             source: HWND(source as _),
             windows: Vec::new(),
             last_scan: Instant::now() - Duration::from_secs(1),
+            source_rect: None,
         }
     }
 
-    pub fn composite(&mut self, original: &RgbaImage) -> Option<RgbaImage> {
+    pub fn composite(
+        &mut self,
+        original: &RgbaImage,
+        capture: &WindowCapture,
+        source_changed: bool,
+    ) -> CompositeUpdate {
         // All worker coordinates are physical pixels, including DPI-unaware apps.
         let Some(source_rect) =
             super::super::input::capture_bounds(self.source, original.dimensions())
         else {
-            return None;
+            return CompositeUpdate::Clear;
         };
+        let mut dirty = source_changed || self.source_rect != Some(source_rect);
+        self.source_rect = Some(source_rect);
         if self.last_scan.elapsed() >= Duration::from_millis(100) {
             self.last_scan = Instant::now();
             let mut search = Search {
@@ -165,15 +182,18 @@ impl Popups {
                 search.thread = GetWindowThreadProcessId(self.source, Some(&mut search.pid));
                 let _ = EnumWindows(Some(enumerate), LPARAM(&mut search as *mut _ as isize));
             }
+            let previous: Vec<_> = self.windows.iter().map(|popup| popup.window).collect();
             self.windows
                 .retain(|popup| search.windows.contains(&popup.window));
             for window in &search.windows {
                 if !self.windows.iter().any(|popup| popup.window == *window) {
-                    match WindowCapture::new(window.0 as isize) {
+                    match capture.related_window(window.0 as isize) {
                         Ok(capture) => self.windows.push(Popup {
                             window: *window,
                             capture,
                             pixels: None,
+                            rect: None,
+                            visible: false,
                         }),
                         Err(error) => log::debug!("Popup capture unavailable: {error:#}"),
                     }
@@ -188,24 +208,44 @@ impl Popups {
                         .position(|window| *window == popup.window),
                 )
             });
+            dirty |= !previous
+                .iter()
+                .copied()
+                .eq(self.windows.iter().map(|popup| popup.window));
         }
-        let mut result = None;
         for popup in &mut self.windows {
-            if !unsafe { IsWindowVisible(popup.window) }.as_bool() {
+            let visible = unsafe { IsWindowVisible(popup.window) }.as_bool();
+            dirty |= visible != popup.visible;
+            popup.visible = visible;
+            if !visible {
                 continue;
             }
             match popup.capture.next_frame() {
-                Ok(Some(pixels)) => popup.pixels = Some(pixels),
+                Ok(Some(pixels)) => {
+                    if popup.pixels.as_ref() != Some(&pixels) {
+                        popup.pixels = Some(pixels);
+                        dirty = true;
+                    }
+                }
                 Ok(None) => {}
                 Err(_) => {
-                    popup.pixels = None;
+                    dirty |= popup.pixels.take().is_some();
                     continue;
                 }
             }
             if let Some(pixels) = &popup.pixels {
-                if let Some(rect) =
-                    super::super::input::capture_bounds(popup.window, pixels.dimensions())
-                {
+                let rect = super::super::input::capture_bounds(popup.window, pixels.dimensions());
+                dirty |= popup.rect != rect;
+                popup.rect = rect;
+            }
+        }
+        if !dirty {
+            return CompositeUpdate::Unchanged;
+        }
+        let mut result = None;
+        for popup in &self.windows {
+            if popup.visible {
+                if let (Some(pixels), Some(rect)) = (&popup.pixels, popup.rect) {
                     // Overlay clips all four sides, including negative monitors.
                     overlay_popup(
                         result.get_or_insert_with(|| original.clone()),
@@ -216,7 +256,7 @@ impl Popups {
                 }
             }
         }
-        result
+        result.map_or(CompositeUpdate::Clear, CompositeUpdate::Frame)
     }
 }
 

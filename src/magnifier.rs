@@ -11,7 +11,7 @@ use std::{
     cell::{Cell, RefCell},
     rc::Rc,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use windows::Win32::{
     Foundation::{HWND, RECT},
@@ -90,6 +90,8 @@ pub(crate) struct WindowMagnifier {
     quality: RefCell<Option<quality::QualitySession>>,
     quality_frame_key: Cell<Option<quality::FrameKey>>,
     quality_pixels: RefCell<Option<Arc<image::RgbaImage>>>,
+    thumbnail_properties: Cell<Option<(i32, i32, i32, i32, bool)>>,
+    last_stack_check: Cell<Instant>,
     quality_source_size: Cell<Option<(u32, u32)>>,
     zoom: Cell<f64>,
     pending_zoom_resize: Cell<bool>,
@@ -201,6 +203,8 @@ impl WindowMagnifier {
             quality: RefCell::new(None),
             quality_frame_key: Cell::new(None),
             quality_pixels: RefCell::new(None),
+            thumbnail_properties: Cell::new(None),
+            last_stack_check: Cell::new(Instant::now() - Duration::from_secs(1)),
             quality_source_size: Cell::new(None),
             zoom: Cell::new(2.0),
             pending_zoom_resize: Cell::new(false),
@@ -301,8 +305,10 @@ impl WindowMagnifier {
                 } else {
                     None
                 };
-                unsafe {
-                    let _ = DwmFlush();
+                if filtered.is_none() {
+                    unsafe {
+                        let _ = DwmFlush();
+                    }
                 }
                 let folder = this.state.lock().unwrap().capture_folder.clone();
                 this.window.set_capture_busy(true);
@@ -411,7 +417,7 @@ impl WindowMagnifier {
                         let _ = this.update();
                         if this.input.borrow().is_some() {
                             if let Ok(viewer) = hwnd(&this.window) {
-                                win_utils::set_preview_topmost(viewer);
+                                let _ = win_utils::set_preview_topmost(viewer);
                             }
                         } else {
                             this.window
@@ -459,7 +465,7 @@ impl WindowMagnifier {
             win_utils::set_title_bar_theme(owner, dark);
             win_utils::set_tool_window(owner, true);
             win_utils::disable_window_transitions(owner);
-            win_utils::set_preview_topmost(owner);
+            let _ = win_utils::set_preview_topmost(owner);
             if self.movement_guard.borrow().as_ref().map(|guard| guard.0) != Some(owner) {
                 *self.movement_guard.borrow_mut() = Some(window_bounds::MovementGuard::new(owner)?);
             }
@@ -490,7 +496,7 @@ impl WindowMagnifier {
         // frame and geometry on the UI thread, including while the slider is held.
         self.timer.start(
             slint::TimerMode::Repeated,
-            Duration::from_millis(16),
+            Duration::from_millis(8),
             move || {
                 let Some(this) = weak.upgrade() else {
                     return;
@@ -592,10 +598,20 @@ impl WindowMagnifier {
         }
         // Slint can raise the viewer on activation/resize, even before native
         // source interaction starts or while falling back to a DWM thumbnail.
-        if let Ok(viewer) = hwnd(&self.window) {
-            win_utils::set_preview_topmost(viewer);
-        }
+        let overlay_rects = if self.last_stack_check.get().elapsed() >= Duration::from_millis(32) {
+            self.last_stack_check.set(Instant::now());
+            Some(
+                hwnd(&self.window)
+                    .map(win_utils::set_preview_topmost)
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        };
         let restart_capture = if let Some(input) = self.input.borrow_mut().as_mut() {
+            if let Some(rects) = overlay_rects {
+                input.set_overlay_rects(rects);
+            }
             input.flush();
             if let Some(error) = input.take_error() {
                 self.window.set_status_text(error.into());
@@ -665,6 +681,7 @@ impl WindowMagnifier {
         self.window.set_source_available(!minimized);
         self.capture_rect.set(None);
         if minimized {
+            self.thumbnail_properties.set(None);
             self.window.set_quality_active(false);
             if let Some(quality) = self.quality.borrow().as_ref() {
                 quality.request(None);
@@ -745,15 +762,10 @@ impl WindowMagnifier {
                 .take_frame()
                 .filter(|frame| frame.key.source == key.source)
             {
-                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    frame.pixels.as_raw(),
-                    frame.pixels.width(),
-                    frame.pixels.height(),
-                );
                 self.window
-                    .set_quality_image(slint::Image::from_rgba8(buffer));
+                    .set_quality_image(slint::Image::from_rgba8(frame.buffer));
                 self.quality_frame_key.set(Some(frame.key));
-                *self.quality_pixels.borrow_mut() = Some(Arc::new(frame.pixels));
+                *self.quality_pixels.borrow_mut() = Some(frame.pixels);
             }
         }
         let (quality_active, quality_exact) =
@@ -781,28 +793,33 @@ impl WindowMagnifier {
                     .map_or(key.source, |frame| frame.source),
             );
         }
-        unsafe {
-            DwmUpdateThumbnailProperties(
-                thumbnail.handle,
-                &DWM_THUMBNAIL_PROPERTIES {
-                    dwFlags: DWM_TNP_RECTDESTINATION
-                        | DWM_TNP_VISIBLE
-                        | DWM_TNP_OPACITY
-                        | DWM_TNP_SOURCECLIENTAREAONLY,
-                    rcDestination: RECT {
-                        left: rect.x,
-                        top: rect.y,
-                        right: rect.x + rect.width,
-                        bottom: rect.y + rect.height,
+        let visible = !quality_active || !was_quality_active;
+        let thumbnail_properties = (rect.x, rect.y, rect.width, rect.height, visible);
+        if self.thumbnail_properties.get() != Some(thumbnail_properties) {
+            unsafe {
+                DwmUpdateThumbnailProperties(
+                    thumbnail.handle,
+                    &DWM_THUMBNAIL_PROPERTIES {
+                        dwFlags: DWM_TNP_RECTDESTINATION
+                            | DWM_TNP_VISIBLE
+                            | DWM_TNP_OPACITY
+                            | DWM_TNP_SOURCECLIENTAREAONLY,
+                        rcDestination: RECT {
+                            left: rect.x,
+                            top: rect.y,
+                            right: rect.x + rect.width,
+                            bottom: rect.y + rect.height,
+                        },
+                        opacity: 255,
+                        // Let Slint paint the first image before removing the native
+                        // preview. Subsequent zooms keep using the same image surface.
+                        fVisible: visible.into(),
+                        fSourceClientAreaOnly: false.into(),
+                        ..Default::default()
                     },
-                    opacity: 255,
-                    // Let Slint paint the first image before removing the native
-                    // preview. Subsequent zooms keep using the same image surface.
-                    fVisible: (!quality_active || !was_quality_active).into(),
-                    fSourceClientAreaOnly: false.into(),
-                    ..Default::default()
-                },
-            )?;
+                )?;
+            }
+            self.thumbnail_properties.set(Some(thumbnail_properties));
         }
         self.capture_rect.set(Some(capture::CaptureRect {
             x: position.x + rect.x,
@@ -826,6 +843,7 @@ impl WindowMagnifier {
         self.quality.borrow_mut().take();
         self.quality_frame_key.set(None);
         self.quality_pixels.borrow_mut().take();
+        self.thumbnail_properties.set(None);
         self.quality_source_size.set(None);
         self.window.set_quality_active(false);
         self.window.set_quality_exact(false);

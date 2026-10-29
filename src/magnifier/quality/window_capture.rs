@@ -102,6 +102,24 @@ impl WindowCapture {
         let dxgi: IDXGIDevice = device.cast()?;
         let winrt_device: IDirect3DDevice =
             unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi)? }.cast()?;
+        Self::with_device(source, device, context, winrt_device)
+    }
+
+    pub fn related_window(&self, source: isize) -> Result<Self> {
+        Self::with_device(
+            source,
+            self.device.clone(),
+            self.context.clone(),
+            self.winrt_device.clone(),
+        )
+    }
+
+    fn with_device(
+        source: isize,
+        device: ID3D11Device,
+        context: ID3D11DeviceContext,
+        winrt_device: IDirect3DDevice,
+    ) -> Result<Self> {
         let interop = factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
         let item: GraphicsCaptureItem = unsafe { interop.CreateForWindow(HWND(source as _))? };
         let size = item.Size()?;

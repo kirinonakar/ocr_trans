@@ -141,7 +141,7 @@ pub fn set_topmost(hwnd: HWND) {
 
 /// Keeps the preview above external source windows and below this app's visible
 /// topmost overlays, preserving the overlays' relative order and keyboard focus.
-pub fn set_preview_topmost(viewer: HWND) {
+pub fn set_preview_topmost(viewer: HWND) -> Vec<windows::Win32::Foundation::RECT> {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetTopWindow, GetWindow, GetWindowThreadProcessId, IsWindowVisible, SetWindowPos,
         GW_HWNDNEXT, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
@@ -151,9 +151,12 @@ pub fn set_preview_topmost(viewer: HWND) {
         let mut process = 0;
         GetWindowThreadProcessId(viewer, Some(&mut process));
         if process == 0 {
-            return;
+            return Vec::new();
         }
         let mut overlays = Vec::new();
+        let mut input_rects = Vec::new();
+        let mut saw_viewer = false;
+        let mut needs_raise = false;
         let mut window = GetTopWindow(None).unwrap_or_default();
         // The topmost band precedes ordinary windows. Bound the walk in case
         // another process changes its window list while we inspect it.
@@ -163,10 +166,28 @@ pub fn set_preview_topmost(viewer: HWND) {
             }
             let mut owner_process = 0;
             GetWindowThreadProcessId(window, Some(&mut owner_process));
-            if window != viewer && owner_process == process && IsWindowVisible(window).as_bool() {
+            let visible = IsWindowVisible(window).as_bool();
+            if window == viewer {
+                saw_viewer = true;
+            } else if owner_process == process && visible {
                 overlays.push(window);
+                needs_raise |= saw_viewer;
+                if GetWindowLongW(window, GWL_EXSTYLE) & WS_EX_TRANSPARENT.0 as i32 == 0 {
+                    let mut rect = windows::Win32::Foundation::RECT::default();
+                    if windows::Win32::UI::WindowsAndMessaging::GetWindowRect(window, &mut rect).is_ok() {
+                        input_rects.push(rect);
+                    }
+                }
+            } else if visible && !saw_viewer {
+                needs_raise = true;
             }
             window = GetWindow(window, GW_HWNDNEXT).unwrap_or_default();
+        }
+        // Most frames already have the right order. Reissuing SetWindowPos for
+        // every overlay generates window messages/layout work and can stall the
+        // same UI thread which owns the low-level input hook.
+        if saw_viewer && !needs_raise {
+            return input_rects;
         }
         // Raise from back to front so translation/textbox/toolbar windows keep
         // their existing relative order. Insert the preview below the last one.
@@ -183,6 +204,7 @@ pub fn set_preview_topmost(viewer: HWND) {
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
         );
+        input_rects
     }
 }
 

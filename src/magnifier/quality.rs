@@ -25,7 +25,8 @@ pub(super) struct FrameKey {
 
 pub(super) struct ProcessedFrame {
     pub key: FrameKey,
-    pub pixels: RgbaImage,
+    pub pixels: Arc<RgbaImage>,
+    pub buffer: slint::SharedPixelBuffer<slint::Rgba8Pixel>,
 }
 
 #[derive(Default)]
@@ -95,9 +96,10 @@ fn run(source: isize, stop: &AtomicBool, shared: &Mutex<Shared>) -> Result<()> {
     while !stop.load(Ordering::Relaxed) {
         let started = Instant::now();
         if shared.lock().unwrap().output.is_none() {
-            std::thread::sleep(Duration::from_millis(16));
+            std::thread::sleep(Duration::from_millis(4));
             continue;
         }
+        let mut source_changed = false;
         if let Some(frame) = capture.next_frame()? {
             shared.lock().unwrap().source = Some(frame.dimensions());
             // Static windows often produce duplicate frames. Keep the last original
@@ -105,14 +107,22 @@ fn run(source: isize, stop: &AtomicBool, shared: &Mutex<Shared>) -> Result<()> {
             if original.as_ref() != Some(&frame) {
                 original = Some(frame);
                 rendered = None;
+                source_changed = true;
             }
         }
         let output = shared.lock().unwrap().output;
         if let Some(original) = &original {
-            let pixels = popups.composite(original);
-            if composed != pixels {
-                composed = pixels;
-                rendered = None;
+            match popups.composite(original, &capture, source_changed) {
+                popups::CompositeUpdate::Unchanged => {}
+                popups::CompositeUpdate::Clear => {
+                    if composed.take().is_some() {
+                        rendered = None;
+                    }
+                }
+                popups::CompositeUpdate::Frame(pixels) => {
+                    composed = Some(pixels);
+                    rendered = None;
+                }
             }
         }
         if let (Some(original), Some(output)) = (composed.as_ref().or(original.as_ref()), output) {
@@ -121,19 +131,32 @@ fn run(source: isize, stop: &AtomicBool, shared: &Mutex<Shared>) -> Result<()> {
                 output,
             };
             if rendered != Some(key) {
+                // Use one stable filter for every frame. Switching sharpness
+                // after a timer makes fine text/edges visibly shimmer.
                 let pixels = resize_original(&mut resizer, original, output)?;
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
+                // Prepare Slint's shared pixels on the capture worker. The UI
+                // thread only swaps the ready buffer, never copies a full frame.
+                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                    pixels.as_raw(),
+                    pixels.width(),
+                    pixels.height(),
+                );
                 // A newer slider position supersedes work still in flight.
                 let mut state = shared.lock().unwrap();
                 if state.output == Some(output) {
-                    state.latest = Some(ProcessedFrame { key, pixels });
+                    state.latest = Some(ProcessedFrame {
+                        key,
+                        pixels: Arc::new(pixels),
+                        buffer,
+                    });
                     rendered = Some(key);
                 }
             }
         }
-        if let Some(delay) = Duration::from_millis(16).checked_sub(started.elapsed()) {
+        if let Some(delay) = Duration::from_millis(8).checked_sub(started.elapsed()) {
             std::thread::sleep(delay);
         }
     }
@@ -168,6 +191,56 @@ pub(super) fn resize_original(
 mod tests {
     use super::*;
     use image::Rgba;
+
+    #[test]
+    fn repeated_frames_keep_the_same_quality_after_motion() {
+        let source = RgbaImage::from_fn(37, 21, |x, y| {
+            Rgba([if (x + y) % 3 == 0 { 0 } else { 255 }, 60, 90, 255])
+        });
+        let mut resizer = Resizer::new();
+        let expected = resize_original(&mut resizer, &source, (63, 36)).unwrap();
+        for shift in 1..=8 {
+            let moving = RgbaImage::from_fn(37, 21, |x, y| *source.get_pixel((x + shift) % 37, y));
+            resize_original(&mut resizer, &moving, (63, 36)).unwrap();
+            // Returning to the same content must not change sharpness, even
+            // after the resizer processed motion or another output size.
+            resize_original(&mut resizer, &moving, (74, 42)).unwrap();
+            assert_eq!(
+                resize_original(&mut resizer, &source, (63, 36)).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "Measures CPU Lanczos resizing on synthetic frames; does not operate desktop windows"]
+    fn measure_high_quality_preview() {
+        for (source_size, output) in [
+            ((800, 600), (1600, 1200)),
+            ((1920, 1080), (2560, 1440)),
+            ((3840, 2160), (1920, 1080)),
+        ] {
+            let original = RgbaImage::from_fn(source_size.0, source_size.1, |x, y| {
+                let value = if (x / 3 + y / 17) % 7 == 0 { 30 } else { 245 };
+                Rgba([value, value, value, 255])
+            });
+            let mut resizer = Resizer::new();
+            resize_original(&mut resizer, &original, output).unwrap();
+            let mut timings = Vec::new();
+            for _ in 0..9 {
+                let started = Instant::now();
+                std::hint::black_box(resize_original(&mut resizer, &original, output).unwrap());
+                timings.push(started.elapsed());
+            }
+            timings.sort();
+            println!(
+                "preview {:?}->{:?}: Lanczos {:.3} ms",
+                source_size,
+                output,
+                timings[timings.len() / 2].as_secs_f64() * 1000.0
+            );
+        }
+    }
 
     #[test]
     fn one_to_one_keeps_text_pixels_byte_exact() {
@@ -222,12 +295,14 @@ mod tests {
                 Rgba([255, 255, 255, 255])
             }
         });
-        let scaled = resize_original(&mut Resizer::new(), &source, (31, 31)).unwrap();
-        for pixel in scaled
-            .pixels()
-            .filter(|pixel| pixel[3] > 16 && pixel[3] < 239)
         {
-            assert!(pixel[0].abs_diff(pixel[1]) <= 2 && pixel[1].abs_diff(pixel[2]) <= 2);
+            let scaled = resize_original(&mut Resizer::new(), &source, (31, 31)).unwrap();
+            for pixel in scaled
+                .pixels()
+                .filter(|pixel| pixel[3] > 16 && pixel[3] < 239)
+            {
+                assert!(pixel[0].abs_diff(pixel[1]) <= 2 && pixel[1].abs_diff(pixel[2]) <= 2);
+            }
         }
     }
 }
