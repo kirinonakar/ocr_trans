@@ -45,7 +45,7 @@ Capture toolbar (dark theme)
   - One-shot OCR, OCR+Translate, VLM, color picker, ruler.
   - **Window magnifier (Windows)**: Zoom **50–400%** in 1% steps.
     - Translation overlays, the result textbox and other visible app overlays stay above the magnified preview without taking keyboard focus from the source window.
-    - **Ctrl+Alt+F12** closes the magnifier and restores the source window. Cursor visibility and held mouse buttons are restored on close or focus loss; the recovery helper also restores cursor visibility after an unexpected exit. Elevated targets and games that reject injected input or require raw relative input may still need native, unmagnified interaction.
+    - **Ctrl+Alt+F12** closes the magnifier and restores the source window.
   - For one-shot OCR and OCR+Translate, the language dropdown lists only installed Windows OCR packs with short labels such as **KO**, **JP**, and **EN**.
   - OCR+Translate preserves and copies the recognized source text if translation fails, with the error shown in the toolbar status.
   - PNG/MP4 saved as `YYYY-MM-DD_001...` + clipboard copy; recording looks for `ffmpeg.exe` beside the application first, then on `PATH`. Single-monitor recording first tries ddagrab/NVENC and retries with software capture/libx264 if startup fails. NVIDIA hardware is optional; the FFmpeg build must include libx264 for software recording.
