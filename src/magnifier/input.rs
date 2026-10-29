@@ -19,7 +19,10 @@ use windows::Win32::{
 };
 mod hooks;
 mod native;
-pub(super) use hooks::{set_owner, take_close_requested};
+pub(super) use hooks::{
+    geometry_changed, geometry_version, present_frame, request_update, set_owner,
+    take_close_requested,
+};
 
 pub(super) struct InputBridge {
     native: Option<native::NativePointer>,
@@ -32,6 +35,7 @@ pub(super) struct InputBridge {
     cursor: (f64, f64),
     error: Option<String>,
     geometry: Option<InputGeometry>,
+    geometry_version: u64,
     overlay_rects: Vec<RECT>,
 }
 
@@ -158,7 +162,7 @@ fn map_point(
 impl InputBridge {
     pub fn new(source: HWND, viewer: HWND) -> Result<Self> {
         let native = native::NativePointer::new()?;
-        let hooks = hooks::NativeHooks::install(viewer)?;
+        let hooks = hooks::NativeHooks::install(source, viewer)?;
         let source = SourceWindow::park(source, viewer)?;
         let style = unsafe { GetWindowLongW(viewer, GWL_EXSTYLE) };
         unsafe {
@@ -175,6 +179,7 @@ impl InputBridge {
             cursor: (-1.0, -1.0),
             error: None,
             geometry: None,
+            geometry_version: 0,
             overlay_rects: Vec::new(),
         };
         this.activate();
@@ -191,7 +196,8 @@ impl InputBridge {
         }
         self.view = Some(view);
         self.frame_size = frame_size;
-        if changed {
+        if changed || self.geometry.is_none() {
+            self.geometry_version = hooks::geometry_version().wrapping_sub(1);
             self.refresh_geometry();
         }
     }
@@ -208,6 +214,11 @@ impl InputBridge {
     }
 
     fn refresh_geometry(&mut self) {
+        let version = hooks::geometry_version();
+        if self.geometry_version == version {
+            return;
+        }
+        self.geometry_version = version;
         let _dpi = TargetDpi::physical();
         self.geometry = (|| {
             let source = capture_bounds(self.source.window, self.frame_size)?;
@@ -279,6 +290,13 @@ impl InputBridge {
     }
 
     pub fn flush(&mut self) {
+        if self
+            .hooks
+            .as_ref()
+            .is_some_and(|hooks| !hooks.tracks_geometry())
+        {
+            self.geometry_version = hooks::geometry_version().wrapping_sub(1);
+        }
         self.refresh_geometry();
         if let Some(mut native) = self.native.take() {
             let foreground = unsafe { GetForegroundWindow() };
@@ -312,6 +330,10 @@ impl InputBridge {
             }
             self.native = Some(native);
         }
+        self.flush_pending();
+    }
+
+    pub fn flush_pending(&mut self) {
         for event in hooks::take_pending() {
             self.native_mouse(event);
             if self.preview_cursor().is_none() {

@@ -1549,9 +1549,12 @@ version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9c50201dc184ba6553da1695aac20a042efffbe2d84542cee31917c86c3ab1e"
 dependencies = [
+ "bytemuck",
  "cfg-if",
  "document-features",
+ "image",
  "num-traits",
+ "rayon",
  "thiserror 2.0.21",
 ]
 
@@ -4130,6 +4133,7 @@ dependencies = [
  "image",
  "log",
  "pulldown-cmark",
+ "rayon",
  "reqwest",
  "serde",
  "serde_json",

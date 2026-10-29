@@ -4,7 +4,10 @@ use anyhow::Result;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST},
-    UI::WindowsAndMessaging::{WM_MOVING, WM_SIZING},
+    UI::WindowsAndMessaging::{
+        WM_DISPLAYCHANGE, WM_DPICHANGED, WM_MOVING, WM_SETTINGCHANGE, WM_SIZING,
+        WM_WINDOWPOSCHANGED,
+    },
 };
 
 type SubclassProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM, usize, usize) -> LRESULT;
@@ -60,6 +63,12 @@ unsafe extern "system" fn constrain_movement(
     _: usize,
     _: usize,
 ) -> LRESULT {
+    if matches!(
+        message,
+        WM_WINDOWPOSCHANGED | WM_DPICHANGED | WM_DISPLAYCHANGE | WM_SETTINGCHANGE
+    ) {
+        super::input::geometry_changed();
+    }
     if (message == WM_MOVING || message == WM_SIZING) && lparam.0 != 0 {
         let (x, y) = crate::capture::cursor_position();
         // Follow the pointer's monitor so the viewer can cross display boundaries.

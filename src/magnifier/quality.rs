@@ -1,5 +1,5 @@
-//! Original-resolution window capture and one-pass, alpha-aware Lanczos scaling.
-//! Only a single latest result is retained; the UI never waits for capture/resizing.
+//! Event-driven, worker-owned capture and alpha-aware Lanczos scaling.
+//! Only a single latest result and one pending UI notification are retained.
 use anyhow::{Context, Result};
 use fast_image_resize::{
     images::{Image, ImageRef},
@@ -9,13 +9,37 @@ use image::RgbaImage;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 mod popups;
 mod window_capture;
+
+type PixelBuffer = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
+
+/// A latched wakeup: events arriving during processing must not be lost.
+#[derive(Default)]
+pub(super) struct Wake {
+    pending: Mutex<bool>,
+    ready: Condvar,
+}
+impl Wake {
+    pub fn signal(&self) {
+        *self.pending.lock().unwrap() = true;
+        self.ready.notify_one();
+    }
+    fn wait(&self) {
+        let pending = self.pending.lock().unwrap();
+        // The timeout only maintains popup discovery/device health on static windows.
+        let (mut pending, _) = self
+            .ready
+            .wait_timeout_while(pending, Duration::from_millis(100), |pending| !*pending)
+            .unwrap();
+        *pending = false;
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FrameKey {
@@ -25,8 +49,7 @@ pub(super) struct FrameKey {
 
 pub(super) struct ProcessedFrame {
     pub key: FrameKey,
-    pub pixels: Arc<RgbaImage>,
-    pub buffer: slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    pub buffer: PixelBuffer,
 }
 
 #[derive(Default)]
@@ -40,22 +63,41 @@ struct Shared {
 pub(super) struct QualitySession {
     stop: Arc<AtomicBool>,
     shared: Arc<Mutex<Shared>>,
+    wake: Arc<Wake>,
 }
 
 impl QualitySession {
-    pub fn start(source: isize) -> Result<Self> {
+    pub fn start(source: isize, window: slint::Weak<crate::MagnifierWindow>) -> Result<Self> {
         let this = Self {
             stop: Arc::new(AtomicBool::new(false)),
             shared: Arc::new(Mutex::new(Shared::default())),
+            wake: Arc::new(Wake::default()),
         };
         let stop = this.stop.clone();
         let shared = this.shared.clone();
+        let wake = this.wake.clone();
         std::thread::Builder::new()
             .name("magnifier-quality".into())
             .spawn(move || {
-                if let Err(error) = run(source, &stop, &shared) {
+                let queued = Arc::new(AtomicBool::new(false));
+                let notify = || {
+                    if queued.swap(true, Ordering::AcqRel) {
+                        return;
+                    }
+                    let queued = queued.clone();
+                    let stop = stop.clone();
+                    let _ = window.upgrade_in_event_loop(move |_| {
+                        queued.store(false, Ordering::Release);
+                        // An old session must never publish into a reopened viewer.
+                        if !stop.load(Ordering::Acquire) {
+                            super::input::present_frame();
+                        }
+                    });
+                };
+                if let Err(error) = run(source, &stop, &shared, wake, &notify) {
                     log::warn!("High-quality window preview unavailable; using DWM: {error:#}");
                     shared.lock().unwrap().error = Some(error.to_string());
+                    notify();
                 }
             })
             .context("Unable to start window preview worker")?;
@@ -67,7 +109,12 @@ impl QualitySession {
     }
 
     pub fn request(&self, output: Option<(u32, u32)>) {
-        self.shared.lock().unwrap().output = output;
+        let mut state = self.shared.lock().unwrap();
+        if state.output != output {
+            state.output = output;
+            drop(state);
+            self.wake.signal();
+        }
     }
 
     pub fn take_frame(&self) -> Option<ProcessedFrame> {
@@ -81,29 +128,50 @@ impl QualitySession {
 
 impl Drop for QualitySession {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.stop.store(true, Ordering::Release);
+        self.wake.signal();
     }
 }
 
-fn run(source: isize, stop: &AtomicBool, shared: &Mutex<Shared>) -> Result<()> {
+fn resize_pool() -> Result<rayon::ThreadPool> {
+    // Leave capacity for the source application, input hooks and compositor.
+    let threads =
+        std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).clamp(1, 4));
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .thread_name(|n| format!("magnifier-resize-{n}"))
+        .build()
+        .context("Unable to start preview resize pool")
+}
+
+fn run(
+    source: isize,
+    stop: &AtomicBool,
+    shared: &Mutex<Shared>,
+    wake: Arc<Wake>,
+    notify: &impl Fn(),
+) -> Result<()> {
     let _apartment = window_capture::Apartment::new()?;
-    let mut capture = window_capture::WindowCapture::new(source)?;
+    let mut capture = window_capture::WindowCapture::new(source, wake.clone())?;
     let mut popups = popups::Popups::new(source);
+    let pool = resize_pool()?;
     let mut resizer = Resizer::new();
     let mut original: Option<RgbaImage> = None;
     let mut rendered: Option<FrameKey> = None;
     let mut composed: Option<RgbaImage> = None;
-    while !stop.load(Ordering::Relaxed) {
-        let started = Instant::now();
+    while !stop.load(Ordering::Acquire) {
         if shared.lock().unwrap().output.is_none() {
-            std::thread::sleep(Duration::from_millis(4));
+            wake.wait();
             continue;
         }
         let mut source_changed = false;
         if let Some(frame) = capture.next_frame()? {
-            shared.lock().unwrap().source = Some(frame.dimensions());
-            // Static windows often produce duplicate frames. Keep the last original
-            // and avoid convolution/upload when neither pixels nor zoom has changed.
+            let size = frame.dimensions();
+            let changed_size = shared.lock().unwrap().source.replace(size) != Some(size);
+            if changed_size {
+                notify();
+            }
+            // Static windows can deliver duplicates. Avoid convolution/upload.
             if original.as_ref() != Some(&frame) {
                 original = Some(frame);
                 rendered = None;
@@ -131,47 +199,35 @@ fn run(source: isize, stop: &AtomicBool, shared: &Mutex<Shared>) -> Result<()> {
                 output,
             };
             if rendered != Some(key) {
-                // Use one stable filter for every frame. Switching sharpness
-                // after a timer makes fine text/edges visibly shimmer.
-                let pixels = resize_original(&mut resizer, original, output)?;
-                if stop.load(Ordering::Relaxed) {
+                let buffer = pool.install(|| resize_buffer(&mut resizer, original, output))?;
+                if stop.load(Ordering::Acquire) {
                     break;
                 }
-                // Prepare Slint's shared pixels on the capture worker. The UI
-                // thread only swaps the ready buffer, never copies a full frame.
-                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    pixels.as_raw(),
-                    pixels.width(),
-                    pixels.height(),
-                );
-                // A newer slider position supersedes work still in flight.
                 let mut state = shared.lock().unwrap();
                 if state.output == Some(output) {
-                    state.latest = Some(ProcessedFrame {
-                        key,
-                        pixels: Arc::new(pixels),
-                        buffer,
-                    });
+                    state.latest = Some(ProcessedFrame { key, buffer });
                     rendered = Some(key);
+                    drop(state);
+                    notify();
                 }
             }
         }
-        if let Some(delay) = Duration::from_millis(8).checked_sub(started.elapsed()) {
-            std::thread::sleep(delay);
-        }
+        wake.wait();
     }
     Ok(())
 }
 
-pub(super) fn resize_original(
+fn resize_buffer(
     resizer: &mut Resizer,
     original: &RgbaImage,
     output: (u32, u32),
-) -> Result<RgbaImage> {
+) -> Result<PixelBuffer> {
     anyhow::ensure!(output.0 > 0 && output.1 > 0, "Invalid preview size");
-    // Exact 100% preserves every original pixel, including font antialiasing.
+    let mut buffer = PixelBuffer::new(output.0, output.1);
+    // 100% does exactly one copy into the same shared storage used for display/save.
     if original.dimensions() == output {
-        return Ok(original.clone());
+        buffer.make_mut_bytes().copy_from_slice(original.as_raw());
+        return Ok(buffer);
     }
     let source = ImageRef::new(
         original.width(),
@@ -179,18 +235,30 @@ pub(super) fn resize_original(
         original.as_raw(),
         PixelType::U8x4,
     )?;
-    let mut destination = Image::new(output.0, output.1, PixelType::U8x4);
+    let mut destination =
+        Image::from_slice_u8(output.0, output.1, buffer.make_mut_bytes(), PixelType::U8x4)?;
     let options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
-    // The resizer premultiplies alpha before filtering and unpremultiplies after,
-    // keeping transparent window edges from acquiring a dark/colored halo.
+    // Alpha-aware filtering prevents colored halos on transparent edges.
     resizer.resize(&source, &mut destination, &options)?;
-    RgbaImage::from_raw(output.0, output.1, destination.into_vec()).context("Invalid resized frame")
+    Ok(buffer)
+}
+
+#[cfg(test)]
+pub(super) fn resize_original(
+    resizer: &mut Resizer,
+    original: &RgbaImage,
+    output: (u32, u32),
+) -> Result<RgbaImage> {
+    let buffer = resize_buffer(resizer, original, output)?;
+    RgbaImage::from_raw(output.0, output.1, buffer.as_bytes().to_vec())
+        .context("Invalid resized frame")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::Rgba;
+    use std::time::Instant;
 
     #[test]
     fn repeated_frames_keep_the_same_quality_after_motion() {
@@ -224,22 +292,84 @@ mod tests {
                 let value = if (x / 3 + y / 17) % 7 == 0 { 30 } else { 245 };
                 Rgba([value, value, value, 255])
             });
-            let mut resizer = Resizer::new();
-            resize_original(&mut resizer, &original, output).unwrap();
-            let mut timings = Vec::new();
-            for _ in 0..9 {
-                let started = Instant::now();
-                std::hint::black_box(resize_original(&mut resizer, &original, output).unwrap());
-                timings.push(started.elapsed());
+            for threads in [1, resize_pool().unwrap().current_num_threads()] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .unwrap();
+                let mut resizer = Resizer::new();
+                pool.install(|| resize_buffer(&mut resizer, &original, output))
+                    .unwrap();
+                let mut timings = Vec::new();
+                for _ in 0..9 {
+                    let started = Instant::now();
+                    std::hint::black_box(
+                        pool.install(|| resize_buffer(&mut resizer, &original, output))
+                            .unwrap(),
+                    );
+                    timings.push(started.elapsed());
+                }
+                timings.sort();
+                println!(
+                    "preview {:?}->{:?}: Lanczos ({threads} threads, shared buffer) {:.3} ms",
+                    source_size,
+                    output,
+                    timings[timings.len() / 2].as_secs_f64() * 1000.0
+                );
             }
-            timings.sort();
-            println!(
-                "preview {:?}->{:?}: Lanczos {:.3} ms",
-                source_size,
-                output,
-                timings[timings.len() / 2].as_secs_f64() * 1000.0
-            );
         }
+    }
+
+    #[test]
+    fn parallel_filter_matches_serial_and_shared_snapshot_survives_next_frame() {
+        let serial = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let parallel = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let original = RgbaImage::from_fn(257, 193, |x, y| {
+            Rgba([(x % 251) as u8, (y % 253) as u8, 77, ((x + y) % 256) as u8])
+        });
+        let expected = serial
+            .install(|| resize_buffer(&mut Resizer::new(), &original, (521, 389)))
+            .unwrap();
+        let actual = parallel
+            .install(|| resize_buffer(&mut Resizer::new(), &original, (521, 389)))
+            .unwrap();
+        assert_eq!(actual.as_bytes(), expected.as_bytes());
+        let saved = actual.clone();
+        assert_eq!(saved.as_bytes().as_ptr(), actual.as_bytes().as_ptr());
+        let next = RgbaImage::from_pixel(257, 193, Rgba([10, 20, 30, 255]));
+        parallel
+            .install(|| resize_buffer(&mut Resizer::new(), &next, (521, 389)))
+            .unwrap();
+        assert_eq!(saved.as_bytes(), expected.as_bytes());
+    }
+
+    #[test]
+    fn output_changes_and_stop_wake_the_worker_without_losing_early_signals() {
+        let session = QualitySession {
+            stop: Arc::new(AtomicBool::new(false)),
+            shared: Arc::new(Mutex::new(Shared::default())),
+            wake: Arc::new(Wake::default()),
+        };
+        session.request(Some((80, 60)));
+        assert!(*session.wake.pending.lock().unwrap());
+        session.wake.wait(); // Signal arrived before wait; must be consumed.
+        assert!(!*session.wake.pending.lock().unwrap());
+        session.request(Some((80, 60)));
+        assert!(!*session.wake.pending.lock().unwrap());
+        session.request(None);
+        assert!(*session.wake.pending.lock().unwrap());
+        session.wake.wait();
+        let wake = session.wake.clone();
+        let stop = session.stop.clone();
+        drop(session);
+        assert!(stop.load(Ordering::Acquire));
+        assert!(*wake.pending.lock().unwrap());
     }
 
     #[test]

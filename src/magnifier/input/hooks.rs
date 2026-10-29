@@ -9,6 +9,7 @@ use std::{
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM},
     UI::{
+        Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK},
         Input::KeyboardAndMouse::{
             RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_F12,
         },
@@ -18,6 +19,10 @@ use windows::Win32::{
 
 thread_local! {
     static OWNER: RefCell<Weak<crate::magnifier::WindowMagnifier>> = RefCell::new(Weak::new());
+    static UPDATE_QUEUED: Cell<bool> = const { Cell::new(false) };
+    static CURSOR_QUEUED: Cell<bool> = const { Cell::new(false) };
+    static GEOMETRY_VERSION: Cell<u64> = const { Cell::new(1) };
+    static SOURCE: Cell<isize> = const { Cell::new(0) };
     static NATIVE_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static CLOSE_REQUESTED: Cell<bool> = const { Cell::new(false) };
     static PENDING: RefCell<VecDeque<HardwareEvent>> = const { RefCell::new(VecDeque::new()) };
@@ -62,6 +67,69 @@ extern "system" {
 
 pub(in crate::magnifier) fn set_owner(owner: Weak<crate::magnifier::WindowMagnifier>) {
     OWNER.with(|slot| *slot.borrow_mut() = owner);
+}
+pub(in crate::magnifier) fn geometry_version() -> u64 {
+    GEOMETRY_VERSION.get()
+}
+pub(in crate::magnifier) fn geometry_changed() {
+    GEOMETRY_VERSION.set(GEOMETRY_VERSION.get().wrapping_add(1));
+    request_update();
+}
+pub(in crate::magnifier) fn request_update() {
+    if UPDATE_QUEUED.replace(true) {
+        return;
+    }
+    if slint::invoke_from_event_loop(|| {
+        UPDATE_QUEUED.set(false);
+        OWNER.with(|slot| {
+            if let Some(owner) = slot.borrow().upgrade() {
+                owner.update_or_close();
+            }
+        });
+    })
+    .is_err()
+    {
+        UPDATE_QUEUED.set(false);
+    }
+}
+pub(in crate::magnifier) fn present_frame() {
+    OWNER.with(|slot| {
+        if let Some(owner) = slot.borrow().upgrade() {
+            owner.present_frame();
+        }
+    });
+}
+fn request_cursor_update() {
+    if CURSOR_QUEUED.replace(true) {
+        return;
+    }
+    if slint::invoke_from_event_loop(|| {
+        CURSOR_QUEUED.set(false);
+        OWNER.with(|slot| {
+            if let Some(owner) = slot.borrow().upgrade() {
+                owner.update_cursor();
+            }
+        });
+    })
+    .is_err()
+    {
+        CURSOR_QUEUED.set(false);
+    }
+}
+unsafe extern "system" fn source_location_changed(
+    _: HWINEVENTHOOK,
+    _: u32,
+    window: HWND,
+    object: i32,
+    child: i32,
+    _: u32,
+    _: u32,
+) {
+    // Ignore caret/child-control motion. Out-of-context WinEvents are delivered
+    // on the installing UI thread; never query the remote HWND in this callback.
+    if window.0 as isize == SOURCE.get() && object == OBJID_WINDOW.0 && child == 0 {
+        geometry_changed();
+    }
 }
 pub(super) fn native_active(active: bool) {
     NATIVE_ACTIVE.set(active);
@@ -121,7 +189,11 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
             data,
             origin,
         };
-        match with_input(|input| input.native_mouse(event)) {
+        let handled = with_input(|input| input.native_mouse(event));
+        if handled == Some(true) || NATIVE_ACTIVE.get() {
+            request_cursor_update();
+        }
+        match handled {
             Some(true) => return LRESULT(1),
             None if NATIVE_ACTIVE.get() => {
                 PENDING.with(|slot| queue_pending(&mut slot.borrow_mut(), event));
@@ -143,6 +215,7 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     if message == WM_HOTKEY && wparam.0 == HOTKEY_ID as usize {
         CLOSE_REQUESTED.set(true);
+        request_update();
         return LRESULT(0);
     }
     DefSubclassProc(window, message, wparam, lparam)
@@ -151,14 +224,16 @@ unsafe extern "system" fn window_proc(
 pub(super) struct NativeHooks {
     viewer: HWND,
     mouse: Option<HHOOK>,
+    location: HWINEVENTHOOK,
     subclassed: bool,
     hotkey: bool,
 }
 impl NativeHooks {
-    pub fn install(viewer: HWND) -> Result<Self> {
+    pub fn install(source: HWND, viewer: HWND) -> Result<Self> {
         let mut this = Self {
             viewer,
             mouse: None,
+            location: HWINEVENTHOOK::default(),
             subclassed: false,
             hotkey: false,
         };
@@ -177,17 +252,41 @@ impl NativeHooks {
             .context("Unable to reserve Ctrl+Alt+F12 for restoring the source window")?;
             this.hotkey = true;
             this.mouse = Some(SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), None, 0)?);
+            SOURCE.set(source.0 as isize);
+            let mut pid = 0;
+            GetWindowThreadProcessId(source, Some(&mut pid));
+            this.location = SetWinEventHook(
+                EVENT_OBJECT_LOCATIONCHANGE,
+                EVENT_OBJECT_LOCATIONCHANGE,
+                None,
+                Some(source_location_changed),
+                pid,
+                0,
+                WINEVENT_OUTOFCONTEXT,
+            );
+            if this.location.is_invalid() {
+                log::warn!("Source location hook unavailable; using maintenance refresh");
+            }
             // Hover also needs native hit testing; keep the hook until close.
         }
         Ok(this)
     }
 }
+impl NativeHooks {
+    pub fn tracks_geometry(&self) -> bool {
+        !self.location.is_invalid()
+    }
+}
 impl Drop for NativeHooks {
     fn drop(&mut self) {
         NATIVE_ACTIVE.set(false);
+        SOURCE.set(0);
         CLOSE_REQUESTED.set(false);
         PENDING.with(|slot| slot.borrow_mut().clear());
         unsafe {
+            if !self.location.is_invalid() {
+                let _ = UnhookWinEvent(self.location);
+            }
             if let Some(hook) = self.mouse {
                 let _ = UnhookWindowsHookEx(hook);
             }
