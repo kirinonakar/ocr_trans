@@ -43,7 +43,7 @@ Capture toolbar (dark theme)
   - Frame mode opens a movable, resizable transparent capture frame with its own Capture and Record controls.
   - Fullscreen / Window / Scrolling (Windows only) / Region (`Esc` to cancel).
   - One-shot OCR, OCR+Translate, VLM, color picker, ruler.
-  - **Window magnifier (Windows)**: Zoom **50–400%** in 1% steps.
+  - **Window magnifier**: Zoom **50–400%** in 1% steps.
     - Translation overlays, the result textbox and other visible app overlays stay above the magnified preview without taking keyboard focus from the source window.
     - **Ctrl+Alt+F12** closes the magnifier and restores the source window.
   - For one-shot OCR and OCR+Translate, the language dropdown lists only installed Windows OCR packs with short labels such as **KO**, **JP**, and **EN**.
