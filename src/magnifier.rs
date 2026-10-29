@@ -26,18 +26,43 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{GetWindowTextW, IsIconic, IsWindow},
 };
 
+mod input;
 mod quality;
+mod source_window;
 mod window_bounds;
+pub(crate) use source_window::{restore_all as restore_source_windows, run_restore_watchdog};
 
 const HEADER: f64 = 42.0;
 const INSET: f64 = 6.0;
 const RESTORE_SOURCE_NOTICE: &str = "Restore the selected window to resume the preview";
+const PARTLY_VISIBLE_NOTICE: &str = "Source window is partly visible to keep the preview live";
 
 fn snap_zoom_percent(percent: f32) -> f32 {
     if !percent.is_finite() {
         return 200.0;
     }
     (percent / 5.0).round().clamp(6.0, 80.0) * 5.0
+}
+
+fn maximum_zoom_percent(source: (i32, i32), work: (i32, i32), dpi: f64, frame: (i32, i32)) -> f32 {
+    if source.0 <= 0 || source.1 <= 0 {
+        return 400.0;
+    }
+    let width = (work.0 - frame.0) as f64 - (INSET * dpi).ceil() * 2.0;
+    let height = (work.1 - frame.1) as f64 - (HEADER * dpi).ceil() - (INSET * dpi).ceil();
+    let percent = (width.max(1.0) / source.0 as f64).min(height.max(1.0) / source.1 as f64) * 100.0;
+    if percent < 5.0 {
+        ((percent * 10.0).floor() / 10.0).max(0.1) as f32
+    } else {
+        ((percent / 5.0).floor() * 5.0).min(400.0) as f32
+    }
+}
+
+fn bounded_zoom_percent(percent: f32, maximum: f32) -> f32 {
+    if maximum < 30.0 {
+        return maximum;
+    }
+    snap_zoom_percent(percent).min(maximum)
 }
 
 fn quality_presentation(
@@ -64,6 +89,8 @@ impl Drop for Thumbnail {
 
 /// Owns both the Slint window and the native thumbnail until the application exits.
 pub(crate) struct WindowMagnifier {
+    input: RefCell<Option<input::InputBridge>>,
+    input_attempted: Cell<bool>,
     movement_guard: RefCell<Option<window_bounds::MovementGuard>>,
     window: MagnifierWindow,
     thumbnail: RefCell<Option<Thumbnail>>,
@@ -173,6 +200,8 @@ impl WindowMagnifier {
         state: Arc<Mutex<AppState>>,
     ) -> Result<Rc<Self>> {
         let this = Rc::new(Self {
+            input: RefCell::new(None),
+            input_attempted: Cell::new(false),
             movement_guard: RefCell::new(None),
             window: MagnifierWindow::new()?,
             thumbnail: RefCell::new(None),
@@ -191,7 +220,9 @@ impl WindowMagnifier {
         let toolbar_status = toolbar.as_weak();
         this.window.on_status_changed(move |message| {
             if let Some(toolbar) = toolbar_status.upgrade() {
-                if message.is_empty() && toolbar.get_status_text().as_str() != RESTORE_SOURCE_NOTICE
+                if message.is_empty()
+                    && ![RESTORE_SOURCE_NOTICE, PARTLY_VISIBLE_NOTICE]
+                        .contains(&toolbar.get_status_text().as_str())
                 {
                     return;
                 }
@@ -235,7 +266,7 @@ impl WindowMagnifier {
             let Some(this) = weak.upgrade() else {
                 return;
             };
-            let percent = snap_zoom_percent(percent);
+            let percent = bounded_zoom_percent(percent, this.window.get_max_zoom_percent());
             this.window.set_zoom_percent(percent);
             this.zoom.set(percent as f64 / 100.0);
             this.pending_zoom_resize.set(true);
@@ -385,9 +416,29 @@ impl WindowMagnifier {
                             });
                         }
                         let _ = this.update();
-                        this.window
-                            .window()
-                            .with_winit_window(|native| native.focus_window());
+                        if this.input.borrow().is_some() {
+                            if let Ok(viewer) = hwnd(&this.window) {
+                                use windows::Win32::UI::WindowsAndMessaging::{
+                                    SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+                                    SWP_NOSIZE,
+                                };
+                                unsafe {
+                                    let _ = SetWindowPos(
+                                        viewer,
+                                        Some(HWND_TOPMOST),
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                                    );
+                                }
+                            }
+                        } else {
+                            this.window
+                                .window()
+                                .with_winit_window(|native| native.focus_window());
+                        }
                     }
                 }) {
                     this.window
@@ -414,6 +465,8 @@ impl WindowMagnifier {
     pub(crate) fn open(self: &Rc<Self>, target: capture::WindowTarget, dark: bool) -> Result<()> {
         self.stop_own_recording();
         self.timer.stop();
+        self.input.borrow_mut().take();
+        self.input_attempted.set(false);
         self.thumbnail.borrow_mut().take();
         self.reset_quality();
         self.capture_rect.set(None);
@@ -421,6 +474,20 @@ impl WindowMagnifier {
         self.window.set_status_text("".into());
         self.window.set_source_available(false);
         self.window.show()?;
+        input::set_owner(Rc::downgrade(self));
+        let input_weak = Rc::downgrade(self);
+        self.window.window().on_winit_window_event(move |_, event| {
+            if let Some(this) = input_weak.upgrade() {
+                if let Ok(mut input) = this.input.try_borrow_mut() {
+                    if let Some(input) = input.as_mut() {
+                        if input.handle(event) {
+                            return i_slint_backend_winit::EventResult::PreventDefault;
+                        }
+                    }
+                }
+            }
+            i_slint_backend_winit::EventResult::Propagate
+        });
         let result = (|| -> Result<()> {
             let owner = hwnd(&self.window)?;
             win_utils::set_title_bar_theme(owner, dark);
@@ -462,6 +529,7 @@ impl WindowMagnifier {
                     return;
                 };
                 if let Err(error) = this.update() {
+                    this.input.borrow_mut().take();
                     this.stop_own_recording();
                     this.thumbnail.borrow_mut().take();
                     this.reset_quality();
@@ -477,8 +545,12 @@ impl WindowMagnifier {
     }
 
     fn close(&self) {
+        if let Some(input) = self.input.borrow_mut().as_mut() {
+            input.suspend_mouse();
+        }
         self.stop_own_recording();
         self.timer.stop();
+        self.input.borrow_mut().take();
         self.thumbnail.borrow_mut().take();
         self.reset_quality();
         self.capture_rect.set(None);
@@ -547,6 +619,33 @@ impl WindowMagnifier {
     }
 
     fn update(&self) -> Result<()> {
+        if input::take_close_requested() {
+            self.close();
+            return Ok(());
+        }
+        let restart_capture = if let Some(input) = self.input.borrow_mut().as_mut() {
+            input.flush();
+            input.take_capture_restart()
+        } else {
+            false
+        };
+        if restart_capture {
+            if let Some(source) = self
+                .thumbnail
+                .borrow()
+                .as_ref()
+                .map(|thumbnail| thumbnail.source)
+            {
+                match quality::QualitySession::start(source.0 as isize) {
+                    Ok(session) => {
+                        *self.quality.borrow_mut() = Some(session);
+                    }
+                    Err(error) => log::warn!(
+                        "Unable to restart window capture after moving the source: {error:#}"
+                    ),
+                }
+            }
+        }
         let recording = self.state.lock().unwrap().recording;
         if !recording {
             self.owns_recording.set(false);
@@ -615,6 +714,24 @@ impl WindowMagnifier {
         } else {
             (source.cx, source.cy)
         };
+        if !own_recording && source.0 > 0 && source.1 > 0 {
+            let work = work_area(hwnd(&self.window)?)?;
+            let maximum = maximum_zoom_percent(
+                source,
+                (work.width, work.height),
+                self.window.window().scale_factor() as f64,
+                self.frame_extent(),
+            );
+            self.window.set_max_zoom_percent(maximum);
+            let selected = bounded_zoom_percent((self.zoom.get() * 100.0) as f32, maximum);
+            if selected != self.window.get_zoom_percent()
+                || (selected as f64 / 100.0 - self.zoom.get()).abs() > 0.00001
+            {
+                self.window.set_zoom_percent(selected);
+                self.zoom.set(selected as f64 / 100.0);
+                self.pending_zoom_resize.set(true);
+            }
+        }
         let geometry = self
             .window
             .window()
@@ -665,6 +782,22 @@ impl WindowMagnifier {
         self.window.set_quality_height(rect.height as f32 / dpi);
         self.window.set_quality_active(quality_active);
         self.window.set_quality_exact(quality_exact);
+        if quality_active && !self.input_attempted.replace(true) {
+            match input::InputBridge::new(thumbnail.source, hwnd(&self.window)?) {
+                Ok(input) => *self.input.borrow_mut() = Some(input),
+                Err(error) => self
+                    .window
+                    .set_status_text(format!("Window interaction unavailable: {error}").into()),
+            }
+        }
+        if let Some(input) = self.input.borrow_mut().as_mut() {
+            input.set_view(
+                rect,
+                self.quality_frame_key
+                    .get()
+                    .map_or(key.source, |frame| frame.source),
+            );
+        }
         unsafe {
             DwmUpdateThumbnailProperties(
                 thumbnail.handle,
@@ -693,7 +826,16 @@ impl WindowMagnifier {
             y: position.y + rect.y,
             ..rect
         }));
-        self.window.set_preview_notice("".into());
+        let partly_visible = self
+            .input
+            .borrow()
+            .as_ref()
+            .is_some_and(|input| !input.source_covered());
+        self.window.set_preview_notice(if partly_visible {
+            PARTLY_VISIBLE_NOTICE.into()
+        } else {
+            "".into()
+        });
         Ok(())
     }
 
@@ -779,6 +921,23 @@ impl WindowMagnifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slider_limit_is_a_five_percent_step_that_fits_the_work_area() {
+        for dpi in [1.0, 1.25, 1.5, 2.0] {
+            for source in [(800, 600), (1920, 1080), (3840, 2160)] {
+                let limit = maximum_zoom_percent(source, (1920, 1040), dpi, (0, 0));
+                assert_eq!(limit % 5.0, 0.0);
+                let (w, h) = fitted_window_size(source, limit as f64 / 100.0, dpi, (1920, 1040));
+                let (_, actual) =
+                    preview_rect(source, (w as i32, h as i32), dpi, limit as f64 / 100.0).unwrap();
+                assert!((actual * 100.0 - limit as f64).abs() < 0.01);
+                assert_eq!(bounded_zoom_percent(400.0, limit), limit);
+            }
+        }
+        assert_eq!(bounded_zoom_percent(100.0, 25.0), 25.0);
+        assert_eq!(bounded_zoom_percent(145.0, 165.0), 145.0);
+    }
 
     #[test]
     fn pending_zoom_frames_keep_the_image_visible_instead_of_switching_to_dwm() {

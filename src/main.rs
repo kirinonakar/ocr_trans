@@ -27,7 +27,12 @@ mod toolbar_ui;
 mod win_utils;
 mod window_mode;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    app::run().await
+fn main() -> anyhow::Result<()> {
+    if magnifier::run_restore_watchdog()? {
+        return Ok(());
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(app::run())
 }

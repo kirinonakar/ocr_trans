@@ -524,6 +524,7 @@ pub(crate) fn shutdown_and_exit(
             log::warn!("Failed to stop recording during application exit: {error:?}");
         }
     }
+    crate::magnifier::restore_source_windows();
     std::process::exit(0);
 }
 

@@ -20,6 +20,7 @@ export component MagnifierWindow inherits Window {
     in-out property <bool> record_available: true;
     in-out property <string> source_title: "Window magnifier";
     in-out property <float> zoom_percent: 200;
+    in-out property <float> max_zoom_percent: 400;
     in-out property <string> status_text: "";
     in-out property <string> preview_notice: "";
     in-out property <bool> quality_active: false;
@@ -85,8 +86,8 @@ export component MagnifierWindow inherits Window {
                 pressed => { root.drag_requested(); }
             }
             Slider {
-                minimum: 30;
-                maximum: 400;
+                minimum: min(30, max(root.max_zoom_percent - 5, 0));
+                maximum: root.max_zoom_percent;
                 step: 5;
                 value <=> root.zoom_percent;
                 width: 160px;

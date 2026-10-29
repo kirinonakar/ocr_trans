@@ -43,9 +43,7 @@ Capture toolbar (dark theme)
   - Frame mode opens a movable, resizable transparent capture frame with its own Capture and Record controls.
   - Fullscreen / Window / Scrolling (Windows only) / Region (`Esc` to cancel).
   - One-shot OCR, OCR+Translate, VLM, color picker, ruler.
-  - **Window magnifier (Windows)**: Magnifier button (right of the ruler) → pick a window for a live preview.
-    - Zoom **30–400%** in 5% steps, live resize while dragging; controls stay on-screen and the source is never cropped.
-    - **Capture** saves/copies PNG without controls or margins; **Record** saves MP4 and becomes **Stop** while recording.
+  - **Window magnifier (Windows)**: Zoom **30–400%** in 5% steps.
   - For one-shot OCR and OCR+Translate, the language dropdown lists only installed Windows OCR packs with short labels such as **KO**, **JP**, and **EN**.
   - OCR+Translate preserves and copies the recognized source text if translation fails, with the error shown in the toolbar status.
   - PNG/MP4 saved as `YYYY-MM-DD_001...` + clipboard copy; recording looks for `ffmpeg.exe` beside the application first, then on `PATH`. Single-monitor recording first tries ddagrab/NVENC and retries with software capture/libx264 if startup fails. NVIDIA hardware is optional; the FFmpeg build must include libx264 for software recording.
