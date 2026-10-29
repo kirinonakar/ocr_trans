@@ -571,8 +571,10 @@ impl WindowMagnifier {
         }
     }
 
-    fn update_cursor(&self) {
-        let mut input = self.input.borrow_mut();
+    fn update_cursor(&self) -> bool {
+        let Ok(mut input) = self.input.try_borrow_mut() else {
+            return false;
+        };
         let cursor = input.as_mut().and_then(|input| {
             input.flush_pending();
             input.preview_cursor()
@@ -583,6 +585,7 @@ impl WindowMagnifier {
             self.window.set_preview_cursor_x(x as f32 / dpi);
             self.window.set_preview_cursor_y(y as f32 / dpi);
         }
+        true
     }
 
     fn close(&self) {

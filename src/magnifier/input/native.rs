@@ -14,6 +14,18 @@ fn advance_virtual(cursor: &mut (f64, f64), point: POINT, origin: POINT) {
     cursor.1 += (i64::from(point.y) - i64::from(origin.y)) as f64;
 }
 
+fn update_virtual_sample(
+    cursor: &mut (f64, f64),
+    event: hooks::HardwareEvent,
+    viewer_origin: POINT,
+) {
+    if !event.native {
+        *cursor = viewer_local_point(event.data.pt, viewer_origin);
+    } else if event.message == WM_MOUSEMOVE {
+        advance_virtual(cursor, event.data.pt, event.origin);
+    }
+}
+
 pub(super) struct NativePointer {
     active: bool,
     added_style: i32,
@@ -52,6 +64,18 @@ struct InputBatch {
 }
 
 impl InputBatch {
+    fn from_hardware(
+        screen: POINT,
+        hook_origin: POINT,
+        desktop: RECT,
+        current_cursor: impl FnOnce() -> Option<POINT>,
+    ) -> Self {
+        // The hook origin belongs to the hardware delta calculation, not to
+        // injection deduplication. A game may have warped the cursor since that
+        // sample, or queued events may already have injected another position.
+        Self::new(screen, current_cursor().unwrap_or(hook_origin), desktop)
+    }
+
     fn new(screen: POINT, actual: POINT, desktop: RECT) -> Self {
         let mut batch = Self {
             events: [INPUT::default(); 2],
@@ -68,6 +92,15 @@ impl InputBatch {
     }
     fn as_slice(&self) -> &[INPUT] {
         &self.events[..self.len]
+    }
+    fn with_time(mut self, time: u32) -> Self {
+        for event in &mut self.events[..self.len] {
+            // Preserve the hardware clock across deferred/re-entrant dispatch.
+            // A zero timestamp would replace the user's double-click interval
+            // with our processing interval. Cursor + button share one timestamp.
+            event.Anonymous.mi.time = time;
+        }
+        self
     }
 }
 
@@ -98,6 +131,25 @@ fn button_event(message: u32, data: u32) -> Option<(u32, bool, MOUSE_EVENT_FLAGS
         }
         _ => return None,
     })
+}
+
+fn entry_blocked_by_buttons(pressed: u32, message: u32, data: u32) -> bool {
+    // Dispatch runs after the physical callback, so the first press itself can
+    // already be visible to GetAsyncKeyState. Only OTHER held buttons block it.
+    let initiating = button_event(message, data)
+        .filter(|(_, down, _, _)| *down)
+        .map_or(0, |(mask, _, _, _)| mask);
+    pressed & !initiating != 0
+}
+
+fn wheel_event(message: u32, data: u32) -> Option<(MOUSE_EVENT_FLAGS, u32)> {
+    let flags = match message {
+        WM_MOUSEWHEEL => MOUSEEVENTF_WHEEL,
+        WM_MOUSEHWHEEL => MOUSEEVENTF_HWHEEL,
+        _ => return None,
+    };
+    // Preserve high-resolution deltas and their sign, without scaling by zoom.
+    Some((flags, ((data >> 16) as i16 as i32) as u32))
 }
 
 impl NativePointer {
@@ -193,6 +245,7 @@ impl NativePointer {
         }
         self.held = 0;
         self.active = false;
+        hooks::clear_pending();
         hooks::native_active(false);
         self.restore_style(bridge.viewer);
         unsafe {
@@ -220,8 +273,10 @@ impl NativePointer {
             message,
             data,
             origin,
+            ..
         } = event;
         let _dpi = TargetDpi::physical();
+        let wheel = matches!(message, WM_MOUSEWHEEL | WM_MOUSEHWHEEL);
         let foreground = unsafe { GetForegroundWindow() };
         let related = foreground == bridge.viewer
             || foreground == bridge.source.window
@@ -257,11 +312,24 @@ impl NativePointer {
             if unsafe { WindowFromPoint(data.pt) } != bridge.viewer {
                 return false;
             }
-            if unsafe {
-                [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
-                    .into_iter()
-                    .any(|key| GetAsyncKeyState(key.0 as i32) < 0)
-            } {
+            let pressed = unsafe {
+                [
+                    (VK_LBUTTON, 1),
+                    (VK_RBUTTON, 2),
+                    (VK_MBUTTON, 16),
+                    (VK_XBUTTON1, 32),
+                    (VK_XBUTTON2, 64),
+                ]
+                .into_iter()
+                .fold(0, |mask, (key, bit)| {
+                    mask | if GetAsyncKeyState(key.0 as i32) < 0 {
+                        bit
+                    } else {
+                        0
+                    }
+                })
+            };
+            if entry_blocked_by_buttons(pressed, message, data.mouseData) {
                 return false;
             }
             if let Err(error) = self.enter(bridge) {
@@ -270,13 +338,20 @@ impl NativePointer {
                 return false;
             }
             bridge.refresh_geometry();
-        } else if message == WM_MOUSEMOVE {
-            // Hardware points are relative to the real source cursor, whereas
-            // virtual motion remains in unscaled preview pixels.
-            advance_virtual(&mut bridge.cursor, data.pt, origin);
         } else {
-            bridge.refresh_geometry();
-            bridge.set_overlay_rects(crate::win_utils::set_preview_topmost(bridge.viewer));
+            if let Some(geometry) = bridge.geometry {
+                // Samples queued before entry are absolute viewer positions,
+                // including a first press after an earlier hover activated us.
+                update_virtual_sample(&mut bridge.cursor, event, geometry.viewer_origin);
+            }
+            if message != WM_MOUSEMOVE {
+                bridge.refresh_geometry();
+                // Overlay order is maintained by UI/window events. Wheel bursts
+                // must not walk/reorder the entire topmost window band.
+                if !wheel {
+                    bridge.set_overlay_rects(crate::win_utils::set_preview_topmost(bridge.viewer));
+                }
+            }
         }
         // The system cursor is over the source, but overlay controls are at the
         // displayed pointer position. Hand input back when that pointer reaches
@@ -335,10 +410,16 @@ impl NativePointer {
             self.leave(bridge, true);
             return true;
         };
-        let mut events = InputBatch::new(screen, origin, geometry.desktop);
+        // Suppress every handled hardware event and inject mapped input once.
+        // Mixing original hardware clicks with synthesized movement breaks the
+        // source-pointer contract used by games with native cursor tracking.
+        let mut events = InputBatch::from_hardware(screen, origin, geometry.desktop, || {
+            let mut current = POINT::default();
+            unsafe { GetCursorPos(&mut current) }.ok().map(|_| current)
+        });
         if let Some((mask, down, flags, mouse_data)) = button_event(message, data.mouseData) {
             events.push(mouse_input(flags, mouse_data, None, geometry.desktop));
-            if inject(events.as_slice()) {
+            if inject(events.with_time(data.time).as_slice()) {
                 if down {
                     self.held |= mask;
                 } else {
@@ -350,19 +431,10 @@ impl NativePointer {
                 self.leave(bridge, true);
             }
         } else {
-            if message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL {
-                events.push(mouse_input(
-                    if message == WM_MOUSEWHEEL {
-                        MOUSEEVENTF_WHEEL
-                    } else {
-                        MOUSEEVENTF_HWHEEL
-                    },
-                    ((data.mouseData >> 16) as i16 as i32) as u32,
-                    None,
-                    geometry.desktop,
-                ));
+            if let Some((flags, delta)) = wheel_event(message, data.mouseData) {
+                events.push(mouse_input(flags, delta, None, geometry.desktop));
             }
-            if events.len != 0 && !inject(events.as_slice()) {
+            if events.len != 0 && !inject(events.with_time(data.time).as_slice()) {
                 bridge.error = Some("Windows blocked mouse input to the selected window".into());
                 self.leave(bridge, true);
             }
@@ -415,6 +487,183 @@ impl Drop for NativePointer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buffered_first_press_keeps_viewer_coordinates_after_hover_activates_native_mode() {
+        let viewer = POINT { x: -1300, y: 300 };
+        let mut cursor = (190.0, 140.0);
+        let mut event = hooks::HardwareEvent {
+            message: WM_LBUTTONDOWN,
+            data: MSLLHOOKSTRUCT {
+                pt: POINT { x: -1100, y: 450 },
+                ..Default::default()
+            },
+            origin: POINT::default(),
+            native: false,
+            intercepted: true,
+        };
+        update_virtual_sample(&mut cursor, event, viewer);
+        assert_eq!(cursor, (200.0, 150.0));
+        event.native = true;
+        event.message = WM_MOUSEMOVE;
+        event.origin = POINT { x: -500, y: 400 };
+        event.data.pt = POINT { x: -496, y: 402 };
+        update_virtual_sample(&mut cursor, event, viewer);
+        assert_eq!(cursor, (204.0, 152.0));
+        event.message = WM_LBUTTONUP;
+        event.data.pt = POINT { x: 800, y: 900 };
+        update_virtual_sample(&mut cursor, event, viewer);
+        assert_eq!(cursor, (204.0, 152.0));
+    }
+
+    #[test]
+    fn deferred_first_press_ignores_its_own_button_but_preserves_drag_guard() {
+        for (message, data, mask) in [
+            (WM_LBUTTONDOWN, 0, 1),
+            (WM_RBUTTONDOWN, 0, 2),
+            (WM_MBUTTONDOWN, 0, 16),
+            (WM_XBUTTONDOWN, 1 << 16, 32),
+            (WM_XBUTTONDOWN, 2 << 16, 64),
+        ] {
+            assert!(!entry_blocked_by_buttons(mask, message, data));
+            let other = if mask == 1 { 2 } else { 1 };
+            assert!(entry_blocked_by_buttons(mask | other, message, data));
+            assert!(entry_blocked_by_buttons(mask, WM_MOUSEMOVE, 0));
+        }
+    }
+
+    #[test]
+    fn game_cursor_warp_after_hook_sample_is_repaired_before_button_injection() {
+        let desktop = RECT {
+            left: -1920,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let target = POINT { x: -500, y: 400 };
+        let game_center = POINT { x: -900, y: 500 };
+        // The old hook sample equals the target, but the game moved the real
+        // cursor before dispatch. Skipping the move would click at game_center.
+        let mut batch = InputBatch::from_hardware(target, target, desktop, || Some(game_center));
+        batch.push(mouse_input(MOUSEEVENTF_LEFTDOWN, 0, None, desktop));
+        let batch = batch.with_time(1234);
+        assert_eq!(batch.len, 2);
+        let movement = unsafe { batch.as_slice()[0].Anonymous.mi };
+        assert_ne!(movement.dwFlags & MOUSEEVENTF_MOVE, MOUSE_EVENT_FLAGS(0));
+        assert_eq!(
+            movement.dx,
+            absolute_axis(target.x, desktop.left, desktop.right - desktop.left)
+        );
+        assert_eq!(
+            movement.dy,
+            absolute_axis(target.y, desktop.top, desktop.bottom - desktop.top)
+        );
+        assert_eq!(
+            unsafe { batch.as_slice()[1].Anonymous.mi }.dwFlags,
+            MOUSEEVENTF_LEFTDOWN
+        );
+        // Already aligned cursors still avoid extra movement during double-clicks.
+        assert_eq!(
+            InputBatch::from_hardware(target, game_center, desktop, || Some(target)).len,
+            0
+        );
+        assert_eq!(
+            InputBatch::from_hardware(target, target, desktop, || None).len,
+            0
+        );
+    }
+
+    #[test]
+    fn queued_hardware_delta_uses_saved_origin_while_injection_uses_live_position() {
+        let origin = POINT { x: -500, y: 400 };
+        let data = POINT { x: -496, y: 402 };
+        let warped = POINT { x: -900, y: 500 };
+        let mut cursor = (200.5, 100.25);
+        advance_virtual(&mut cursor, data, origin);
+        assert_eq!(cursor, (204.5, 102.25));
+        let desktop = RECT {
+            left: -1920,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let batch = InputBatch::from_hardware(data, data, desktop, || Some(warped));
+        assert_eq!(batch.len, 1);
+        let movement = unsafe { batch.as_slice()[0].Anonymous.mi };
+        assert_eq!(
+            movement.dx,
+            absolute_axis(data.x, desktop.left, desktop.right - desktop.left)
+        );
+        assert_eq!(
+            movement.dy,
+            absolute_axis(data.y, desktop.top, desktop.bottom - desktop.top)
+        );
+    }
+
+    #[test]
+    fn double_click_packets_preserve_hardware_times_without_extra_cursor_moves() {
+        let desktop = RECT {
+            left: -1920,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let point = POINT { x: -500, y: 400 };
+        for times in [
+            [1000, 1030, 1200, 1230],
+            [u32::MAX - 100, u32::MAX - 70, 50, 80],
+        ] {
+            let mut forwarded = Vec::new();
+            for (message, time) in [WM_LBUTTONDOWN, WM_LBUTTONUP, WM_LBUTTONDOWN, WM_LBUTTONUP]
+                .into_iter()
+                .zip(times)
+            {
+                let (_, _, flags, data) = button_event(message, 0).unwrap();
+                let mut batch = InputBatch::new(point, point, desktop);
+                batch.push(mouse_input(flags, data, None, desktop));
+                let batch = batch.with_time(time);
+                assert_eq!(batch.len, 1);
+                forwarded.push(unsafe { batch.as_slice()[0].Anonymous.mi }.time);
+            }
+            assert_eq!(forwarded, times);
+            assert_eq!(
+                forwarded[2].wrapping_sub(forwarded[0]),
+                times[2].wrapping_sub(times[0])
+            );
+        }
+        // A necessary reposition preceding a click must carry the same clock.
+        let mut moved = InputBatch::new(point, POINT { x: 0, y: 0 }, desktop);
+        moved.push(mouse_input(MOUSEEVENTF_LEFTDOWN, 0, None, desktop));
+        let moved = moved.with_time(5678);
+        assert_eq!(moved.len, 2);
+        assert!(moved
+            .as_slice()
+            .iter()
+            .all(|event| unsafe { event.Anonymous.mi }.time == 5678));
+    }
+
+    #[test]
+    fn high_resolution_vertical_and_horizontal_wheel_keep_signed_delta_and_time() {
+        for (message, flags) in [
+            (WM_MOUSEWHEEL, MOUSEEVENTF_WHEEL),
+            (WM_MOUSEHWHEEL, MOUSEEVENTF_HWHEEL),
+        ] {
+            for delta in [-240i16, -120, -15, 1, 15, 120, 240] {
+                let (actual_flags, payload) =
+                    wheel_event(message, (delta as u16 as u32) << 16).unwrap();
+                let mut batch =
+                    InputBatch::new(POINT::default(), POINT::default(), RECT::default());
+                batch.push(mouse_input(actual_flags, payload, None, RECT::default()));
+                let batch = batch.with_time(1234);
+                assert_eq!(batch.len, 1);
+                let packet = unsafe { batch.as_slice()[0].Anonymous.mi };
+                assert_eq!(packet.dwFlags, flags);
+                assert_eq!(packet.mouseData as i32, i32::from(delta));
+                assert_eq!(packet.time, 1234);
+            }
+        }
+    }
+
     #[test]
     fn stationary_clicks_and_wheel_are_injected_without_an_extra_move() {
         let desktop = RECT {

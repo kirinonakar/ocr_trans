@@ -330,6 +330,7 @@ fn dispatch_toolbar_action(toolbar: &slint::Weak<CaptureToolbarWindow>, action: 
             ToolbarAction::Vlm => toolbar.invoke_vlm_clicked(),
             ToolbarAction::ColorPicker => toolbar.invoke_color_picker_clicked(),
             ToolbarAction::Ruler => toolbar.invoke_ruler_clicked(),
+            ToolbarAction::WindowMagnifier => toolbar.invoke_magnify_window_clicked(),
         }
     });
 }

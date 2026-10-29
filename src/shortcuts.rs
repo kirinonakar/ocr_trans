@@ -63,9 +63,10 @@ pub(crate) enum ToolbarAction {
     Vlm,
     ColorPicker,
     Ruler,
+    WindowMagnifier,
 }
 
-pub(crate) const TOOLBAR_ACTIONS: [ToolbarAction; 8] = [
+pub(crate) const TOOLBAR_ACTIONS: [ToolbarAction; 9] = [
     ToolbarAction::Fullscreen,
     ToolbarAction::Window,
     ToolbarAction::Region,
@@ -74,6 +75,7 @@ pub(crate) const TOOLBAR_ACTIONS: [ToolbarAction; 8] = [
     ToolbarAction::Vlm,
     ToolbarAction::ColorPicker,
     ToolbarAction::Ruler,
+    ToolbarAction::WindowMagnifier,
 ];
 
 impl ToolbarAction {
@@ -87,6 +89,7 @@ impl ToolbarAction {
             ToolbarAction::Vlm => "vlm",
             ToolbarAction::ColorPicker => "color_picker",
             ToolbarAction::Ruler => "ruler",
+            ToolbarAction::WindowMagnifier => "window_magnifier",
         }
     }
 
@@ -100,6 +103,7 @@ impl ToolbarAction {
             ToolbarAction::Vlm => "VLM",
             ToolbarAction::ColorPicker => "Color picker",
             ToolbarAction::Ruler => "Ruler",
+            ToolbarAction::WindowMagnifier => "Window magnifier",
         }
     }
 

@@ -26,7 +26,7 @@ Capture toolbar (dark theme)
 - **Image quality**: VLM images retain their original size up to one million pixels; larger images shrink proportionally. JPEG quality is 92, preserving wide subtitle strips without upscaling small captures.
 - **Customizable Overlay**: Instantly change background color, text color, transparency, and separate textbox to match your preference.
 - **Textbox mode & Click-Through**: Enable Textbox mode to hide the overlay's close button and allow **Click-Through Interaction**, letting you click applications behind the capture area while still seeing the translation boundary.
-- **Markdown results**: The textbox renders headings, emphasis (including quoted Korean text followed by particles), lists, quotes, code blocks, and tables. Automatic clipboard sync and **Ctrl+C** retain the original Markdown text. Links display their labels; images display their alternative text.
+- **Markdown results**: The textbox renders headings, emphasis, lists, quotes, code blocks, and tables. Automatic clipboard sync and **Ctrl+C** retain the original Markdown text.
 - **Dynamic scaling**: Font size automatically adjusts to fit the text within your selected area.
 - **Clipboard Sync**: Translated text is automatically copied to the system clipboard for easy use elsewhere.
 - **Multi-API Support**: 
@@ -38,7 +38,7 @@ Capture toolbar (dark theme)
 - **Configurable Global Hotkeys**: 
   - **Win + Alt + A**: Trigger area selection (default).
   - **Win + Alt + P**: Start or Stop the translation process (default).
-  - Up to **three capture-toolbar shortcuts** can run Fullscreen / Window / Region capture, OCR, OCR + Translate, VLM, color picker, or ruler. Every binding is remappable from the keyboard button next to the **CAPTURE SETTINGS** title.
+  - Up to **three capture-toolbar shortcuts** can run Fullscreen / Window / Region capture, OCR, OCR + Translate, VLM, color picker, ruler, or window magnifier. Every binding is remappable from the keyboard button next to the **CAPTURE SETTINGS** title.
 - **Capture Mode**: Compact always-on-top toolbar (`Capture` ↔ `OCR` toggle).
   - Frame mode opens a movable, resizable transparent capture frame with its own Capture and Record controls.
   - Fullscreen / Window / Scrolling (Windows only) / Region (`Esc` to cancel).
@@ -49,7 +49,6 @@ Capture toolbar (dark theme)
   - For one-shot OCR and OCR+Translate, the language dropdown lists only installed Windows OCR packs with short labels such as **KO**, **JP**, and **EN**.
   - OCR+Translate preserves and copies the recognized source text if translation fails, with the error shown in the toolbar status.
   - PNG/MP4 saved as `YYYY-MM-DD_001...` + clipboard copy; recording looks for `ffmpeg.exe` beside the application first, then on `PATH`. Single-monitor recording first tries ddagrab/NVENC and retries with software capture/libx264 if startup fails. NVIDIA hardware is optional; the FFmpeg build must include libx264 for software recording.
-  - Settings changes are cached in memory, coalesced for 250 ms, and saved by replacing the INI file through a temporary file. Pending changes are flushed on normal exit.
 
 ## Shortcuts
 
@@ -65,7 +64,7 @@ All global shortcuts are configurable. Click the keyboard icon on the right side
 
 - Each slot combines **Win / Alt / Ctrl / Shift** with a single key: **A-Z**, **0-9**, **F1-F12**, **PrintScreen**, and the punctuation keys **` , . / ; ' [ ] \ - =**.
 - Only **Select area** and **Start** come with defaults; the three capture-toolbar slots start empty.
-- A capture-toolbar slot also selects the action to run: **Fullscreen**, **Window**, or **Region** capture, **OCR**, **OCR + Translate**, **VLM**, **Color picker**, or **Ruler**.
+- A capture-toolbar slot also selects the action to run: **Fullscreen**, **Window**, or **Region** capture, **OCR**, **OCR + Translate**, **VLM**, **Color picker**, **Ruler**, or **Window magnifier**.
 - At least one modifier and one key are required. A slot that has an action but no key is rejected instead of saved.
 - Shortcuts are registered globally, so they keep working while the application is in the background.
 

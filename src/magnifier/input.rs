@@ -2,6 +2,7 @@
 //! source so Windows hit testing, hover tracking and game cursor queries agree.
 use super::source_window::SourceWindow;
 use anyhow::Result;
+use std::time::{Duration, Instant};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, POINT, RECT, WPARAM},
     Graphics::{
@@ -44,6 +45,40 @@ struct InputGeometry {
     source: RECT,
     viewer_origin: POINT,
     desktop: RECT,
+    client: Option<ClientHit>,
+}
+
+#[derive(Clone, Copy)]
+struct ClientHit {
+    origin: POINT,
+    rect: RECT,
+    read_at: Instant,
+}
+impl ClientHit {
+    fn contains(self, logical_point: POINT) -> bool {
+        contains(
+            self.rect,
+            POINT {
+                x: logical_point.x.saturating_sub(self.origin.x),
+                y: logical_point.y.saturating_sub(self.origin.y),
+            },
+        )
+    }
+}
+
+fn cached_client_hit(
+    cached: Option<ClientHit>,
+    now: Instant,
+    convert: impl FnOnce() -> Option<POINT>,
+    live: impl FnOnce() -> bool,
+) -> bool {
+    let cached = cached.filter(|client| {
+        now.saturating_duration_since(client.read_at) <= Duration::from_millis(250)
+    });
+    match cached.and_then(|client| convert().map(|point| client.contains(point))) {
+        Some(inside) => inside,
+        None => live(),
+    }
 }
 
 fn contains(rect: RECT, point: POINT) -> bool {
@@ -127,6 +162,29 @@ pub(super) fn capture_bounds(window: HWND, size: (u32, u32)) -> Option<RECT> {
     captured_bounds(size, [visible, outer, client])
 }
 
+fn query_client_hit(window: HWND) -> Option<ClientHit> {
+    // Cache the SAME logical coordinate system as the legacy per-click check.
+    // No inverse/corner conversion; a failed optional probe must never disable
+    // the independently valid source-to-view mapping (notably in games).
+    let _dpi = TargetDpi::physical();
+    let mut origin = POINT::default();
+    let mut rect = RECT::default();
+    unsafe {
+        if !ClientToScreen(window, &mut origin).as_bool()
+            || !PhysicalToLogicalPointForPerMonitorDPI(Some(window), &mut origin).as_bool()
+        {
+            return None;
+        }
+        let _target_dpi = TargetDpi::enter(window);
+        GetClientRect(window, &mut rect).ok()?;
+    }
+    (rect.right > rect.left && rect.bottom > rect.top).then_some(ClientHit {
+        origin,
+        rect,
+        read_at: Instant::now(),
+    })
+}
+
 fn viewer_local_point(screen: POINT, origin: POINT) -> (f64, f64) {
     (
         (i64::from(screen.x) - i64::from(origin.x)) as f64,
@@ -200,6 +258,7 @@ impl InputBridge {
             self.geometry_version = hooks::geometry_version().wrapping_sub(1);
             self.refresh_geometry();
         }
+        self.publish_hook_preview();
     }
 
     pub fn source_covered(&self) -> bool {
@@ -230,14 +289,50 @@ impl InputBridge {
                 source,
                 viewer_origin,
                 desktop: desktop_bounds(),
+                client: query_client_hit(self.source.window),
             })
         })();
+        self.publish_hook_preview();
     }
 
-    // Native Windows input selects child controls itself. Only button/wheel
-    // events need this live client check; traversing every child on every move
-    // adds cross-process work without affecting native routing.
-    fn source_client_contains(&self, mut point: POINT) -> bool {
+    fn publish_hook_preview(&self) {
+        let preview = self.geometry.zip(self.view).map(|(geometry, view)| RECT {
+            left: geometry.viewer_origin.x.saturating_add(view.x),
+            top: geometry.viewer_origin.y.saturating_add(view.y),
+            right: geometry
+                .viewer_origin
+                .x
+                .saturating_add(view.x)
+                .saturating_add(view.width),
+            bottom: geometry
+                .viewer_origin
+                .y
+                .saturating_add(view.y)
+                .saturating_add(view.height),
+        });
+        hooks::set_preview(preview);
+    }
+
+    fn source_client_contains(&self, point: POINT) -> bool {
+        let cached = self.geometry.and_then(|geometry| geometry.client);
+        cached_client_hit(
+            cached,
+            Instant::now(),
+            || {
+                let mut logical = point;
+                unsafe {
+                    PhysicalToLogicalPointForPerMonitorDPI(Some(self.source.window), &mut logical)
+                }
+                .as_bool()
+                .then_some(logical)
+            },
+            || self.source_client_contains_live(point),
+        )
+    }
+
+    // Preserve the previously working DPI-aware check as a fallback when the
+    // optional cache/probe is unavailable. Never gate all pointer geometry on it.
+    fn source_client_contains_live(&self, mut point: POINT) -> bool {
         let window = self.source.window;
         let mut origin = POINT::default();
         unsafe {
@@ -265,6 +360,10 @@ impl InputBridge {
             return false;
         };
         let handled = native.process(self, event);
+        if event.intercepted && !native.active() {
+            // A rejected first press must release the hook's pending-entry gate.
+            hooks::native_active(false);
+        }
         self.native = Some(native);
         handled
     }
@@ -293,11 +392,30 @@ impl InputBridge {
         if self
             .hooks
             .as_ref()
+            .is_some_and(|hooks| hooks.mouse_failed())
+        {
+            self.suspend_mouse();
+            self.error = Some("Mouse hook stopped; close and reopen the magnifier to retry".into());
+            return;
+        }
+        if self
+            .hooks
+            .as_ref()
             .is_some_and(|hooks| !hooks.tracks_geometry())
         {
             self.geometry_version = hooks::geometry_version().wrapping_sub(1);
         }
         self.refresh_geometry();
+        if let Some(geometry) = self.geometry.as_mut() {
+            if geometry
+                .client
+                .is_none_or(|client| client.read_at.elapsed() >= Duration::from_millis(100))
+            {
+                // Repair missed client-only layout/DPI notifications and failed
+                // optional probes without repeating remote queries per click.
+                geometry.client = query_client_hit(self.source.window);
+            }
+        }
         if let Some(mut native) = self.native.take() {
             let foreground = unsafe { GetForegroundWindow() };
             let related = foreground == self.viewer
@@ -335,15 +453,19 @@ impl InputBridge {
 
     pub fn flush_pending(&mut self) {
         for event in hooks::take_pending() {
-            self.native_mouse(event);
-            if self.preview_cursor().is_none() {
-                break;
+            if event.native && self.preview_cursor().is_none() {
+                // Source-relative events from a completed leave are no longer
+                // valid viewer coordinates. Never re-enter using those points.
+                continue;
             }
+            self.native_mouse(event);
+            // Inactive hover is observational: don't discard a subsequent first
+            // press just because the preceding hover did not activate the source.
         }
     }
 
     pub fn suspend_mouse(&mut self) {
-        hooks::take_pending();
+        hooks::clear_pending();
         if let Some(mut native) = self.native.take() {
             let foreground = unsafe { GetForegroundWindow() };
             native.leave(
@@ -380,6 +502,55 @@ impl Drop for InputBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn logical_client_cache_keeps_caption_boundary_and_falls_back_on_probe_failure() {
+        let now = Instant::now();
+        let cached = ClientHit {
+            origin: POINT { x: -1500, y: 200 },
+            rect: RECT {
+                left: 0,
+                top: 0,
+                right: 800,
+                bottom: 600,
+            },
+            read_at: now,
+        };
+        for (point, inside) in [
+            (POINT { x: -1500, y: 200 }, true),
+            (POINT { x: -701, y: 799 }, true),
+            (POINT { x: -1500, y: 199 }, false),
+            (POINT { x: -700, y: 200 }, false),
+        ] {
+            assert_eq!(
+                cached_client_hit(
+                    Some(cached),
+                    now,
+                    || Some(point),
+                    || panic!("live query on cache hit")
+                ),
+                inside
+            );
+        }
+        assert!(cached_client_hit(
+            None,
+            now,
+            || panic!("convert without cache"),
+            || true
+        ));
+        assert!(cached_client_hit(Some(cached), now, || None, || true));
+        assert!(!cached_client_hit(Some(cached), now, || None, || false));
+        let stale = ClientHit {
+            read_at: now - Duration::from_secs(1),
+            ..cached
+        };
+        assert!(cached_client_hit(
+            Some(stale),
+            now,
+            || panic!("stale coordinate conversion"),
+            || true
+        ));
+    }
+
     #[test]
     fn frame_mapping_preserves_title_and_invisible_border_offsets_at_high_dpi() {
         for dpi in [1.0, 1.25, 1.5, 2.0] {

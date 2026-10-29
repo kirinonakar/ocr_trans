@@ -1,5 +1,4 @@
 //! Map hardware input once and allow our tagged native events through unchanged.
-use super::InputBridge;
 use anyhow::{Context, Result};
 use std::{
     cell::{Cell, RefCell},
@@ -7,7 +6,7 @@ use std::{
     rc::Weak,
 };
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM},
+    Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     UI::{
         Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK},
         Input::KeyboardAndMouse::{
@@ -23,20 +22,28 @@ thread_local! {
     static CURSOR_QUEUED: Cell<bool> = const { Cell::new(false) };
     static GEOMETRY_VERSION: Cell<u64> = const { Cell::new(1) };
     static SOURCE: Cell<isize> = const { Cell::new(0) };
-    static NATIVE_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static CLOSE_REQUESTED: Cell<bool> = const { Cell::new(false) };
-    static PENDING: RefCell<VecDeque<HardwareEvent>> = const { RefCell::new(VecDeque::new()) };
 }
 #[derive(Clone, Copy)]
 pub(super) struct HardwareEvent {
     pub message: u32,
     pub data: MSLLHOOKSTRUCT,
     pub origin: POINT,
+    // True for source-relative samples; false for absolute viewer hover/entry.
+    pub native: bool,
+    pub intercepted: bool,
 }
 
 fn queue_pending(queue: &mut VecDeque<HardwareEvent>, event: HardwareEvent) {
     if event.message == WM_MOUSEMOVE {
-        if let Some(last) = queue.back_mut().filter(|last| last.message == WM_MOUSEMOVE) {
+        if let Some(last) = queue
+            .back_mut()
+            .filter(|last| last.message == WM_MOUSEMOVE && last.native == event.native)
+        {
+            if !event.native {
+                *last = event;
+                return;
+            }
             // Positions were sampled against different native cursor origins.
             // Sum relative deltas, rather than keeping only the last position.
             let sum = |first: i32, next: i32, next_origin: i32| {
@@ -45,11 +52,14 @@ fn queue_pending(queue: &mut VecDeque<HardwareEvent>, event: HardwareEvent) {
             };
             last.data.pt.x = sum(last.data.pt.x, event.data.pt.x, event.origin.x);
             last.data.pt.y = sum(last.data.pt.y, event.data.pt.y, event.origin.y);
+            last.data.time = event.data.time;
             return;
         }
     }
     queue.push_back(event);
 }
+
+mod mouse_thread;
 const HOTKEY_ID: i32 = 0x4f43;
 const SUBCLASS_ID: usize = 0x4f435249;
 type SubclassProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM, usize, usize) -> LRESULT;
@@ -99,17 +109,23 @@ pub(in crate::magnifier) fn present_frame() {
         }
     });
 }
+fn dispatch_cursor() -> bool {
+    OWNER.with(|slot| {
+        let Ok(slot) = slot.try_borrow() else {
+            return false;
+        };
+        slot.upgrade().is_none_or(|owner| owner.update_cursor())
+    })
+}
 fn request_cursor_update() {
     if CURSOR_QUEUED.replace(true) {
         return;
     }
     if slint::invoke_from_event_loop(|| {
         CURSOR_QUEUED.set(false);
-        OWNER.with(|slot| {
-            if let Some(owner) = slot.borrow().upgrade() {
-                owner.update_cursor();
-            }
-        });
+        if !dispatch_cursor() {
+            slint::Timer::single_shot(std::time::Duration::from_millis(1), request_cursor_update);
+        }
     })
     .is_err()
     {
@@ -132,77 +148,19 @@ unsafe extern "system" fn source_location_changed(
     }
 }
 pub(super) fn native_active(active: bool) {
-    NATIVE_ACTIVE.set(active);
+    mouse_thread::set_active(active);
+}
+pub(super) fn set_preview(preview: Option<RECT>) {
+    mouse_thread::set_preview(preview);
 }
 pub(in crate::magnifier) fn take_close_requested() -> bool {
     CLOSE_REQUESTED.replace(false)
 }
 pub(super) fn take_pending() -> VecDeque<HardwareEvent> {
-    PENDING.with(|slot| std::mem::take(&mut *slot.borrow_mut()))
+    mouse_thread::take_pending()
 }
-
-fn with_input(action: impl FnOnce(&mut InputBridge) -> bool) -> Option<bool> {
-    OWNER.with(|slot| {
-        let owner = slot.try_borrow().ok()?.upgrade()?;
-        let mut input = owner.input.try_borrow_mut().ok()?;
-        input.as_mut().map(action)
-    })
-}
-
-unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    let message = wparam.0 as u32;
-    if code >= 0
-        && lparam.0 != 0
-        && matches!(
-            message,
-            WM_MOUSEMOVE
-                | WM_LBUTTONDOWN
-                | WM_LBUTTONUP
-                | WM_RBUTTONDOWN
-                | WM_RBUTTONUP
-                | WM_MBUTTONDOWN
-                | WM_MBUTTONUP
-                | WM_XBUTTONDOWN
-                | WM_XBUTTONUP
-                | WM_MOUSEWHEEL
-                | WM_MOUSEHWHEEL
-        )
-    {
-        let data = *(lparam.0 as *const MSLLHOOKSTRUCT);
-        // Our SendInput events must reach Windows exactly once, without being
-        // remapped by this hook or entering the re-entrant pending queue.
-        if data.dwExtraInfo == super::native::INPUT_TAG {
-            return CallNextHookEx(None, code, wparam, lparam);
-        }
-        // Sample BEFORE Windows applies this hardware event. Store the origin
-        // with queued events: intervening injected moves must not change their
-        // deltas when a re-entrant event is replayed later.
-        let mut origin = data.pt;
-        if NATIVE_ACTIVE.get() && message == WM_MOUSEMOVE {
-            let _dpi = super::TargetDpi::physical();
-            if GetCursorPos(&mut origin).is_err() {
-                return CallNextHookEx(None, code, wparam, lparam);
-            }
-        }
-        let event = HardwareEvent {
-            message,
-            data,
-            origin,
-        };
-        let handled = with_input(|input| input.native_mouse(event));
-        if handled == Some(true) || NATIVE_ACTIVE.get() {
-            request_cursor_update();
-        }
-        match handled {
-            Some(true) => return LRESULT(1),
-            None if NATIVE_ACTIVE.get() => {
-                PENDING.with(|slot| queue_pending(&mut slot.borrow_mut(), event));
-                return LRESULT(1);
-            }
-            _ => {}
-        }
-    }
-    CallNextHookEx(None, code, wparam, lparam)
+pub(super) fn clear_pending() {
+    mouse_thread::clear_pending();
 }
 
 unsafe extern "system" fn window_proc(
@@ -213,6 +171,12 @@ unsafe extern "system" fn window_proc(
     _: usize,
     _: usize,
 ) -> LRESULT {
+    if message == mouse_thread::DISPATCH {
+        if mouse_thread::matches_generation(wparam.0) && !dispatch_cursor() {
+            request_cursor_update();
+        }
+        return LRESULT(0);
+    }
     if message == WM_HOTKEY && wparam.0 == HOTKEY_ID as usize {
         CLOSE_REQUESTED.set(true);
         request_update();
@@ -223,7 +187,7 @@ unsafe extern "system" fn window_proc(
 
 pub(super) struct NativeHooks {
     viewer: HWND,
-    mouse: Option<HHOOK>,
+    mouse: Option<mouse_thread::MouseThread>,
     location: HWINEVENTHOOK,
     subclassed: bool,
     hotkey: bool,
@@ -251,7 +215,7 @@ impl NativeHooks {
             )
             .context("Unable to reserve Ctrl+Alt+F12 for restoring the source window")?;
             this.hotkey = true;
-            this.mouse = Some(SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), None, 0)?);
+            this.mouse = Some(mouse_thread::MouseThread::start(viewer)?);
             SOURCE.set(source.0 as isize);
             let mut pid = 0;
             GetWindowThreadProcessId(source, Some(&mut pid));
@@ -273,23 +237,24 @@ impl NativeHooks {
     }
 }
 impl NativeHooks {
+    pub fn mouse_failed(&self) -> bool {
+        self.mouse.as_ref().is_some_and(|mouse| mouse.failed())
+    }
     pub fn tracks_geometry(&self) -> bool {
         !self.location.is_invalid()
     }
 }
 impl Drop for NativeHooks {
     fn drop(&mut self) {
-        NATIVE_ACTIVE.set(false);
+        native_active(false);
         SOURCE.set(0);
         CLOSE_REQUESTED.set(false);
-        PENDING.with(|slot| slot.borrow_mut().clear());
+        clear_pending();
         unsafe {
             if !self.location.is_invalid() {
                 let _ = UnhookWinEvent(self.location);
             }
-            if let Some(hook) = self.mouse {
-                let _ = UnhookWindowsHookEx(hook);
-            }
+            self.mouse.take();
             if self.hotkey {
                 let _ = UnregisterHotKey(Some(self.viewer), HOTKEY_ID);
             }
@@ -306,6 +271,8 @@ mod tests {
     fn event(message: u32, origin_x: i32, dx: i32, dy: i32) -> HardwareEvent {
         HardwareEvent {
             message,
+            native: true,
+            intercepted: true,
             origin: POINT {
                 x: origin_x,
                 y: 300,
@@ -318,6 +285,25 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    #[test]
+    fn inactive_hover_uses_latest_absolute_position_without_merging_relative_motion() {
+        let mut queue = VecDeque::new();
+        let mut first = event(WM_MOUSEMOVE, 100, 0, 0);
+        first.native = false;
+        first.intercepted = false;
+        let mut last = event(WM_MOUSEMOVE, 120, 0, 0);
+        last.native = false;
+        last.intercepted = false;
+        queue_pending(&mut queue, first);
+        queue_pending(&mut queue, last);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].data.pt.x, 120);
+        queue_pending(&mut queue, event(WM_MOUSEMOVE, -1000, 4, 2));
+        assert_eq!(queue.len(), 2);
+        assert!(!queue[0].native);
+        assert!(queue[1].native);
     }
 
     #[test]
