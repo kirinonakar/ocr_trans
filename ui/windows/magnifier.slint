@@ -30,6 +30,9 @@ export component MagnifierWindow inherits Window {
     in-out property <float> quality_y;
     in-out property <float> quality_width;
     in-out property <float> quality_height;
+    in-out property <bool> preview_cursor_visible: false;
+    in-out property <float> preview_cursor_x;
+    in-out property <float> preview_cursor_y;
     callback drag_requested();
     callback zoom_changed(float);
     callback capture_clicked();
@@ -53,6 +56,15 @@ export component MagnifierWindow inherits Window {
         // Keep this image/texture alive through zoom changes. Temporarily stretch
         // the last frame smoothly until the exact-size Lanczos result arrives.
         image-rendering: root.quality_exact ? pixelated : smooth;
+    }
+
+    Image {
+        visible: root.preview_cursor_visible;
+        x: root.preview_cursor_x * 1px;
+        y: root.preview_cursor_y * 1px;
+        width: 20px;
+        height: 28px;
+        source: @image-url("../icons/magnifier-cursor.svg");
     }
 
     // Match the capture frame's header. Explicit geometry keeps every control
@@ -86,13 +98,15 @@ export component MagnifierWindow inherits Window {
                 pressed => { root.drag_requested(); }
             }
             Slider {
-                minimum: min(30, max(root.max_zoom_percent - 5, 0));
-                maximum: root.max_zoom_percent;
-                step: 5;
+                minimum: 50;
+                // Keep a nonzero visual range when only 50% fits; the slider
+                // is disabled in that case and the selected value stays at 50%.
+                maximum: max(51, root.max_zoom_percent);
+                step: 1;
                 value <=> root.zoom_percent;
                 width: 160px;
                 horizontal-stretch: 0;
-                enabled: !root.recording;
+                enabled: !root.recording && root.max_zoom_percent > 50;
                 changed(value) => { root.zoom_changed(value); }
             }
             Text {

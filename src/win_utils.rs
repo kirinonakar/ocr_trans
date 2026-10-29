@@ -139,6 +139,53 @@ pub fn set_topmost(hwnd: HWND) {
     }
 }
 
+/// Keeps the preview above external source windows and below this app's visible
+/// topmost overlays, preserving the overlays' relative order and keyboard focus.
+pub fn set_preview_topmost(viewer: HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetTopWindow, GetWindow, GetWindowThreadProcessId, IsWindowVisible, SetWindowPos,
+        GW_HWNDNEXT, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+        WS_EX_TOPMOST,
+    };
+    unsafe {
+        let mut process = 0;
+        GetWindowThreadProcessId(viewer, Some(&mut process));
+        if process == 0 {
+            return;
+        }
+        let mut overlays = Vec::new();
+        let mut window = GetTopWindow(None).unwrap_or_default();
+        // The topmost band precedes ordinary windows. Bound the walk in case
+        // another process changes its window list while we inspect it.
+        for _ in 0..256 {
+            if window.is_invalid() || GetWindowLongW(window, GWL_EXSTYLE) & WS_EX_TOPMOST.0 as i32 == 0 {
+                break;
+            }
+            let mut owner_process = 0;
+            GetWindowThreadProcessId(window, Some(&mut owner_process));
+            if window != viewer && owner_process == process && IsWindowVisible(window).as_bool() {
+                overlays.push(window);
+            }
+            window = GetWindow(window, GW_HWNDNEXT).unwrap_or_default();
+        }
+        // Raise from back to front so translation/textbox/toolbar windows keep
+        // their existing relative order. Insert the preview below the last one.
+        for overlay in overlays.iter().rev() {
+            set_topmost(*overlay);
+        }
+        let after = overlays.last().copied().unwrap_or(HWND_TOPMOST);
+        let _ = SetWindowPos(
+            viewer,
+            Some(after),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        );
+    }
+}
+
 /// Returns true when the foreground window of another process covers its whole monitor, which is
 /// how a fullscreen application presents itself (browser, game, video player, ...). This app's own
 /// windows are ignored so switching between them never triggers the overlay guard, and merely

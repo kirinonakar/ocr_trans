@@ -333,8 +333,21 @@ impl Drop for SourceWindow {
 
 pub(crate) fn restore_all() {
     let parked = std::mem::take(&mut *PARKED.lock().unwrap());
+    if !parked.is_empty() {
+        restore_system_cursor();
+    }
     for snapshot in parked {
         snapshot.restore();
+    }
+}
+
+fn restore_system_cursor() {
+    use windows::Win32::UI::Magnification::{MagInitialize, MagShowSystemCursor, MagUninitialize};
+    unsafe {
+        if MagInitialize().as_bool() {
+            let _ = MagShowSystemCursor(true);
+            let _ = MagUninitialize();
+        }
     }
 }
 
@@ -351,6 +364,8 @@ pub(crate) fn run_restore_watchdog() -> Result<bool> {
             let _ = CloseHandle(parent);
         }
     }
+    // The parent can die while the physical cursor is hidden for native input.
+    restore_system_cursor();
     for _ in 0..20 {
         if snapshot.restore() {
             break;

@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod popups;
 mod window_capture;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,9 +87,11 @@ impl Drop for QualitySession {
 fn run(source: isize, stop: &AtomicBool, shared: &Mutex<Shared>) -> Result<()> {
     let _apartment = window_capture::Apartment::new()?;
     let mut capture = window_capture::WindowCapture::new(source)?;
+    let mut popups = popups::Popups::new(source);
     let mut resizer = Resizer::new();
     let mut original: Option<RgbaImage> = None;
     let mut rendered: Option<FrameKey> = None;
+    let mut composed: Option<RgbaImage> = None;
     while !stop.load(Ordering::Relaxed) {
         let started = Instant::now();
         if shared.lock().unwrap().output.is_none() {
@@ -105,7 +108,14 @@ fn run(source: isize, stop: &AtomicBool, shared: &Mutex<Shared>) -> Result<()> {
             }
         }
         let output = shared.lock().unwrap().output;
-        if let (Some(original), Some(output)) = (&original, output) {
+        if let Some(original) = &original {
+            let pixels = popups.composite(original);
+            if composed != pixels {
+                composed = pixels;
+                rendered = None;
+            }
+        }
+        if let (Some(original), Some(output)) = (composed.as_ref().or(original.as_ref()), output) {
             let key = FrameKey {
                 source: original.dimensions(),
                 output,

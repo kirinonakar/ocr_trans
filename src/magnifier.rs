@@ -41,7 +41,7 @@ fn snap_zoom_percent(percent: f32) -> f32 {
     if !percent.is_finite() {
         return 200.0;
     }
-    (percent / 5.0).round().clamp(6.0, 80.0) * 5.0
+    percent.round().clamp(50.0, 400.0)
 }
 
 fn maximum_zoom_percent(source: (i32, i32), work: (i32, i32), dpi: f64, frame: (i32, i32)) -> f32 {
@@ -51,18 +51,11 @@ fn maximum_zoom_percent(source: (i32, i32), work: (i32, i32), dpi: f64, frame: (
     let width = (work.0 - frame.0) as f64 - (INSET * dpi).ceil() * 2.0;
     let height = (work.1 - frame.1) as f64 - (HEADER * dpi).ceil() - (INSET * dpi).ceil();
     let percent = (width.max(1.0) / source.0 as f64).min(height.max(1.0) / source.1 as f64) * 100.0;
-    if percent < 5.0 {
-        ((percent * 10.0).floor() / 10.0).max(0.1) as f32
-    } else {
-        ((percent / 5.0).floor() * 5.0).min(400.0) as f32
-    }
+    percent.floor().clamp(50.0, 400.0) as f32
 }
 
 fn bounded_zoom_percent(percent: f32, maximum: f32) -> f32 {
-    if maximum < 30.0 {
-        return maximum;
-    }
-    snap_zoom_percent(percent).min(maximum)
+    snap_zoom_percent(percent).min(maximum.max(50.0).floor())
 }
 
 fn quality_presentation(
@@ -418,21 +411,7 @@ impl WindowMagnifier {
                         let _ = this.update();
                         if this.input.borrow().is_some() {
                             if let Ok(viewer) = hwnd(&this.window) {
-                                use windows::Win32::UI::WindowsAndMessaging::{
-                                    SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
-                                    SWP_NOSIZE,
-                                };
-                                unsafe {
-                                    let _ = SetWindowPos(
-                                        viewer,
-                                        Some(HWND_TOPMOST),
-                                        0,
-                                        0,
-                                        0,
-                                        0,
-                                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                                    );
-                                }
+                                win_utils::set_preview_topmost(viewer);
                             }
                         } else {
                             this.window
@@ -475,24 +454,12 @@ impl WindowMagnifier {
         self.window.set_source_available(false);
         self.window.show()?;
         input::set_owner(Rc::downgrade(self));
-        let input_weak = Rc::downgrade(self);
-        self.window.window().on_winit_window_event(move |_, event| {
-            if let Some(this) = input_weak.upgrade() {
-                if let Ok(mut input) = this.input.try_borrow_mut() {
-                    if let Some(input) = input.as_mut() {
-                        if input.handle(event) {
-                            return i_slint_backend_winit::EventResult::PreventDefault;
-                        }
-                    }
-                }
-            }
-            i_slint_backend_winit::EventResult::Propagate
-        });
         let result = (|| -> Result<()> {
             let owner = hwnd(&self.window)?;
             win_utils::set_title_bar_theme(owner, dark);
             win_utils::set_tool_window(owner, true);
             win_utils::disable_window_transitions(owner);
+            win_utils::set_preview_topmost(owner);
             if self.movement_guard.borrow().as_ref().map(|guard| guard.0) != Some(owner) {
                 *self.movement_guard.borrow_mut() = Some(window_bounds::MovementGuard::new(owner)?);
             }
@@ -623,10 +590,26 @@ impl WindowMagnifier {
             self.close();
             return Ok(());
         }
+        // Slint can raise the viewer on activation/resize, even before native
+        // source interaction starts or while falling back to a DWM thumbnail.
+        if let Ok(viewer) = hwnd(&self.window) {
+            win_utils::set_preview_topmost(viewer);
+        }
         let restart_capture = if let Some(input) = self.input.borrow_mut().as_mut() {
             input.flush();
+            if let Some(error) = input.take_error() {
+                self.window.set_status_text(error.into());
+            }
+            let cursor = input.preview_cursor();
+            self.window.set_preview_cursor_visible(cursor.is_some());
+            if let Some((x, y)) = cursor {
+                let dpi = self.window.window().scale_factor();
+                self.window.set_preview_cursor_x(x as f32 / dpi);
+                self.window.set_preview_cursor_y(y as f32 / dpi);
+            }
             input.take_capture_restart()
         } else {
+            self.window.set_preview_cursor_visible(false);
             false
         };
         if restart_capture {
@@ -923,20 +906,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slider_limit_is_a_five_percent_step_that_fits_the_work_area() {
+    fn slider_limit_uses_integer_percent_and_respects_the_fifty_percent_minimum() {
         for dpi in [1.0, 1.25, 1.5, 2.0] {
             for source in [(800, 600), (1920, 1080), (3840, 2160)] {
                 let limit = maximum_zoom_percent(source, (1920, 1040), dpi, (0, 0));
-                assert_eq!(limit % 5.0, 0.0);
+                assert_eq!(limit.fract(), 0.0);
+                assert!(limit >= 50.0);
                 let (w, h) = fitted_window_size(source, limit as f64 / 100.0, dpi, (1920, 1040));
                 let (_, actual) =
                     preview_rect(source, (w as i32, h as i32), dpi, limit as f64 / 100.0).unwrap();
-                assert!((actual * 100.0 - limit as f64).abs() < 0.01);
+                assert!(actual * 100.0 <= limit as f64 + 0.01);
+                if limit > 50.0 {
+                    assert!((actual * 100.0 - limit as f64).abs() < 0.01);
+                }
                 assert_eq!(bounded_zoom_percent(400.0, limit), limit);
             }
         }
-        assert_eq!(bounded_zoom_percent(100.0, 25.0), 25.0);
+        assert_eq!(bounded_zoom_percent(100.0, 25.0), 50.0);
         assert_eq!(bounded_zoom_percent(145.0, 165.0), 145.0);
+        assert_eq!(bounded_zoom_percent(146.0, 165.0), 146.0);
+        assert_eq!(bounded_zoom_percent(200.0, 167.8), 167.0);
     }
 
     #[test]
@@ -968,15 +957,19 @@ mod tests {
     }
 
     #[test]
-    fn zoom_rounds_to_five_percent_and_clamps_the_slider_limits() {
+    fn zoom_rounds_to_one_percent_and_clamps_the_slider_limits() {
         for (input, expected) in [
-            (-10.0, 30.0),
-            (30.0, 30.0),
-            (32.0, 30.0),
-            (33.0, 35.0),
-            (397.0, 395.0),
-            (399.0, 400.0),
+            (-10.0, 50.0),
+            (30.0, 50.0),
+            (50.0, 50.0),
+            (50.4, 50.0),
+            (50.5, 51.0),
+            (51.0, 51.0),
+            (101.0, 101.0),
+            (397.0, 397.0),
+            (399.0, 399.0),
             (500.0, 400.0),
+            (f32::NAN, 200.0),
         ] {
             assert_eq!(snap_zoom_percent(input), expected);
         }
@@ -1018,7 +1011,7 @@ mod tests {
                 }));
                 pixels
             };
-            let low = render(30.0);
+            let low = render(50.0);
             let high = render(400.0);
             let header_end = (width * 90.min(height)) as usize;
             // The track/thumb and percentage label must repaint in the upper controls.
@@ -1139,7 +1132,7 @@ mod tests {
     fn zoom_window_stays_inside_work_area_including_header_at_each_dpi() {
         for dpi in [1.0, 1.25, 1.5, 2.0] {
             for source in [(120, 80), (1600, 900), (700, 2200)] {
-                for percent in (30..=400).step_by(5) {
+                for percent in 50..=400 {
                     let zoom = percent as f64 / 100.0;
                     let (w, h) = fitted_window_size(source, zoom, dpi, (1920, 1040));
                     assert!(w <= 1920 && h <= 1040);
