@@ -29,6 +29,7 @@ pub(crate) fn register_callbacks(
     hotkey_manager: Option<Arc<GlobalHotKeyManager>>,
     esc_hotkey: HotKey,
     selection_initialized: Arc<Mutex<bool>>,
+    magnifier: &std::rc::Rc<crate::magnifier::WindowMagnifier>,
 ) {
     let frame_initialized = Arc::new(Mutex::new(false));
 
@@ -209,7 +210,11 @@ pub(crate) fn register_callbacks(
     let state_magnify = state.clone();
     let initialized_magnify = selection_initialized.clone();
     let hotkeys_magnify = hotkey_manager.clone();
+    let magnifier = magnifier.clone();
     capture_toolbar.on_magnify_window_clicked(move || {
+        if magnifier.close_if_open() {
+            return;
+        }
         if let Some(toolbar) = toolbar_weak_magnify.upgrade() {
             begin_toolbar_selection(
                 &toolbar,

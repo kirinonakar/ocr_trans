@@ -144,6 +144,7 @@ pub(crate) async fn run(instance: crate::lifecycle::NativeHost) -> Result<()> {
         hotkey_manager.clone(),
         esc_hotkey,
         selection_initialized.clone(),
+        &magnifier,
     );
 
     crate::provider_ui::register_callbacks(&main_window, state.clone(), http_client.clone());

@@ -588,6 +588,20 @@ impl WindowMagnifier {
         true
     }
 
+    pub(crate) fn close_if_open(self: &Rc<Self>) -> bool {
+        if !self.window.window().is_visible() {
+            return false;
+        }
+        // Native window changes must wait until the toolbar's pointer callback returns.
+        let weak = Rc::downgrade(self);
+        slint::Timer::single_shot(Duration::from_millis(1), move || {
+            if let Some(this) = weak.upgrade() {
+                this.close();
+            }
+        });
+        true
+    }
+
     fn close(&self) {
         if let Some(input) = self.input.borrow_mut().as_mut() {
             input.suspend_mouse();
