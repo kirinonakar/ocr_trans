@@ -44,6 +44,7 @@ pub(crate) fn register_callbacks(
     folder_owner: Option<isize>,
     initial_dark_theme: bool,
     initial_app_mode: &str,
+    start_in_tray: bool,
 ) -> Arc<Mutex<bool>> {
     let state_folder_changed = state.clone();
     main_window.on_capture_folder_changed(move |folder| {
@@ -371,7 +372,8 @@ pub(crate) fn register_callbacks(
 
     // Restore the last selected mode after the event loop has created the native windows.
     // Showing the toolbar before hiding the main window also avoids a transient no-window state.
-    if initial_app_mode == "capture" {
+    // Autostart owns a tray icon already; materialize no control windows at logon.
+    if !start_in_tray && initial_app_mode == "capture" {
         let main_weak_restore = main_window.as_weak();
         let toolbar_weak_restore = capture_toolbar.as_weak();
         slint::Timer::single_shot(Duration::from_millis(0), move || {
@@ -383,7 +385,7 @@ pub(crate) fn register_callbacks(
                 }
             }
         });
-    } else {
+    } else if !start_in_tray {
         // Explicitly materialize the OCR window before entering the event loop. This gives the
         // native title-bar attributes a real HWND on the very first launch as well as on mode
         // switches from the compact toolbar.
@@ -393,4 +395,38 @@ pub(crate) fn register_callbacks(
     }
 
     selection_initialized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+    use std::rc::Rc;
+
+    #[test]
+    fn tray_autostart_keeps_both_control_windows_hidden_in_either_saved_mode() {
+        struct Headless;
+        impl slint::platform::Platform for Headless {
+            fn create_window_adapter(&self) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+                Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+            }
+        }
+        slint::platform::set_platform(Box::new(Headless)).unwrap();
+        for mode in ["ocr", "capture"] {
+            let main = MainWindow::new().unwrap();
+            let toolbar = CaptureToolbarWindow::new().unwrap();
+            register_callbacks(
+                &main, &toolbar, &CaptureFrameWindow::new().unwrap(),
+                &OverlayWindow::new().unwrap(), &TextboxWindow::new().unwrap(),
+                &ShortcutSettingsWindow::new().unwrap(), Arc::new(Mutex::new(AppState::default())),
+                None, false, mode, true,
+            );
+            // Pump timers as well: a deferred capture-mode restore must not show the toolbar.
+            std::thread::sleep(Duration::from_millis(5));
+            slint::platform::update_timers_and_animations();
+            assert_eq!(main.get_app_mode(), mode);
+            assert!(!main.window().is_visible());
+            assert!(!toolbar.window().is_visible());
+        }
+    }
 }

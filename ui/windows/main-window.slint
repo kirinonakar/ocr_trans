@@ -41,6 +41,10 @@ export component MainWindow inherits Window {
     in-out property <string> system_prompt: "naturally translate into korean. only show translated texts.";
     in-out property <string> translation_glossary;
     in-out property <bool> skip_empty_ocr: false;
+    in-out property <bool> single_instance: false;
+    in-out property <bool> minimize_to_tray: false;
+    in-out property <bool> autostart: false;
+    in-out property <string> lifecycle_error;
     private property <bool> translation_options_open: false;
     in-out property <float> base_font_size: 16;
     in-out property <string> result_font_family: "Yu Gothic UI";
@@ -85,6 +89,7 @@ export component MainWindow inherits Window {
     callback capture_folder_changed(string);
     callback system_prompt_changed(string);
     callback translation_options_saved();
+    callback lifecycle_options_changed();
     callback result_font_changed(string);
     callback preset_selected(string);
     callback preset_save_clicked();
@@ -605,12 +610,15 @@ export component MainWindow inherits Window {
         Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: parent.width - 28px; height: min(440px, parent.height - 28px);
+            width: parent.width - 28px;
+            // Content, title and button plus padding, spacing and 24px of layout slack.
+            height: min(options-content.preferred-height + options-title.preferred-height
+                + options-done.preferred-height + 68px, parent.height - 28px);
             background: dark_theme ? #37373f : #ffffff;
             border-radius: 10px;
             VerticalLayout {
                 padding: 14px; spacing: 8px;
-                Text { text: "Options"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; }
+                options-title := Text { text: "Options"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; }
                 ScrollView {
                     viewport-height: max(self.visible-height, options-content.preferred-height);
                     options-content := VerticalLayout {
@@ -640,10 +648,38 @@ export component MainWindow inherits Window {
                         }
                         Text { text: "Glossary (one source=translation per line)"; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b; }
                         TextEdit { text <=> translation_glossary; height: 110px; font-size: 13px; }
-                        Text { text: "Continuous translation also refers to the last 3 completed lines."; wrap: word-wrap; font-size: 12px; color: dark_theme ? #cbd5e1 : #64748b; }
+                        CheckBox {
+                            text: "Single instance";
+                            checked <=> single_instance;
+                            toggled => {
+                                if (!single_instance) { minimize_to_tray = false; autostart = false; }
+                                lifecycle_options_changed();
+                            }
+                        }
+                        CheckBox {
+                            text: "Minimize to tray";
+                            checked <=> minimize_to_tray;
+                            enabled: single_instance;
+                            toggled => {
+                                if (!minimize_to_tray) { autostart = false; }
+                                lifecycle_options_changed();
+                            }
+                        }
+                        CheckBox {
+                            text: "Autostart";
+                            checked <=> autostart;
+                            enabled: single_instance && minimize_to_tray;
+                            toggled => { lifecycle_options_changed(); }
+                        }
+                        if lifecycle_error != "" : Text {
+                            text: lifecycle_error;
+                            wrap: word-wrap;
+                            font-size: 12px;
+                            color: dark_theme ? #fca5a5 : #b91c1c;
+                        }
                     }
                 }
-                Button {
+                options-done := Button {
                     text: "Done";
                     clicked => { translation_options_saved(); translation_options_open = false; }
                 }

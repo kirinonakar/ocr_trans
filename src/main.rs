@@ -4,11 +4,13 @@ slint::include_modules!();
 
 mod api;
 mod app;
+mod autostart;
 mod capture;
 mod capture_workflow;
 mod credentials;
 mod fonts;
 mod image_processing;
+mod lifecycle;
 mod markdown;
 mod magnifier;
 mod ocr;
@@ -33,8 +35,11 @@ fn main() -> anyhow::Result<()> {
     if magnifier::run_restore_watchdog()? {
         return Ok(());
     }
+    let Some(instance) = lifecycle::NativeHost::start()? else {
+        return Ok(());
+    };
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(app::run())
+        .block_on(app::run(instance))
 }

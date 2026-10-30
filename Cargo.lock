@@ -4144,6 +4144,7 @@ dependencies = [
  "uuid",
  "windows",
  "windows-future",
+ "windows-registry",
  "winit",
  "winres",
  "xcap",

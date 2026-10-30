@@ -109,6 +109,8 @@ pub(crate) struct AppSettings {
     pub(crate) system_prompt: String,
     pub(crate) system_prompt_presets: Vec<PromptPreset>,
     pub(crate) app_mode: String,
+    pub(crate) single_instance: bool,
+    pub(crate) minimize_to_tray: bool,
     pub(crate) dark_theme: bool,
     pub(crate) ocr_language: String,
     pub(crate) skip_empty_ocr: bool,
@@ -353,6 +355,13 @@ pub(crate) fn save_translation_options(skip_empty_ocr: bool, glossary: &str) {
     });
 }
 
+pub(crate) fn save_lifecycle_options(single_instance: bool, minimize_to_tray: bool) {
+    update_settings(|settings| {
+        settings.single_instance = single_instance;
+        settings.minimize_to_tray = single_instance && minimize_to_tray;
+    });
+}
+
 enum SaveMessage {
     Changed,
     Flush(std::sync::mpsc::Sender<()>),
@@ -406,6 +415,8 @@ fn read_app_settings() -> AppSettings {
             .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()),
         system_prompt_presets: Vec::new(),
         app_mode: "ocr".to_string(),
+        single_instance: false,
+        minimize_to_tray: false,
         dark_theme: false,
         ocr_language: String::new(),
         skip_empty_ocr: false,
@@ -452,6 +463,9 @@ fn read_app_settings() -> AppSettings {
                     .collect();
             }
             settings.app_mode = ini_value(&values, "app", "app_mode", settings.app_mode);
+            settings.single_instance = ini_bool(&values, "app", "single_instance", false);
+            settings.minimize_to_tray = settings.single_instance
+                && ini_bool(&values, "app", "minimize_to_tray", false);
             settings.dark_theme = ini_bool(&values, "app", "dark_theme", settings.dark_theme);
             settings.ocr_language = ini_value(&values, "app", "ocr_language", settings.ocr_language);
             settings.skip_empty_ocr = ini_bool(&values, "translation", "skip_empty_ocr", false);
@@ -528,7 +542,7 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         format!("{}={}\n", definition.model_key, ini_escape(&saved_model_for_provider(&settings.provider, definition.name)))
     }).collect::<String>();
     let mut contents = format!(
-        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nresult_font_family={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
+        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\nsingle_instance={}\nminimize_to_tray={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nresult_font_family={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
         ini_escape(&settings.provider.provider),
         models,
         ini_escape(&settings.provider.thinking_level),
@@ -536,6 +550,8 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         ini_escape(&settings.system_prompt),
         ini_escape(&serde_json::to_string(&settings.system_prompt_presets).unwrap_or_default()),
         ini_escape(&settings.app_mode),
+        settings.single_instance,
+        settings.single_instance && settings.minimize_to_tray,
         if settings.dark_theme { "true" } else { "false" },
         ini_escape(settings.ocr_language.trim()),
         settings.base_font_size,
@@ -718,6 +734,26 @@ pub(crate) fn save_shortcut_config(config: &ShortcutConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifecycle_options_roundtrip_with_last_mode_and_cannot_enable_tray_alone() {
+        for (single, tray, mode) in [
+            (false, false, "ocr"), (true, false, "capture"),
+            (true, true, "capture"), (false, true, "ocr"),
+        ] {
+            let settings = AppSettings {
+                single_instance: single, minimize_to_tray: tray,
+                app_mode: mode.to_string(), ..Default::default()
+            };
+            let values = parse_ini(&serialize_app_settings(&settings));
+            assert_eq!(ini_bool(&values, "app", "single_instance", false), single);
+            assert_eq!(ini_bool(&values, "app", "minimize_to_tray", false), single && tray);
+            assert_eq!(ini_value(&values, "app", "app_mode", String::new()), mode);
+        }
+        let legacy = parse_ini("[app]\napp_mode=capture\n");
+        assert!(!ini_bool(&legacy, "app", "single_instance", false));
+        assert!(!ini_bool(&legacy, "app", "minimize_to_tray", false));
+    }
 
     #[test]
     fn window_positions_roundtrip_independently_and_reject_incomplete_or_invalid_pairs() {

@@ -728,21 +728,4 @@ pub(crate) fn register_callbacks(
             });
         }
     });
-
-    let recorder_slot_toolbar_close = recorder_slot.clone();
-    let recording_border_toolbar_close = recording_border_window.as_weak();
-    capture_toolbar.on_close_clicked(move || {
-        shutdown_and_exit(
-            &recorder_slot_toolbar_close,
-            &recording_border_toolbar_close,
-        );
-    });
-    let recorder_slot_toolbar_window_close = recorder_slot.clone();
-    let recording_border_toolbar_window_close = recording_border_window.as_weak();
-    capture_toolbar.window().on_close_requested(move || {
-        shutdown_and_exit(
-            &recorder_slot_toolbar_window_close,
-            &recording_border_toolbar_window_close,
-        );
-    });
 }

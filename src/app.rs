@@ -18,8 +18,9 @@ use crate::state::AppState;
 
 use crate::capture_workflow::*;
 
-pub(crate) async fn run() -> Result<()> {
+pub(crate) async fn run(instance: crate::lifecycle::NativeHost) -> Result<()> {
     env_logger::init();
+    let start_in_tray = instance.start_in_tray();
 
     let main_window = MainWindow::new()?;
     let overlay_window = OverlayWindow::new()?;
@@ -121,6 +122,7 @@ pub(crate) async fn run() -> Result<()> {
         folder_owner,
         initial_dark_theme,
         &initial_app_mode,
+        start_in_tray,
     );
 
     let recorder_slot: Arc<Mutex<Option<capture::ScreenRecorder>>> = Arc::new(Mutex::new(None));
@@ -195,6 +197,16 @@ pub(crate) async fn run() -> Result<()> {
         hotkey_state,
     );
 
+    let _lifecycle = crate::lifecycle::register_callbacks(
+        instance,
+        &main_window,
+        &capture_toolbar,
+        &capture_frame_window,
+        &shortcut_window,
+        recorder_slot.clone(),
+        &recording_border_window,
+    );
+
     // Keep the translation overlay above applications that run in fullscreen mode. The guard
     // re-applies the topmost window band while another process owns a fullscreen foreground
     // window, and the timer stays alive until the event loop exits.
@@ -202,7 +214,11 @@ pub(crate) async fn run() -> Result<()> {
     let _overlay_topmost_guard =
         start_overlay_topmost_guard(overlay_window.as_weak(), textbox_window.as_weak());
 
-    if let Err(error) = main_window.run() {
+    if !start_in_tray {
+        main_window.show()?;
+    }
+    // Closing to tray leaves no visible Slint windows. Only an explicit exit should end the loop.
+    if let Err(error) = slint::run_event_loop_until_quit() {
         log::error!("OCR Translator event loop stopped: {error:?}");
     }
     let recording_border_exit = recording_border_window.as_weak();

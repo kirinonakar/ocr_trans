@@ -512,6 +512,7 @@ pub(crate) fn shutdown_and_exit(
     recording_border: &slint::Weak<RecordingBorderWindow>,
 ) -> ! {
     crate::settings::flush_settings();
+    crate::lifecycle::remove_tray_icon();
     if let Some(border) = recording_border.upgrade() {
         let _ = border.hide();
     }

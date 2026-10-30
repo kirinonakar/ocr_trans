@@ -23,8 +23,7 @@ Capture toolbar (dark theme)
 - **Translation options**: Open **Options...** in **CAPTURE SETTINGS** for a glossary (`source=translation`, one entry per line) and an option to skip empty OCR and clear the overlay. Skipping defaults to off to support fonts Windows OCR may miss.
 - **Dialogue context**: Continuous translation uses the last three completed lines and your glossary for consistency.
 - **Result font**: Choose an installed font in **Options...** to apply it immediately to both the textbox and overlay.
-- **Streaming results**: Continuous translation and toolbar VLM/OCR+Translate show output as it arrives. Only completed translations are copied to the clipboard.
-- **Image quality**: VLM images retain their original size up to one million pixels; larger images shrink proportionally. JPEG quality is 92, preserving wide subtitle strips without upscaling small captures.
+- **Single instance, tray & autostart**: **Single instance** makes a relaunch activate the running app; **Minimize to tray** hides the windows on close, adds a tray menu (**Capture**/**OCR**/**Exit**) and reopens the last mode on double-click; **Autostart** starts the app automatically at Windows logon with only the tray icon.
 - **Customizable Overlay**: Instantly change background color, text color, transparency, and separate textbox to match your preference.
 - **Textbox mode & Click-Through**: Enable Textbox mode to hide the overlay's close button and allow **Click-Through Interaction**, letting you click applications behind the capture area while still seeing the translation boundary.
 - **Markdown results**: The textbox renders headings, emphasis, lists, quotes, code blocks, and tables. Automatic clipboard sync and **Ctrl+C** retain the original Markdown text.

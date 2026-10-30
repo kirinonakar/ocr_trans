@@ -136,13 +136,6 @@ pub(crate) fn register_callbacks(
     let selection_weak = selection_window.as_weak();
     let overlay_weak = overlay_window.as_weak();
     let textbox_weak = textbox_window.as_weak();
-    // Close Requested - Hard Exit
-    let recorder_slot_main_close = recorder_slot.clone();
-    let recording_border_main_close = recording_border_window.as_weak();
-    main_window.window().on_close_requested(move || {
-        shutdown_and_exit(&recorder_slot_main_close, &recording_border_main_close);
-    });
-
     let main_weak_for_selection = main_window.as_weak();
     let selection_weak_for_close = selection_window.as_weak();
     let hotkey_manager_for_close = hotkey_manager.clone();
