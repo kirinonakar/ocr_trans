@@ -490,6 +490,12 @@ impl ApiClient {
         if !self.is_opencode_provider() {
             payload["temperature"] = json!(self.temperature);
         }
+        if provider(&self.provider).thinking(&self.model) == Thinking::OpenRouter {
+            // OpenRouter checks affordability against the requested output budget. Avoid
+            // reserving a model's large default for short screen translations. This cap
+            // includes reasoning tokens as well as the visible answer.
+            payload["max_tokens"] = json!(32768);
+        }
         self.apply_openai_thinking(&mut payload);
         payload
     }
@@ -804,6 +810,26 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_caps_output_for_image_and_text_even_with_default_thinking() {
+        for name in ["OpenRouter", "LMStudio", "OpenCode Go", "OpenCode Zen"] {
+            let mut client = test_client(name);
+            for level in [
+                "default", "disable", "low", "medium", "high", "xhigh", "max",
+            ] {
+                client.thinking_level = level.into();
+                for input in [Input::Text("hello"), Input::Image("test-image".into())] {
+                    let payload = client.request_payload(&input);
+                    if name == "OpenRouter" {
+                        assert_eq!(payload["max_tokens"], 32768);
+                    } else {
+                        assert!(payload.get("max_tokens").is_none());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn openrouter_routes_namespaced_models_and_thinking_through_chat() {
         let mut client = test_client("OpenRouter");
         client.endpoint = provider("OpenRouter").endpoint.into();
@@ -956,6 +982,7 @@ mod tests {
             let payload: serde_json::Value =
                 serde_json::from_slice(&request[end + 4..end + 4 + length]).unwrap();
             assert_eq!(payload["stream"], true);
+            assert_eq!(payload["max_tokens"], 32768);
             socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"first\"}}]}\n\n").await.unwrap();
             tokio::time::timeout(Duration::from_secs(3), wait_for_delta)
                 .await
