@@ -115,7 +115,6 @@ pub(crate) async fn run(instance: crate::lifecycle::NativeHost) -> Result<()> {
         &main_window,
         &capture_toolbar,
         &capture_frame_window,
-        &overlay_window,
         &textbox_window,
         &shortcut_window,
         state.clone(),

@@ -8,8 +8,8 @@ use crate::settings::{
 };
 use crate::state::AppState;
 use crate::{
-    win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow, OverlayWindow,
-    ShortcutSettingsWindow, TextboxWindow,
+    win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow, ShortcutSettingsWindow,
+    TextboxWindow,
 };
 use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
@@ -37,7 +37,6 @@ pub(crate) fn register_callbacks(
     main_window: &MainWindow,
     capture_toolbar: &CaptureToolbarWindow,
     capture_frame_window: &CaptureFrameWindow,
-    overlay_window: &OverlayWindow,
     textbox_window: &TextboxWindow,
     shortcut_window: &ShortcutSettingsWindow,
     state: Arc<Mutex<AppState>>,
@@ -228,25 +227,14 @@ pub(crate) fn register_callbacks(
     // settings UI; Capture mode hides it and reveals the AIMediaWorker-style toolbar.
     let main_weak_mode = main_window.as_weak();
     let toolbar_weak_mode = capture_toolbar.as_weak();
-    let overlay_weak_mode = overlay_window.as_weak();
     let textbox_weak_mode = textbox_window.as_weak();
-    let state_mode = state.clone();
     main_window.on_mode_toggle_clicked(move |mode| {
         let Some(main) = main_weak_mode.upgrade() else {
             return;
         };
         save_app_mode(mode.as_str());
         if mode == "capture" {
-            {
-                let mut state = state_mode.lock().unwrap();
-                state.is_running = false;
-                state.worker_control.signal();
-            }
-            main.set_is_running(false);
-            main.set_overlay_visible(false);
-            if let Some(overlay) = overlay_weak_mode.upgrade() {
-                let _ = overlay.hide();
-            }
+            // Switching control windows preserves the running OCR job and its overlay.
             // Keep the result window open across mode switches and reflect its actual
             // visibility in the capture toolbar's toggle.
             if let (Some(textbox), Some(toolbar)) =
@@ -417,7 +405,7 @@ mod tests {
             let toolbar = CaptureToolbarWindow::new().unwrap();
             register_callbacks(
                 &main, &toolbar, &CaptureFrameWindow::new().unwrap(),
-                &OverlayWindow::new().unwrap(), &TextboxWindow::new().unwrap(),
+                &TextboxWindow::new().unwrap(),
                 &ShortcutSettingsWindow::new().unwrap(), Arc::new(Mutex::new(AppState::default())),
                 None, false, mode, true,
             );
