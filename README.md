@@ -31,7 +31,7 @@ Capture toolbar (dark theme)
 - **Clipboard Sync**: Translated text is automatically copied to the system clipboard for easy use elsewhere.
 - **Multi-API Support**: 
   - **Cloud Providers**:
-    - **Google Gemini, Cerebras, Ollama Cloud, OpenCode Go, OpenCode Zen**: API key stored in Windows Credential Manager.
+    - **Google Gemini, Cerebras, Ollama Cloud, OpenCode Go, OpenCode Zen, OpenRouter**: API key stored in Windows Credential Manager.
   - **Local Providers**:
     - **Ollama, Unsloth Desktop, LMStudio / Custom**
 - **Adjustable Creativity**: Use the **Temperature** slider (0.0 - 1.0) to control translation consistency vs. creativity.
@@ -62,7 +62,7 @@ All global shortcuts are configurable. Click the keyboard icon on the right side
 | Capture toolbar 2 | *(not set)* | Run a chosen capture-toolbar action |
 | Capture toolbar 3 | *(not set)* | Run a chosen capture-toolbar action |
 
-- Each slot combines **Win / Alt / Ctrl / Shift** with a single key: **A-Z**, **0-9**, **F1-F12**, **PrintScreen**, and the punctuation keys **` , . / ; ' [ ] \ - =**.
+- Each slot combines **Win / Alt / Ctrl / Shift** with a single key: **A-Z**, **0-9**, **F1-F12**, **PrintScreen**, **ScrollLock (ScrLk)**, and the punctuation keys **` , . / ; ' [ ] \ - =**.
 - Only **Select area** and **Start** come with defaults; the three capture-toolbar slots start empty.
 - A capture-toolbar slot also selects the action to run: **Fullscreen**, **Window**, or **Region** capture, **OCR**, **OCR + Translate**, **VLM**, **Color picker**, **Ruler**, or **Window magnifier**.
 - At least one modifier and one key are required. A slot that has an action but no key is rejected instead of saved.
@@ -82,7 +82,7 @@ You can download the latest version from the [Releases Page](https://github.com/
 1. Clone the repository.
 2. Run `cargo run --release`. Or `cargo build --release` to generate the binary.
 3. Open the main window:
-   - Select your provider (LMStudio, Google Gemini, Cerebras, Ollama, Ollama Cloud, Unsloth Desktop, OpenCode Go, or OpenCode Zen).
+   - Select your provider (LMStudio, Google Gemini, Cerebras, Ollama, Ollama Cloud, Unsloth Desktop, OpenCode Go, OpenCode Zen, or OpenRouter).
    - Click **SELECT AREA** and drag to select the region you want to translate (e.g. subtitles).
    - Capture starts automatically. Use the **STOP** button to pause, or **Win + Alt + A** to re-select the area.
    - Use the **Overlay** checkbox to hide/show the translation text while running.

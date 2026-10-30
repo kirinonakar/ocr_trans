@@ -15,6 +15,7 @@ pub(crate) enum Thinking {
     Ollama,
     Unsloth,
     Mimo,
+    OpenRouter,
 }
 
 pub(crate) struct ModelOverride {
@@ -211,6 +212,25 @@ pub(crate) static PROVIDERS: &[Provider] = &[
         default_key: "",
         auto_sync: true,
         session_header: true,
+    },
+    Provider {
+        name: "OpenRouter",
+        model_key: "openrouter_model",
+        endpoint: "https://openrouter.ai/api/v1",
+        models: &[
+            "google/gemini-2.5-flash",
+            "openai/gpt-4.1-mini",
+            "anthropic/claude-sonnet-4.6",
+        ],
+        protocol: Protocol::ChatCompletions,
+        thinking: Thinking::OpenRouter,
+        overrides: &[],
+        key_target: Some("ocr_trans/openrouter-api-key"),
+        key_file: None,
+        key_env: Some("OPENROUTER_API_KEY"),
+        default_key: "",
+        auto_sync: true,
+        session_header: false,
     },
 ];
 

@@ -318,6 +318,15 @@ impl ApiClient {
             return;
         };
 
+        if provider(&self.provider).thinking(&self.model) == Thinking::OpenRouter {
+            payload["reasoning"] = if level == "disable" {
+                serde_json::json!({ "enabled": false })
+            } else {
+                serde_json::json!({ "effort": level })
+            };
+            return;
+        }
+
         if self.is_unsloth_endpoint() {
             payload["enable_thinking"] = serde_json::Value::Bool(level != "disable");
             if level != "disable" {
@@ -795,6 +804,35 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_routes_namespaced_models_and_thinking_through_chat() {
+        let mut client = test_client("OpenRouter");
+        client.endpoint = provider("OpenRouter").endpoint.into();
+        for model in provider("OpenRouter").models {
+            client.model = (*model).into();
+            assert_eq!(
+                client.request_url(true),
+                "https://openrouter.ai/api/v1/chat/completions"
+            );
+            for (level, reasoning) in [
+                ("default", None),
+                ("disable", Some(serde_json::json!({"enabled": false}))),
+                ("low", Some(serde_json::json!({"effort": "low"}))),
+                ("medium", Some(serde_json::json!({"effort": "medium"}))),
+                ("high", Some(serde_json::json!({"effort": "high"}))),
+                ("xhigh", Some(serde_json::json!({"effort": "xhigh"}))),
+                ("max", Some(serde_json::json!({"effort": "max"}))),
+            ] {
+                client.thinking_level = level.into();
+                let payload = client.request_payload(&Input::Text("hello"));
+                assert_eq!(payload["model"], *model);
+                assert_eq!(payload.get("reasoning"), reasoning.as_ref());
+                assert!(payload.get("reasoning_effort").is_none());
+                assert!(payload.get("thinking").is_none());
+            }
+        }
+    }
+
+    #[test]
     fn retries_only_transient_statuses_and_honors_retry_after() {
         for code in [400, 401, 403, 404, 422, 429, 500, 503] {
             let error: anyhow::Error = ApiFailure {
@@ -842,7 +880,13 @@ mod tests {
         assert_eq!(history.len(), 3);
         assert_eq!(history[0].source, "source 2");
         assert_eq!(history[0].translation.chars().count(), 1000);
-        for provider in ["Google Gemini", "Ollama", "OpenCode Go", "LMStudio"] {
+        for provider in [
+            "Google Gemini",
+            "Ollama",
+            "OpenCode Go",
+            "LMStudio",
+            "OpenRouter",
+        ] {
             let mut client =
                 test_client(provider).with_context("Alice=앨리스\ninvalid\n=missing", &history);
             match provider {
@@ -879,7 +923,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streaming_http_displays_a_delta_before_the_server_finishes() {
+    async fn openrouter_streaming_http_displays_a_delta_before_the_server_finishes() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -894,6 +938,9 @@ mod tests {
                 request.extend_from_slice(&buffer[..count]);
                 if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
                     let headers = String::from_utf8_lossy(&request[..end]).to_lowercase();
+                    assert!(headers.starts_with("post /api/v1/chat/completions "));
+                    assert!(headers.contains("\r\nauthorization: bearer test-key\r\n"));
+                    assert!(!headers.contains("x-opencode-session"));
                     let length = headers
                         .lines()
                         .find_map(|line| {
@@ -916,13 +963,14 @@ mod tests {
                 .unwrap();
             socket.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\" second\"}}]}\n\ndata: [DONE]\n\n").await.unwrap();
         });
-        let mut client = test_client("LMStudio");
+        let mut client = test_client("OpenRouter");
         client.client = Client::builder()
             .no_proxy()
             .timeout(Duration::from_secs(5))
             .build()
             .unwrap();
-        client.endpoint = format!("http://{address}/v1");
+        client.endpoint = format!("http://{address}/api/v1");
+        client.api_key = "test-key".into();
         let mut seen = Some(seen);
         let mut updates = Vec::new();
         let result = client
@@ -936,6 +984,50 @@ mod tests {
             .unwrap();
         assert_eq!(updates, ["first", "first second"]);
         assert_eq!(result, "first second");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn openrouter_model_refresh_uses_api_path_and_bearer_auth() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            loop {
+                let mut buffer = [0; 4096];
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+                if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let headers = String::from_utf8_lossy(&request).to_lowercase();
+            assert!(headers.starts_with("get /api/v1/models "));
+            assert!(headers.contains("\r\nauthorization: bearer test-key\r\n"));
+            assert!(!headers.contains("x-opencode-session"));
+            let body =
+                r#"{"data":[{"id":"google/gemini-2.5-flash"},{"id":"openai/gpt-4.1-mini"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        let mut client = test_client("OpenRouter");
+        client.client = Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        client.endpoint = format!("http://{address}/api/v1");
+        client.api_key = "test-key".into();
+        assert_eq!(
+            client.get_models().await.unwrap(),
+            ["google/gemini-2.5-flash", "openai/gpt-4.1-mini"]
+        );
         server.await.unwrap();
     }
 
@@ -1044,7 +1136,13 @@ mod tests {
 
     #[test]
     fn every_provider_keeps_instructions_separate_for_both_inputs() {
-        for provider in ["Google Gemini", "Ollama", "OpenCode Go", "LMStudio"] {
+        for provider in [
+            "Google Gemini",
+            "Ollama",
+            "OpenCode Go",
+            "LMStudio",
+            "OpenRouter",
+        ] {
             let mut client = test_client(provider);
             client.system_prompt = "Translate into Korean".into();
             match provider {

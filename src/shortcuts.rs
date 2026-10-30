@@ -16,11 +16,68 @@ use std::sync::{Arc, Mutex};
 
 /// Key tokens offered in the shortcut settings UI. The order is also the combo-box order and the
 /// index that the Slint properties encode.
-pub(crate) const KEY_TOKENS: [&str; 60] = [
-    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
-    "T", "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "F1", "F2",
-    "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "`", ",", ".", "/", ";", "'",
-    "[", "]", "\\", "-", "=", "PrintScreen",
+pub(crate) const KEY_TOKENS: [&str; 61] = [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
+    "`",
+    ",",
+    ".",
+    "/",
+    ";",
+    "'",
+    "[",
+    "]",
+    "\\",
+    "-",
+    "=",
+    "PrintScreen",
+    "ScrollLock",
 ];
 
 /// Persisted shortcut configuration. `Default` intentionally enables only the two original
@@ -274,6 +331,7 @@ pub(crate) fn key_code_from_token(token: &str) -> Option<Code> {
         "-" => Code::Minus,
         "=" => Code::Equal,
         "PRINTSCREEN" => Code::PrintScreen,
+        "SCROLLLOCK" | "SCRLK" => Code::ScrollLock,
         _ => return None,
     })
 }
@@ -328,6 +386,11 @@ pub(crate) fn key_index(token: &str) -> i32 {
     // Compare without case so mixed-case tokens such as `PrintScreen` round-trip through the
     // stored binding (which is upper-cased by `build_binding`).
     let token = token.trim();
+    let token = if token.eq_ignore_ascii_case("ScrLk") {
+        "ScrollLock"
+    } else {
+        token
+    };
     KEY_TOKENS
         .iter()
         .position(|candidate| (*candidate).eq_ignore_ascii_case(token))
@@ -360,11 +423,7 @@ pub(crate) fn binding_label(binding: &str) -> String {
     parts.join(" + ")
 }
 
-fn register_one(
-    manager: &GlobalHotKeyManager,
-    binding: &str,
-    label: &str,
-) -> Option<HotKey> {
+fn register_one(manager: &GlobalHotKeyManager, binding: &str, label: &str) -> Option<HotKey> {
     let hotkey = parse_binding(binding)?;
     if let Err(error) = manager.register(hotkey) {
         log::warn!("Failed to register {label} shortcut ({binding}): {error:?}");
@@ -414,4 +473,29 @@ pub(crate) fn apply_config(
     }
 
     state.config = config;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scroll_lock_aliases_restore_and_register_the_same_binding() {
+        let index = key_index("ScrollLock");
+        assert!(index >= 0);
+        for token in ["ScrollLock", "scrolllock", "ScrLk", "scrlk"] {
+            assert_eq!(key_index(token), index);
+            let binding = build_binding(false, true, true, false, token);
+            assert_eq!(
+                parse_binding(&binding),
+                Some(HotKey::new(
+                    Some(Modifiers::ALT | Modifiers::CONTROL),
+                    Code::ScrollLock
+                ))
+            );
+            let (win, alt, ctrl, shift, key) = split_binding(&binding);
+            assert_eq!((win, alt, ctrl, shift), (false, true, true, false));
+            assert_eq!(key_index(&key), index);
+        }
+    }
 }
