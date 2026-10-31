@@ -1,4 +1,4 @@
-import { Slider, Palette } from "std-widgets.slint";
+import { CheckBox, Slider, Palette } from "std-widgets.slint";
 import { ToolbarButton } from "../components/toolbar-button.slint";
 
 export component MagnifierWindow inherits Window {
@@ -8,7 +8,7 @@ export component MagnifierWindow inherits Window {
     resize-border-width: 9px;
     preferred-width: 720px;
     preferred-height: 450px;
-    min-width: 480px;
+    min-width: 600px;
     min-height: 190px;
     background: dark_theme ? #2b2b31 : #f8fafc;
     default-font-family: "Yu Gothic UI";
@@ -17,6 +17,7 @@ export component MagnifierWindow inherits Window {
     in-out property <bool> source_available: false;
     in-out property <bool> capture_busy: false;
     in-out property <bool> recording: false;
+    in-out property <bool> hide_titlebar: false;
     in-out property <bool> record_available: true;
     in-out property <string> source_title: "Window magnifier";
     in-out property <float> zoom_percent: 200;
@@ -35,6 +36,7 @@ export component MagnifierWindow inherits Window {
     in-out property <float> preview_cursor_y;
     callback drag_requested();
     callback zoom_changed(float);
+    callback hide_titlebar_changed();
     callback capture_clicked();
     callback record_clicked();
     callback close_clicked();
@@ -104,8 +106,10 @@ export component MagnifierWindow inherits Window {
                 maximum: max(51, root.max_zoom_percent);
                 step: 1;
                 value <=> root.zoom_percent;
-                width: 160px;
-                horizontal-stretch: 0;
+                min-width: 60px;
+                preferred-width: 160px;
+                max-width: 160px;
+                horizontal-stretch: 1;
                 enabled: !root.recording && root.max_zoom_percent > 50;
                 changed(value) => { root.zoom_changed(value); }
             }
@@ -118,6 +122,12 @@ export component MagnifierWindow inherits Window {
                 color: root.dark_theme ? #f8fafc : #1e293b;
             }
             Rectangle { horizontal-stretch: 1; }
+            CheckBox {
+                text: "Hide titlebar";
+                checked <=> root.hide_titlebar;
+                enabled: !root.recording;
+                toggled => { root.hide_titlebar_changed(); }
+            }
             ToolbarButton {
                 icon: @image-url("../icons/capture.svg");
                 label: "Capture";

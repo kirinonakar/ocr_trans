@@ -33,6 +33,7 @@ pub(super) struct InputBridge {
     no_activate_was_set: bool,
     view: Option<crate::capture::CaptureRect>,
     frame_size: (u32, u32),
+    frame_crop: Option<(u32, u32, u32, u32)>,
     cursor: (f64, f64),
     error: Option<String>,
     geometry: Option<InputGeometry>,
@@ -162,6 +163,39 @@ pub(super) fn capture_bounds(window: HWND, size: (u32, u32)) -> Option<RECT> {
     captured_bounds(size, [visible, outer, client])
 }
 
+fn intersect_client(frame: RECT, client: RECT) -> Option<(u32, u32, u32, u32)> {
+    let left = frame.left.max(client.left);
+    let top = frame.top.max(client.top);
+    let right = frame.right.min(client.right);
+    let bottom = frame.bottom.min(client.bottom);
+    (right > left && bottom > top).then_some((
+        (left - frame.left) as u32,
+        (top - frame.top) as u32,
+        (right - left) as u32,
+        (bottom - top) as u32,
+    ))
+}
+
+/// Locate client pixels in the captured frame, using physical coordinates for
+/// both WGC's visible-frame capture and DWM's full-window fallback.
+pub(super) fn client_crop(window: HWND, size: (u32, u32)) -> Option<(u32, u32, u32, u32)> {
+    let _dpi = TargetDpi::physical();
+    let frame = capture_bounds(window, size)?;
+    let mut client = RECT::default();
+    let mut origin = POINT::default();
+    unsafe {
+        GetClientRect(window, &mut client).ok()?;
+        if !ClientToScreen(window, &mut origin).as_bool() {
+            return None;
+        }
+    }
+    client.left += origin.x;
+    client.right += origin.x;
+    client.top += origin.y;
+    client.bottom += origin.y;
+    intersect_client(frame, client)
+}
+
 fn query_client_hit(window: HWND) -> Option<ClientHit> {
     // Cache the SAME logical coordinate system as the legacy per-click check.
     // No inverse/corner conversion; a failed optional probe must never disable
@@ -234,6 +268,7 @@ impl InputBridge {
             no_activate_was_set: style & WS_EX_NOACTIVATE.0 as i32 != 0,
             view: None,
             frame_size: (0, 0),
+            frame_crop: None,
             cursor: (-1.0, -1.0),
             error: None,
             geometry: None,
@@ -244,8 +279,14 @@ impl InputBridge {
         Ok(this)
     }
 
-    pub fn set_view(&mut self, view: crate::capture::CaptureRect, frame_size: (u32, u32)) {
+    pub fn set_view(
+        &mut self,
+        view: crate::capture::CaptureRect,
+        frame_size: (u32, u32),
+        frame_crop: Option<(u32, u32, u32, u32)>,
+    ) {
         let changed = self.frame_size != frame_size
+            || self.frame_crop != frame_crop
             || self.view.is_some_and(|old| {
                 (old.x, old.y, old.width, old.height) != (view.x, view.y, view.width, view.height)
             });
@@ -254,6 +295,7 @@ impl InputBridge {
         }
         self.view = Some(view);
         self.frame_size = frame_size;
+        self.frame_crop = frame_crop;
         if changed || self.geometry.is_none() {
             self.geometry_version = hooks::geometry_version().wrapping_sub(1);
             self.refresh_geometry();
@@ -280,7 +322,13 @@ impl InputBridge {
         self.geometry_version = version;
         let _dpi = TargetDpi::physical();
         self.geometry = (|| {
-            let source = capture_bounds(self.source.window, self.frame_size)?;
+            let mut source = capture_bounds(self.source.window, self.frame_size)?;
+            if let Some((x, y, width, height)) = self.frame_crop {
+                source.left += x as i32;
+                source.top += y as i32;
+                source.right = source.left + width as i32;
+                source.bottom = source.top + height as i32;
+            }
             let mut viewer_origin = POINT::default();
             if !unsafe { ClientToScreen(self.viewer, &mut viewer_origin) }.as_bool() {
                 return None;
@@ -502,6 +550,64 @@ impl Drop for InputBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_titlebar_maps_client_corners_at_each_dpi_and_with_negative_coordinates() {
+        for dpi in [1, 2, 3] {
+            let frame = RECT {
+                left: -1800,
+                top: -100,
+                right: -1800 + 816 * dpi,
+                bottom: -100 + 640 * dpi,
+            };
+            let client = RECT {
+                left: frame.left + 8 * dpi,
+                top: frame.top + 32 * dpi,
+                right: frame.right - 8 * dpi,
+                bottom: frame.bottom - 8 * dpi,
+            };
+            let crop = intersect_client(frame, client).unwrap();
+            assert_eq!(
+                crop,
+                (
+                    (8 * dpi) as u32,
+                    (32 * dpi) as u32,
+                    (800 * dpi) as u32,
+                    (600 * dpi) as u32
+                )
+            );
+            let view = crate::capture::CaptureRect {
+                x: 6,
+                y: 42,
+                width: 1600,
+                height: 1200,
+            };
+            let first = map_point(view, client, (6.0, 42.0), false).unwrap();
+            let last = map_point(view, client, (1605.0, 1241.0), false).unwrap();
+            assert_eq!((first.x, first.y), (client.left, client.top));
+            assert_eq!((last.x, last.y), (client.right - 1, client.bottom - 1));
+            assert_eq!(
+                intersect_client(client, client),
+                Some((0, 0, (800 * dpi) as u32, (600 * dpi) as u32))
+            );
+        }
+        assert!(intersect_client(
+            RECT {
+                left: 0,
+                top: 0,
+                right: 100,
+                bottom: 100
+            },
+            RECT {
+                left: 0,
+                top: 100,
+                right: 100,
+                bottom: 200
+            }
+        )
+        .is_none());
+    }
+
     #[test]
     fn logical_client_cache_keeps_caption_boundary_and_falls_back_on_probe_failure() {
         let now = Instant::now();

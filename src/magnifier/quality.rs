@@ -2,7 +2,7 @@
 //! Only a single latest result and one pending UI notification are retained.
 use anyhow::{Context, Result};
 use fast_image_resize::{
-    images::{Image, ImageRef},
+    images::{CroppedImage, Image, ImageRef},
     FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer,
 };
 use image::RgbaImage;
@@ -44,6 +44,7 @@ impl Wake {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FrameKey {
     pub source: (u32, u32),
+    pub crop: Option<(u32, u32, u32, u32)>,
     pub output: (u32, u32),
 }
 
@@ -54,7 +55,7 @@ pub(super) struct ProcessedFrame {
 
 #[derive(Default)]
 struct Shared {
-    output: Option<(u32, u32)>,
+    request: Option<FrameKey>,
     source: Option<(u32, u32)>,
     latest: Option<ProcessedFrame>,
     error: Option<String>,
@@ -108,10 +109,10 @@ impl QualitySession {
         self.shared.lock().unwrap().source
     }
 
-    pub fn request(&self, output: Option<(u32, u32)>) {
+    pub fn request(&self, request: Option<FrameKey>) {
         let mut state = self.shared.lock().unwrap();
-        if state.output != output {
-            state.output = output;
+        if state.request != request {
+            state.request = request;
             drop(state);
             self.wake.signal();
         }
@@ -160,7 +161,7 @@ fn run(
     let mut rendered: Option<FrameKey> = None;
     let mut composed: Option<RgbaImage> = None;
     while !stop.load(Ordering::Acquire) {
-        if shared.lock().unwrap().output.is_none() {
+        if shared.lock().unwrap().request.is_none() {
             wake.wait();
             continue;
         }
@@ -178,7 +179,7 @@ fn run(
                 source_changed = true;
             }
         }
-        let output = shared.lock().unwrap().output;
+        let request = shared.lock().unwrap().request;
         if let Some(original) = &original {
             match popups.composite(original, &capture, source_changed) {
                 popups::CompositeUpdate::Unchanged => {}
@@ -193,18 +194,16 @@ fn run(
                 }
             }
         }
-        if let (Some(original), Some(output)) = (composed.as_ref().or(original.as_ref()), output) {
-            let key = FrameKey {
-                source: original.dimensions(),
-                output,
-            };
-            if rendered != Some(key) {
-                let buffer = pool.install(|| resize_buffer(&mut resizer, original, output))?;
+        if let (Some(original), Some(key)) = (composed.as_ref().or(original.as_ref()), request) {
+            if key.source == original.dimensions() && rendered != Some(key) {
+                let buffer = pool.install(|| {
+                    resize_cropped_buffer(&mut resizer, original, key.output, key.crop)
+                })?;
                 if stop.load(Ordering::Acquire) {
                     break;
                 }
                 let mut state = shared.lock().unwrap();
-                if state.output == Some(output) {
+                if state.request == Some(key) {
                     state.latest = Some(ProcessedFrame { key, buffer });
                     rendered = Some(key);
                     drop(state);
@@ -217,15 +216,25 @@ fn run(
     Ok(())
 }
 
+#[cfg(test)]
 fn resize_buffer(
     resizer: &mut Resizer,
     original: &RgbaImage,
     output: (u32, u32),
 ) -> Result<PixelBuffer> {
+    resize_cropped_buffer(resizer, original, output, None)
+}
+
+fn resize_cropped_buffer(
+    resizer: &mut Resizer,
+    original: &RgbaImage,
+    output: (u32, u32),
+    crop: Option<(u32, u32, u32, u32)>,
+) -> Result<PixelBuffer> {
     anyhow::ensure!(output.0 > 0 && output.1 > 0, "Invalid preview size");
     let mut buffer = PixelBuffer::new(output.0, output.1);
     // 100% does exactly one copy into the same shared storage used for display/save.
-    if original.dimensions() == output {
+    if crop.is_none() && original.dimensions() == output {
         buffer.make_mut_bytes().copy_from_slice(original.as_raw());
         return Ok(buffer);
     }
@@ -238,8 +247,15 @@ fn resize_buffer(
     let mut destination =
         Image::from_slice_u8(output.0, output.1, buffer.make_mut_bytes(), PixelType::U8x4)?;
     let options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
-    // Alpha-aware filtering prevents colored halos on transparent edges.
-    resizer.resize(&source, &mut destination, &options)?;
+    // A bounded image view prevents Lanczos from sampling the hidden caption
+    // along the client edges, without copying the original pixels.
+    if let Some((x, y, width, height)) = crop {
+        let source = CroppedImage::new(&source, x, y, width, height)?;
+        resizer.resize(&source, &mut destination, &options)?;
+    } else {
+        // Alpha-aware filtering prevents colored halos on transparent edges.
+        resizer.resize(&source, &mut destination, &options)?;
+    }
     Ok(buffer)
 }
 
@@ -259,6 +275,30 @@ mod tests {
     use super::*;
     use image::Rgba;
     use std::time::Instant;
+
+    #[test]
+    fn hidden_titlebar_excludes_caption_pixels_and_restores_the_full_frame() {
+        let source = RgbaImage::from_fn(12, 10, |x, y| {
+            if y < 3 || x < 2 || x >= 10 || y >= 9 {
+                Rgba([255, 0, 0, 255])
+            } else {
+                Rgba([0, (x * 10) as u8, (y * 20) as u8, 255])
+            }
+        });
+        let mut resizer = Resizer::new();
+        let crop = Some((2, 3, 8, 6));
+        let pixels = resize_cropped_buffer(&mut resizer, &source, (8, 6), crop).unwrap();
+        let expected = image::imageops::crop_imm(&source, 2, 3, 8, 6).to_image();
+        assert_eq!(pixels.as_bytes(), expected.as_raw());
+        let enlarged = resize_cropped_buffer(&mut resizer, &source, (16, 12), crop).unwrap();
+        assert!(enlarged
+            .as_bytes()
+            .chunks_exact(4)
+            .all(|pixel| pixel[0] == 0));
+        let restored =
+            resize_cropped_buffer(&mut resizer, &source, source.dimensions(), None).unwrap();
+        assert_eq!(restored.as_bytes(), source.as_raw());
+    }
 
     #[test]
     fn repeated_frames_keep_the_same_quality_after_motion() {
@@ -356,12 +396,23 @@ mod tests {
             shared: Arc::new(Mutex::new(Shared::default())),
             wake: Arc::new(Wake::default()),
         };
-        session.request(Some((80, 60)));
+        let key = FrameKey {
+            source: (40, 30),
+            crop: None,
+            output: (80, 60),
+        };
+        session.request(Some(key));
         assert!(*session.wake.pending.lock().unwrap());
         session.wake.wait(); // Signal arrived before wait; must be consumed.
         assert!(!*session.wake.pending.lock().unwrap());
-        session.request(Some((80, 60)));
+        session.request(Some(key));
         assert!(!*session.wake.pending.lock().unwrap());
+        session.request(Some(FrameKey {
+            crop: Some((0, 4, 40, 26)),
+            ..key
+        }));
+        assert!(*session.wake.pending.lock().unwrap());
+        session.wake.wait();
         session.request(None);
         assert!(*session.wake.pending.lock().unwrap());
         session.wake.wait();

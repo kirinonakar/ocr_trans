@@ -63,7 +63,9 @@ fn quality_presentation(
     requested: quality::FrameKey,
     failed: bool,
 ) -> (bool, bool) {
-    let visible = rendered.is_some() && !failed;
+    let visible = rendered
+        .is_some_and(|frame| frame.source == requested.source && frame.crop == requested.crop)
+        && !failed;
     (visible, visible && rendered == Some(requested))
 }
 
@@ -93,7 +95,7 @@ pub(crate) struct WindowMagnifier {
     requested_frame: Cell<Option<quality::FrameKey>>,
     cached_work: Cell<Option<(u64, capture::CaptureRect)>>,
     cached_frame: Cell<Option<(u64, (i32, i32))>>,
-    thumbnail_properties: Cell<Option<(i32, i32, i32, i32, bool)>>,
+    thumbnail_properties: Cell<Option<(i32, i32, i32, i32, bool, bool)>>,
     last_stack_check: Cell<Instant>,
     quality_source_size: Cell<Option<(u32, u32)>>,
     zoom: Cell<f64>,
@@ -152,7 +154,7 @@ fn fitted_window_size(source: (i32, i32), zoom: f64, dpi: f64, work: (i32, i32))
         .min(available_h / source.1.max(1) as f64);
     let width = (source.0.max(1) as f64 * scale + horizontal)
         .ceil()
-        .max((480.0 * dpi).min(work.0 as f64))
+        .max((600.0 * dpi).min(work.0 as f64))
         .min(work.0 as f64);
     let height = (source.1.max(1) as f64 * scale + vertical)
         .ceil()
@@ -275,6 +277,13 @@ impl WindowMagnifier {
             this.pending_zoom_resize.set(true);
             input::request_update();
             this.window.set_status_text("".into());
+        });
+        let weak = Rc::downgrade(&this);
+        this.window.on_hide_titlebar_changed(move || {
+            if let Some(this) = weak.upgrade() {
+                this.pending_zoom_resize.set(true);
+                input::request_update();
+            }
         });
         let weak = Rc::downgrade(&this);
         let toolbar = toolbar.as_weak();
@@ -562,7 +571,9 @@ impl WindowMagnifier {
             .borrow()
             .as_ref()
             .and_then(|quality| quality.take_frame());
-        if let Some(frame) = frame.filter(|frame| frame.key.source == key.source) {
+        if let Some(frame) =
+            frame.filter(|frame| frame.key.source == key.source && frame.key.crop == key.crop)
+        {
             self.window
                 .set_quality_image(slint::Image::from_rgba8(frame.buffer.clone()));
             self.window.set_quality_exact(frame.key == key);
@@ -635,6 +646,8 @@ impl WindowMagnifier {
                 (size.cx, size.cy)
             }
         };
+        let crop = self.source_crop(thumbnail.source, size);
+        let size = crop.map_or(size, |(_, _, width, height)| (width as i32, height as i32));
         let work = self.cached_work_area()?;
         let dpi = self.window.window().scale_factor() as f64;
         let (frame_w, frame_h) = self.frame_extent();
@@ -679,6 +692,14 @@ impl WindowMagnifier {
             }
         });
         Ok(())
+    }
+
+    fn source_crop(&self, source: HWND, size: (i32, i32)) -> Option<(u32, u32, u32, u32)> {
+        if self.window.get_hide_titlebar() && size.0 > 0 && size.1 > 0 {
+            input::client_crop(source, (size.0 as u32, size.1 as u32))
+        } else {
+            None
+        }
     }
 
     fn update(&self) -> Result<()> {
@@ -808,10 +829,14 @@ impl WindowMagnifier {
             let source = unsafe { DwmQueryThumbnailSourceSize(thumbnail.handle)? };
             (source.cx, source.cy)
         };
-        if !own_recording && source.0 > 0 && source.1 > 0 {
+        let crop = self.source_crop(thumbnail.source, source);
+        let preview_source = crop.map_or(source, |(_, _, width, height)| {
+            (width as i32, height as i32)
+        });
+        if !own_recording && preview_source.0 > 0 && preview_source.1 > 0 {
             let work = self.cached_work_area()?;
             let maximum = maximum_zoom_percent(
-                source,
+                preview_source,
                 (work.width, work.height),
                 self.window.window().scale_factor() as f64,
                 self.frame_extent(),
@@ -833,7 +858,7 @@ impl WindowMagnifier {
                 let client = native.inner_size();
                 let position = native.inner_position().ok()?;
                 let (rect, _) = preview_rect(
-                    source,
+                    preview_source,
                     (client.width as i32, client.height as i32),
                     native.scale_factor(),
                     self.zoom.get(),
@@ -846,16 +871,17 @@ impl WindowMagnifier {
         };
         let key = quality::FrameKey {
             source: (source.0 as u32, source.1 as u32),
+            crop,
             output: (rect.width as u32, rect.height as u32),
         };
         self.requested_frame.set(Some(key));
         let mut quality_failed = false;
         if let Some(quality) = self.quality.borrow().as_ref() {
-            quality.request(Some(key.output));
+            quality.request(Some(key));
             quality_failed = quality.failed();
             if let Some(frame) = quality
                 .take_frame()
-                .filter(|frame| frame.key.source == key.source)
+                .filter(|frame| frame.key.source == key.source && frame.key.crop == key.crop)
             {
                 self.window
                     .set_quality_image(slint::Image::from_rgba8(frame.buffer.clone()));
@@ -881,15 +907,22 @@ impl WindowMagnifier {
             }
         }
         if let Some(input) = self.input.borrow_mut().as_mut() {
-            input.set_view(
-                rect,
-                self.quality_frame_key
-                    .get()
-                    .map_or(key.source, |frame| frame.source),
-            );
+            let frame = self
+                .quality_frame_key
+                .get()
+                .filter(|frame| frame.source == key.source && frame.crop == key.crop)
+                .unwrap_or(key);
+            input.set_view(rect, frame.source, frame.crop);
         }
         let visible = !quality_active || !was_quality_active;
-        let thumbnail_properties = (rect.x, rect.y, rect.width, rect.height, visible);
+        let thumbnail_properties = (
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            visible,
+            crop.is_some(),
+        );
         if self.thumbnail_properties.get() != Some(thumbnail_properties) {
             unsafe {
                 DwmUpdateThumbnailProperties(
@@ -909,7 +942,7 @@ impl WindowMagnifier {
                         // Let Slint paint the first image before removing the native
                         // preview. Subsequent zooms keep using the same image surface.
                         fVisible: visible.into(),
-                        fSourceClientAreaOnly: false.into(),
+                        fSourceClientAreaOnly: crop.is_some().into(),
                         ..Default::default()
                     },
                 )?;
@@ -1074,6 +1107,7 @@ mod tests {
     fn pending_zoom_frames_keep_the_image_visible_instead_of_switching_to_dwm() {
         let rendered = quality::FrameKey {
             source: (800, 600),
+            crop: None,
             output: (800, 600),
         };
         assert_eq!(quality_presentation(None, rendered, false), (false, false));
@@ -1094,6 +1128,22 @@ mod tests {
         }
         assert_eq!(
             quality_presentation(Some(rendered), rendered, true),
+            (false, false)
+        );
+        let hidden = quality::FrameKey {
+            crop: Some((0, 32, 800, 568)),
+            ..rendered
+        };
+        assert_eq!(
+            quality_presentation(Some(rendered), hidden, false),
+            (false, false)
+        );
+        assert_eq!(
+            quality_presentation(Some(hidden), hidden, false),
+            (true, true)
+        );
+        assert_eq!(
+            quality_presentation(Some(hidden), rendered, false),
             (false, false)
         );
     }
@@ -1140,7 +1190,7 @@ mod tests {
         for (name, width, height, dark) in [
             ("light", 800u32, 560u32, false),
             ("dark", 800, 560, true),
-            ("small", 480, 190, true),
+            ("small", 600, 190, true),
         ] {
             window.set_dark_theme(dark);
             surface.set_size(slint::PhysicalSize::new(width, height));
