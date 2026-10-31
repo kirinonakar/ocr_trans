@@ -530,8 +530,25 @@ pub(crate) fn shutdown_and_exit(
 }
 
 pub(crate) fn set_capture_toolbar_status(toolbar: &CaptureToolbarWindow, status: String) {
+    let revision = toolbar.get_status_revision().wrapping_add(1);
+    toolbar.set_status_revision(revision);
     toolbar.set_status_text(status.into());
     sync_capture_toolbar_size(toolbar);
+
+    if toolbar.get_status_text().is_empty() {
+        return;
+    }
+    let toolbar_weak = toolbar.as_weak();
+    slint::Timer::single_shot(Duration::from_secs(10), move || {
+        let Some(toolbar) = toolbar_weak.upgrade() else {
+            return;
+        };
+        // A newer message (even identical text) gets its own full ten seconds.
+        if toolbar.get_status_revision() == revision {
+            toolbar.set_status_text(String::new().into());
+            sync_capture_toolbar_size(&toolbar);
+        }
+    });
 }
 
 pub(crate) fn position_capture_toolbar(toolbar: &CaptureToolbarWindow) {
