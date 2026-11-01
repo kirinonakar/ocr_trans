@@ -126,6 +126,7 @@ pub(crate) fn initialize_ui(
     main_window.set_interval(0.0);
     // Restore the Style panel values so the overlay keeps its last look across restarts.
     main_window.set_base_font_size(initial_settings.base_font_size);
+    textbox_window.set_font_size(initial_settings.base_font_size);
     let font_families = crate::fonts::font_menu(&initial_settings.result_font_family);
     main_window.set_result_font_index(
         font_families.iter()

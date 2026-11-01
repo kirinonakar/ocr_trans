@@ -45,6 +45,79 @@ pub(crate) fn register_callbacks(
     initial_app_mode: &str,
     start_in_tray: bool,
 ) -> Arc<Mutex<bool>> {
+    textbox_window.set_preset_options(main_window.get_preset_options());
+    textbox_window.set_preset_index(main_window.get_preset_index());
+    let main_weak_preset_sync = main_window.as_weak();
+    let textbox_weak_preset_sync = textbox_window.as_weak();
+    main_window.on_preset_state_changed(move || {
+        if let (Some(main), Some(textbox)) = (
+            main_weak_preset_sync.upgrade(),
+            textbox_weak_preset_sync.upgrade(),
+        ) {
+            textbox.set_preset_options(main.get_preset_options());
+            textbox.set_preset_index(main.get_preset_index());
+        }
+    });
+    let main_weak_textbox_preset = main_window.as_weak();
+    textbox_window.on_preset_selected(move |name| {
+        if let Some(main) = main_weak_textbox_preset.upgrade() {
+            main.invoke_preset_selected(name);
+        }
+    });
+    #[cfg(target_os = "windows")]
+    {
+        let textbox_weak = textbox_window.as_weak();
+        textbox_window.on_preset_menu_requested(move |x, y| {
+            let textbox_weak = textbox_weak.clone();
+            // Finish the Slint button event before entering the OS menu's modal message loop.
+            slint::Timer::single_shot(Duration::from_millis(1), move || {
+                use i_slint_backend_winit::WinitWindowAccessor;
+                use slint::Model;
+                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+                let Some(textbox) = textbox_weak.upgrade() else {
+                    return;
+                };
+                if !textbox.window().is_visible() {
+                    return;
+                }
+                let labels: Vec<String> = textbox
+                    .get_preset_options()
+                    .iter()
+                    .map(|label| label.to_string())
+                    .collect();
+                if labels.is_empty() {
+                    return;
+                }
+                let result = textbox
+                    .window()
+                    .with_winit_window(|native| {
+                        let handle = native.window_handle().ok()?;
+                        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+                            return None;
+                        };
+                        let origin = native.inner_position().ok()?;
+                        let scale = native.scale_factor();
+                        Some(win_utils::choose_popup_item(
+                            windows::Win32::Foundation::HWND(handle.hwnd.get() as _),
+                            &labels,
+                            textbox.get_preset_index(),
+                            origin.x + (x as f64 * scale).round() as i32,
+                            origin.y + (y as f64 * scale).round() as i32,
+                        ))
+                    })
+                    .flatten();
+                match result {
+                    Some(Ok(Some(index))) => {
+                        textbox.set_preset_index(index as i32);
+                        textbox.invoke_preset_selected(labels[index].as_str().into());
+                    }
+                    Some(Err(error)) => log::warn!("Unable to open prompt preset menu: {error}"),
+                    _ => {}
+                }
+            });
+        });
+    }
     let state_folder_changed = state.clone();
     main_window.on_capture_folder_changed(move |folder| {
         let folder = folder.to_string();
@@ -54,8 +127,24 @@ pub(crate) fn register_callbacks(
         }
     });
 
+    let main_weak_prompt = main_window.as_weak();
+    let state_prompt = state.clone();
     main_window.on_system_prompt_changed(move |prompt| {
         save_system_prompt(prompt.as_str());
+        if let Some(main) = main_weak_prompt.upgrade() {
+            let presets = load_system_prompt_presets();
+            main.set_preset_index(
+                presets
+                    .iter()
+                    .position(|preset| preset.prompt.trim() == prompt.trim())
+                    .map_or(-1, |index| index as i32),
+            );
+        }
+        let mut state = state_prompt.lock().unwrap();
+        if state.system_prompt != prompt.as_str() {
+            state.system_prompt = prompt.to_string();
+            state.worker_control.signal();
+        }
     });
     // System prompt presets: the combo box applies a stored prompt, the disk button opens the
     // name dialog for a new or overwritten preset, and the trash button removes the selection.
@@ -71,8 +160,8 @@ pub(crate) fn register_callbacks(
         };
         let prompt = presets[index].prompt.clone();
         main.set_system_prompt(prompt.clone().into());
+        main.invoke_system_prompt_changed(prompt.into());
         main.set_preset_index(index as i32);
-        save_system_prompt(&prompt);
     });
 
     let main_weak_preset_save = main_window.as_weak();
@@ -395,7 +484,9 @@ mod tests {
     fn tray_autostart_keeps_both_control_windows_hidden_in_either_saved_mode() {
         struct Headless;
         impl slint::platform::Platform for Headless {
-            fn create_window_adapter(&self) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+            fn create_window_adapter(
+                &self,
+            ) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
                 Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
             }
         }
@@ -404,10 +495,16 @@ mod tests {
             let main = MainWindow::new().unwrap();
             let toolbar = CaptureToolbarWindow::new().unwrap();
             register_callbacks(
-                &main, &toolbar, &CaptureFrameWindow::new().unwrap(),
+                &main,
+                &toolbar,
+                &CaptureFrameWindow::new().unwrap(),
                 &TextboxWindow::new().unwrap(),
-                &ShortcutSettingsWindow::new().unwrap(), Arc::new(Mutex::new(AppState::default())),
-                None, false, mode, true,
+                &ShortcutSettingsWindow::new().unwrap(),
+                Arc::new(Mutex::new(AppState::default())),
+                None,
+                false,
+                mode,
+                true,
             );
             // Pump timers as well: a deferred capture-mode restore must not show the toolbar.
             std::thread::sleep(Duration::from_millis(5));

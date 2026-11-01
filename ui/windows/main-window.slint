@@ -92,6 +92,9 @@ export component MainWindow inherits Window {
     callback lifecycle_options_changed();
     callback result_font_changed(string);
     callback preset_selected(string);
+    callback preset_state_changed();
+    changed preset_options => { preset_state_changed(); }
+    changed preset_index => { preset_state_changed(); }
     callback preset_save_clicked();
     callback preset_save_confirmed(string);
     callback preset_delete_clicked();

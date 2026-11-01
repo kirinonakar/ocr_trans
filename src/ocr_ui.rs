@@ -24,6 +24,49 @@ pub(crate) fn register_callbacks(
     #[cfg(target_os = "windows")] main_hwnd: Option<windows::Win32::Foundation::HWND>,
     #[cfg(not(target_os = "windows"))] main_hwnd: Option<()>,
 ) {
+    let font_size_main = main_window.as_weak();
+    let font_size_overlay = overlay_window.as_weak();
+    let font_size_state = state.clone();
+    textbox_window.on_font_size_changed(move |size| {
+        if let Some(main) = font_size_main.upgrade() {
+            let size = size.clamp(8.0, 72.0).round();
+            main.set_base_font_size(size);
+            let last_text = {
+                let mut state = font_size_state.lock().unwrap();
+                state.base_font_size = size;
+                state.last_text.clone()
+            };
+            save_style_settings(
+                size,
+                &color_to_hex(main.get_overlay_bg_color()),
+                &color_to_hex(main.get_overlay_text_color()),
+                main.get_overlay_bg_opacity(),
+            );
+            if let Some(overlay) = font_size_overlay.upgrade() {
+                overlay.set_font_size(if last_text.is_empty() {
+                    size
+                } else {
+                    calculate_font_size(
+                        &last_text,
+                        overlay.get_window_w(),
+                        overlay.get_window_h(),
+                        size,
+                    )
+                });
+            }
+        }
+    });
+    let drag_textbox = textbox_window.as_weak();
+    textbox_window.on_drag_requested(move || {
+        let textbox = drag_textbox.clone();
+        slint::Timer::single_shot(Duration::from_millis(1), move || {
+            if let Some(textbox) = textbox.upgrade() {
+                textbox.window().with_winit_window(|native| {
+                    let _ = native.drag_window();
+                });
+            }
+        });
+    });
     let font_overlay = overlay_window.as_weak();
     let font_textbox = textbox_window.as_weak();
     main_window.on_result_font_changed(move |family| {
@@ -192,8 +235,12 @@ pub(crate) fn register_callbacks(
     let main_weak_tb_close = main_window.as_weak();
     let overlay_weak_tb_close = overlay_window.as_weak();
     let toolbar_weak_tb_close = capture_toolbar.as_weak();
+    let textbox_weak_tb_close = textbox_window.as_weak();
     let state_tb_close = state.clone();
-    textbox_window.window().on_close_requested(move || {
+    textbox_window.on_close_clicked(move || {
+        if let Some(textbox) = textbox_weak_tb_close.upgrade() {
+            let _ = textbox.hide();
+        }
         if let Some(toolbar) = toolbar_weak_tb_close.upgrade() {
             toolbar.set_textbox_visible(false);
         }
@@ -227,6 +274,12 @@ pub(crate) fn register_callbacks(
                     }
                 }
             });
+        }
+    });
+    let textbox_weak_native_close = textbox_window.as_weak();
+    textbox_window.window().on_close_requested(move || {
+        if let Some(textbox) = textbox_weak_native_close.upgrade() {
+            textbox.invoke_close_clicked();
         }
         slint::CloseRequestResponse::HideWindow
     });

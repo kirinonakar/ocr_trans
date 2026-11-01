@@ -671,11 +671,21 @@ mod tests {
         initialize(&window);
         let source = "# 마크다운 결과\n\n**\"사자\"**는 굵게 표시됩니다. 일반 글자와 **볼드체**를 비교합니다.\n\n- 첫 번째 항목\n- *기울임*과 ~~취소선~~\n\n> 인용문입니다.\n\n```rust\n  let text = \"**원문 유지**\";\n```\n\n| 항목 | 결과 |\n| --- | --- |\n| 한글 | **정상** |\n\n긴 문장은 결과창 폭에 맞춰 자동으로 줄바꿈되어야 합니다. 긴 문장은 결과창 폭에 맞춰 자동으로 줄바꿈되어야 합니다.";
         window.set_text(source.into());
+        window.set_preset_options(ModelRc::from(
+            (1..=12).map(|index| slint::SharedString::from(format!("프리셋 {index}")))
+                .collect::<Vec<_>>().as_slice(),
+        ));
+        window.set_preset_index(11);
+        let menu_anchor = Rc::new(std::cell::Cell::new(None));
+        let menu_request = menu_anchor.clone();
+        window.on_preset_menu_requested(move |x, y| menu_request.set(Some((x, y))));
         window.show().unwrap();
         for (name, width, height, dark) in [
             ("light", 600, 580, false),
             ("dark", 600, 580, true),
             ("narrow", 320, 580, false),
+            ("short", 600, 100, false),
+            ("short-dark", 320, 100, true),
         ] {
             window.set_dark_theme(dark);
             surface.set_size(slint::PhysicalSize::new(width, height));
@@ -701,6 +711,22 @@ mod tests {
             )
             .unwrap();
             assert_eq!(window.get_text(), source);
+            // A 100px-high textbox must request the OS menu with every preset intact,
+            // rather than opening a Slint popup clipped to its client area.
+            let position = slint::LogicalPosition::new(if width == 320 { 100. } else { 300. }, 22.);
+            window.window().dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
+            window.window().dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                position,
+                button: slint::platform::PointerEventButton::Left,
+            });
+            let (x, y) = menu_anchor.take().expect("preset button must request an OS menu");
+            assert!(x >= 0. && x + 120. <= width as f32);
+            assert_eq!(y, 36., "menu must be anchored below the title-bar control");
+            assert_eq!(slint::Model::row_count(&window.get_preset_options()), 12);
+            assert_eq!(window.get_preset_index(), 11);
         }
         // Long results must scroll: the block rows clamp their minimum height to 0px, which
         // defeats the flickable's automatic viewport sizing, so the ScrollView binds its

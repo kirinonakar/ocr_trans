@@ -1,12 +1,14 @@
 // Scrollable markdown result window.
 
-import { ScrollView, Palette } from "std-widgets.slint";
+import { Button, Slider, ScrollView, Palette } from "std-widgets.slint";
 import { MarkdownBlock } from "../types/markdown.slint";
 
 export component TextboxWindow inherits Window {
-    title: "Result";
+    title: "Textbox";
     icon: @image-url("../../app.ico");
     always-on-top: true;
+    no-frame: true;
+    resize-border-width: 6px;
     preferred-width: 600px;
     preferred-height: 200px;
     min-width: 320px;
@@ -19,8 +21,16 @@ export component TextboxWindow inherits Window {
     in-out property <length> font_size: 15px;
     in-out property <string> result_font_family: "Yu Gothic UI";
     in-out property <bool> dark_theme: false;
+    in property <[string]> preset_options;
+    in-out property <int> preset_index: -1;
+    private property <length> titlebar-height: 42px;
     pure callback render-markdown(string) -> [MarkdownBlock];
     callback copy-original();
+    callback font-size-changed(float);
+    callback drag-requested();
+    callback close-clicked();
+    callback preset-selected(string);
+    callback preset-menu-requested(float, float);
     private property <[MarkdownBlock]> blocks: render-markdown(text);
     private property <color> foreground: dark_theme
         ? (text_color == #1e293b || text_color == #000000 ? #f8fafc : text_color)
@@ -36,7 +46,16 @@ export component TextboxWindow inherits Window {
         Palette.color-scheme = dark_theme ? ColorScheme.dark : ColorScheme.light;
     }
 
+    Rectangle {
+        border-width: 1px;
+        border-color: root.dark_theme ? #52525b : #cbd5e1;
+    }
+
     copy-keys := FocusScope {
+        x: 0px;
+        y: root.titlebar-height;
+        width: root.width;
+        height: max(0px, root.height - root.titlebar-height);
         key-pressed(event) => {
             if (event.modifiers.control && (event.text == "c" || event.text == "C")) {
                 root.copy-original();
@@ -143,6 +162,130 @@ export component TextboxWindow inherits Window {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Keep the preset and font controls on one line even at the minimum window width.
+    titlebar := Rectangle {
+        x: 1px;
+        y: 1px;
+        width: root.width - 2px;
+        height: root.titlebar-height;
+        background: root.dark_theme ? #37373f : #e2e8f0;
+        HorizontalLayout {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: 42px;
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-top: 7px;
+            padding-bottom: 7px;
+            spacing: 4px;
+            Rectangle {
+                min-width: 48px;
+                horizontal-stretch: 1;
+                Text {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.title;
+                    color: root.dark_theme ? #f8fafc : #1e293b;
+                    font-family: "Yu Gothic UI";
+                    font-size: 12px;
+                    horizontal-alignment: left;
+                    vertical-alignment: center;
+                }
+                title-drag := TouchArea {
+                    // Release Slint's grab before the native move loop consumes mouse-up.
+                    enabled: !self.pressed;
+                    pointer-event(event) => {
+                        if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                            root.drag-requested();
+                        }
+                    }
+                }
+            }
+            preset-control := Rectangle {
+                width: 120px;
+                height: 28px;
+                private property <bool> available: root.preset_options.length > 0;
+                private property <string> label: root.preset_index < 0 ? "Prompt preset" : root.preset_options[root.preset_index];
+                preset-button := Button {
+                    width: 100%;
+                    height: 100%;
+                    enabled: preset-control.available;
+                    accessible-label: "Prompt preset";
+                    accessible-value: preset-control.label;
+                    // A native menu can extend beyond this short window. Button activation
+                    // also supplies the same anchor when opened with Enter or Space.
+                    clicked => {
+                        root.preset-menu-requested(
+                            (titlebar.x + preset-control.x) / 1px,
+                            (titlebar.y + preset-control.y + preset-control.height) / 1px);
+                    }
+                }
+                Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    background: root.dark_theme ? #37373f : #ffffff;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: preset-button.has-focus ? #2588e9 : (root.dark_theme ? #52525b : #94a3b8);
+                    Text {
+                        x: 8px;
+                        width: parent.width - 28px;
+                        height: parent.height;
+                        text: preset-control.label;
+                        font-family: "Yu Gothic UI";
+                        font-size: 12px;
+                        color: root.dark_theme ? #f8fafc : #1e293b;
+                        opacity: preset-control.available ? 1 : 0.38;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Image {
+                        source: @image-url("../icons/chevron-down.svg");
+                        x: parent.width - 18px;
+                        y: (parent.height - self.height) / 2;
+                        width: 10px;
+                        height: 10px;
+                        colorize: root.dark_theme ? #e2e8f0 : #334155;
+                        opacity: preset-control.available ? 1 : 0.38;
+                    }
+                }
+            }
+            Slider {
+                minimum: 8;
+                maximum: 72;
+                step: 1;
+                value: root.font_size / 1px;
+                min-width: 60px;
+                preferred-width: 160px;
+                max-width: 160px;
+                accessible-label: "Font size";
+                changed(value) => {
+                    root.font_size = value * 1px;
+                    root.font-size-changed(value);
+                }
+            }
+            Text {
+                text: round(root.font_size / 1px);
+                width: 22px;
+                color: root.dark_theme ? #f8fafc : #1e293b;
+                font-family: "Yu Gothic UI";
+                font-size: 12px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            Button {
+                text: "×";
+                width: 32px;
+                height: 28px;
+                accessible-label: "Close";
+                clicked => { root.close-clicked(); }
             }
         }
     }

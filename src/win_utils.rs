@@ -35,7 +35,7 @@ pub fn choose_popup_item(
     unsafe {
         let menu = Menu(CreatePopupMenu()?);
         for (index, label) in labels.iter().enumerate() {
-            let label: Vec<u16> = label.encode_utf16().chain(Some(0)).collect();
+            let label: Vec<u16> = label.replace('&', "&&").encode_utf16().chain(Some(0)).collect();
             let flags = if index as i32 == selected { MF_STRING | MF_CHECKED } else { MF_STRING };
             AppendMenuW(menu.0, flags, index + 1, PCWSTR(label.as_ptr()))?;
         }
