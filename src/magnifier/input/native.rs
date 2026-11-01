@@ -133,6 +133,21 @@ fn button_event(message: u32, data: u32) -> Option<(u32, bool, MOUSE_EVENT_FLAGS
     })
 }
 
+fn release_buttons(held: u32) -> Vec<INPUT> {
+    [
+        (WM_LBUTTONUP, 0),
+        (WM_RBUTTONUP, 0),
+        (WM_MBUTTONUP, 0),
+        (WM_XBUTTONUP, 1 << 16),
+        (WM_XBUTTONUP, 2 << 16),
+    ]
+    .into_iter()
+    .filter_map(|(message, data)| button_event(message, data))
+    .filter(|(mask, _, _, _)| held & mask != 0)
+    .map(|(_, _, flags, data)| mouse_input(flags, data, None, RECT::default()))
+    .collect()
+}
+
 fn entry_blocked_by_buttons(pressed: u32, message: u32, data: u32) -> bool {
     // Dispatch runs after the physical callback, so the first press itself can
     // already be visible to GetAsyncKeyState. Only OTHER held buttons block it.
@@ -208,19 +223,7 @@ impl NativePointer {
             return;
         }
         // Always release synthetic buttons, including on Alt+Tab or close.
-        let releases: Vec<_> = [
-            WM_LBUTTONUP,
-            WM_RBUTTONUP,
-            WM_MBUTTONUP,
-            WM_XBUTTONUP,
-            WM_XBUTTONUP,
-        ]
-        .into_iter()
-        .zip([0, 0, 0, 1 << 16, 2 << 16])
-        .filter_map(|(message, data)| button_event(message, data))
-        .filter(|(mask, _, _, _)| self.held & mask != 0)
-        .map(|(_, _, flags, data)| mouse_input(flags, data, None, RECT::default()))
-        .collect();
+        let releases = release_buttons(self.held);
         if !releases.is_empty() {
             inject(&releases);
             // ReleaseCapture affects only our own thread. Also cancel the real
@@ -245,10 +248,23 @@ impl NativePointer {
         }
         self.held = 0;
         self.active = false;
-        hooks::clear_pending();
-        hooks::native_active(false);
         self.restore_style(bridge.viewer);
         unsafe {
+            // Games can keep hiding/confining the cursor while they retain
+            // foreground input. Hand focus back only if it still belongs to
+            // this source; never undo an Alt+Tab to an unrelated application.
+            let foreground = GetForegroundWindow();
+            let source_foreground = foreground == bridge.source.window
+                || GetAncestor(foreground, GA_ROOTOWNER) == bridge.source.window;
+            if restore_position && source_foreground {
+                let _ = SetForegroundWindow(bridge.viewer);
+            }
+            // Release the source's clip BEFORE moving the pointer back. Without
+            // this, Windows clamps the restored position to the source window.
+            // An unrelated foreground application owns its own cursor clip.
+            if source_foreground || foreground == bridge.viewer {
+                let _ = ClipCursor(None);
+            }
             let _ = MagShowSystemCursor(true);
         }
         if restore_position {
@@ -266,6 +282,11 @@ impl NativePointer {
                 )]);
             }
         }
+        // Keep concurrent hardware samples source-relative until the physical
+        // pointer has moved back. Opening the entry gate earlier could treat a
+        // sample still over the source as a fresh hover over the viewer.
+        hooks::clear_pending();
+        hooks::native_active(false);
     }
 
     pub fn process(&mut self, bridge: &mut InputBridge, event: hooks::HardwareEvent) -> bool {
@@ -306,7 +327,7 @@ impl NativePointer {
             };
             let cursor = viewer_local_point(data.pt, geometry.viewer_origin);
             bridge.cursor = cursor;
-            if bridge.source_point(false).is_none() {
+            if bridge.source_point().is_none() {
                 return false;
             }
             if unsafe { WindowFromPoint(data.pt) } != bridge.viewer {
@@ -386,7 +407,7 @@ impl NativePointer {
                 }
             }
         }
-        let Some(screen) = bridge.source_point(self.held != 0) else {
+        let Some(screen) = bridge.source_point() else {
             // Reaching the header or leaving the image restores normal UI input.
             self.leave(bridge, true);
             return true;
@@ -444,7 +465,7 @@ impl NativePointer {
 
     pub fn maintain(&mut self, bridge: &InputBridge) {
         let _dpi = TargetDpi::physical();
-        let Some(screen) = bridge.source_point(self.held != 0) else {
+        let Some(screen) = bridge.source_point() else {
             self.leave(bridge, true);
             return;
         };
@@ -487,6 +508,35 @@ impl Drop for NativePointer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leaving_preview_releases_only_held_buttons_without_moving_back_to_source() {
+        for held in [0, 1, 2, 16, 32, 64, 1 | 2 | 16 | 32 | 64] {
+            let releases = release_buttons(held);
+            assert_eq!(releases.len(), held.count_ones() as usize);
+            for (mask, flags, data) in [
+                (1, MOUSEEVENTF_LEFTUP, 0),
+                (2, MOUSEEVENTF_RIGHTUP, 0),
+                (16, MOUSEEVENTF_MIDDLEUP, 0),
+                (32, MOUSEEVENTF_XUP, 1),
+                (64, MOUSEEVENTF_XUP, 2),
+            ] {
+                let matching = releases
+                    .iter()
+                    .filter(|input| {
+                        let mi = unsafe { input.Anonymous.mi };
+                        mi.dwFlags == flags && mi.mouseData == data
+                    })
+                    .count();
+                assert_eq!(matching, usize::from(held & mask != 0));
+            }
+            for input in releases {
+                let mi = unsafe { input.Anonymous.mi };
+                assert_eq!(mi.dwFlags & MOUSEEVENTF_MOVE, MOUSE_EVENT_FLAGS(0));
+                assert_eq!(mi.dwExtraInfo, INPUT_TAG);
+            }
+        }
+    }
 
     #[test]
     fn buffered_first_press_keeps_viewer_coordinates_after_hover_activates_native_mode() {
@@ -721,7 +771,7 @@ mod tests {
         let mut actual = POINT::default();
         let mut injected = 0;
         for x in 0..=1000 {
-            let screen = map_point(view, source, (x as f64, 0.0), false).unwrap();
+            let screen = map_point(view, source, (x as f64, 0.0)).unwrap();
             let batch = InputBatch::new(screen, actual, desktop);
             if batch.len != 0 {
                 injected += 1;

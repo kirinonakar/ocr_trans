@@ -226,12 +226,7 @@ fn viewer_local_point(screen: POINT, origin: POINT) -> (f64, f64) {
     )
 }
 
-fn map_point(
-    view: crate::capture::CaptureRect,
-    source: RECT,
-    point: (f64, f64),
-    dragging: bool,
-) -> Option<POINT> {
+fn map_point(view: crate::capture::CaptureRect, source: RECT, point: (f64, f64)) -> Option<POINT> {
     if view.width <= 1
         || view.height <= 1
         || source.right <= source.left
@@ -240,7 +235,10 @@ fn map_point(
         return None;
     }
     let (x, y) = (point.0 - view.x as f64, point.1 - view.y as f64);
-    if !dragging && (x < 0.0 || y < 0.0 || x >= view.width as f64 || y >= view.height as f64) {
+    // Leaving the image must also end a native drag. Clamping a held pointer
+    // kept the real cursor hidden while the preview cursor moved under the
+    // header or outside the window.
+    if x < 0.0 || y < 0.0 || x >= view.width as f64 || y >= view.height as f64 {
         return None;
     }
     let x = x.clamp(0.0, (view.width - 1) as f64) / (view.width - 1) as f64;
@@ -249,6 +247,24 @@ fn map_point(
         x: source.left + (x * (source.right - source.left - 1) as f64).round() as i32,
         y: source.top + (y * (source.bottom - source.top - 1) as f64).round() as i32,
     })
+}
+
+fn native_point(
+    view: crate::capture::CaptureRect,
+    source: RECT,
+    point: (f64, f64),
+    desktop: RECT,
+) -> Option<POINT> {
+    let screen = map_point(view, source, point)?;
+    // Native motion comes from screen-position deltas. At the desktop's last
+    // pixel, Windows can clamp the next outward sample to a zero delta, so the
+    // virtual pointer never reaches the header/outside. Hand off before that
+    // pixel, including on entry, so ordinary motion can cross the image edge.
+    (screen.x > desktop.left
+        && screen.y > desktop.top
+        && screen.x < desktop.right.saturating_sub(1)
+        && screen.y < desktop.bottom.saturating_sub(1))
+    .then_some(screen)
 }
 
 impl InputBridge {
@@ -310,8 +326,9 @@ impl InputBridge {
         self.source.take_capture_restart()
     }
 
-    fn source_point(&self, dragging: bool) -> Option<POINT> {
-        map_point(self.view?, self.geometry?.source, self.cursor, dragging)
+    fn source_point(&self) -> Option<POINT> {
+        let geometry = self.geometry?;
+        native_point(self.view?, geometry.source, self.cursor, geometry.desktop)
     }
 
     fn refresh_geometry(&mut self) {
@@ -506,7 +523,14 @@ impl InputBridge {
                 // valid viewer coordinates. Never re-enter using those points.
                 continue;
             }
+            let was_active = self.preview_cursor().is_some();
             self.native_mouse(event);
+            if was_active && self.preview_cursor().is_none() {
+                // Everything in this batch was sampled before the handoff.
+                // Even absolute entry samples must not reactivate a pointer
+                // that has just been restored to the header/desktop.
+                break;
+            }
             // Inactive hover is observational: don't discard a subsequent first
             // press just because the preceding hover did not activate the source.
         }
@@ -582,8 +606,8 @@ mod tests {
                 width: 1600,
                 height: 1200,
             };
-            let first = map_point(view, client, (6.0, 42.0), false).unwrap();
-            let last = map_point(view, client, (1605.0, 1241.0), false).unwrap();
+            let first = map_point(view, client, (6.0, 42.0)).unwrap();
+            let last = map_point(view, client, (1605.0, 1241.0)).unwrap();
             assert_eq!((first.x, first.y), (client.left, client.top));
             assert_eq!((last.x, last.y), (client.right - 1, client.bottom - 1));
             assert_eq!(
@@ -700,7 +724,6 @@ mod tests {
                         (6 + client.left - captured.left) as f64,
                         (42 + client.top - captured.top) as f64,
                     ),
-                    false,
                 )
                 .unwrap();
                 assert_eq!((point.x - client.left, point.y - client.top), (0, 0));
@@ -728,8 +751,8 @@ mod tests {
         let after = viewer_local_point(screen, POINT { x: -1250, y: 280 });
         assert_eq!(before, (200.0, 150.0));
         assert_eq!(after, (150.0, 170.0));
-        let first = map_point(view, source, before, false).unwrap();
-        let moved = map_point(view, source, after, false).unwrap();
+        let first = map_point(view, source, before).unwrap();
+        let moved = map_point(view, source, after).unwrap();
         assert!(moved.x < first.x);
         assert!(moved.y > first.y);
     }
@@ -749,13 +772,12 @@ mod tests {
                 width,
                 height,
             };
-            let first = map_point(view, source, (6.0, 42.0), false).unwrap();
+            let first = map_point(view, source, (6.0, 42.0)).unwrap();
             assert_eq!((first.x, first.y), (-2000, 100));
             let last = map_point(
                 view,
                 source,
                 ((6 + width - 1) as f64, (42 + height - 1) as f64),
-                false,
             )
             .unwrap();
             assert_eq!((last.x, last.y), (-801, 699));
@@ -766,13 +788,72 @@ mod tests {
                     6.0 + (width - 1) as f64 / 2.0,
                     42.0 + (height - 1) as f64 / 2.0,
                 ),
-                false,
             )
             .unwrap();
             assert_eq!((center.x, center.y), (-1400, 400));
-            assert!(map_point(view, source, (5.0, 41.0), false).is_none());
-            let clamped = map_point(view, source, (5.0, 41.0), true).unwrap();
-            assert_eq!((clamped.x, clamped.y), (-2000, 100));
+            assert!(map_point(view, source, (5.0, 41.0)).is_none());
+        }
+    }
+
+    #[test]
+    fn native_pointer_hands_off_at_header_and_every_image_edge_at_each_dpi() {
+        for dpi in [1.0, 1.25, 1.5, 2.0] {
+            let view = crate::capture::CaptureRect {
+                x: (6.0 * dpi) as i32,
+                y: (42.0 * dpi) as i32,
+                width: (400.0 * dpi) as i32,
+                height: (300.0 * dpi) as i32,
+            };
+            let source = RECT {
+                left: -1900,
+                top: 80,
+                right: -1100,
+                bottom: 680,
+            };
+            let left = view.x as f64;
+            let top = view.y as f64;
+            let right = left + view.width as f64;
+            let bottom = top + view.height as f64;
+            let center = ((left + right) / 2.0, (top + bottom) / 2.0);
+            for (inside, outside) in [
+                ((center.0, top), (center.0, top - 1.0)),
+                ((left, center.1), (left - 1.0, center.1)),
+                ((right - 1.0, center.1), (right, center.1)),
+                ((center.0, bottom - 1.0), (center.0, bottom)),
+            ] {
+                assert!(map_point(view, source, inside).is_some());
+                // This is the same mapping for hover and every held button:
+                // there is no drag-clamping path that can hide the cursor.
+                assert!(map_point(view, source, outside).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn native_pointer_hands_off_before_desktop_clamping_can_trap_it_at_an_edge() {
+        for (left, top) in [(0, 0), (-1920, -1080)] {
+            let desktop = RECT {
+                left,
+                top,
+                right: left + 1920,
+                bottom: top + 1080,
+            };
+            // A full-screen source reduced to fit below the magnifier header.
+            let view = crate::capture::CaptureRect {
+                x: 6,
+                y: 42,
+                width: 960,
+                height: 540,
+            };
+            for (edge, inward) in [
+                ((6.0, 300.0), (7.0, 300.0)),
+                ((965.0, 300.0), (964.0, 300.0)),
+                ((400.0, 42.0), (400.0, 43.0)),
+                ((400.0, 581.0), (400.0, 580.0)),
+            ] {
+                assert!(native_point(view, desktop, edge, desktop).is_none());
+                assert!(native_point(view, desktop, inward, desktop).is_some());
+            }
         }
     }
 }
