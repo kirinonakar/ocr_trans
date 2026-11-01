@@ -21,8 +21,11 @@ const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
     Restore,
+    ShowMenu,
     Capture,
     Ocr,
+    ToggleTextbox,
+    ToggleOverlay,
     Exit,
     TrayUnavailable,
 }
@@ -98,18 +101,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
             ACTIVATE => Some(Action::Restore),
             TRAY_EVENT => match (lp.0 as u32) & 0xffff {
                 WM_LBUTTONDBLCLK | NIN_KEYSELECT => Some(Action::Restore),
-                WM_CONTEXTMENU => {
-                    let mut cursor = POINT::default();
-                    let _ = GetCursorPos(&mut cursor);
-                    let labels = ["Capture".to_string(), "OCR".to_string(), "Exit".to_string()];
-                    match crate::win_utils::choose_popup_item(hwnd, &labels, -1, cursor.x, cursor.y)
-                    {
-                        Ok(Some(0)) => Some(Action::Capture),
-                        Ok(Some(1)) => Some(Action::Ocr),
-                        Ok(Some(2)) => Some(Action::Exit),
-                        _ => None,
-                    }
-                }
+                WM_CONTEXTMENU => Some(Action::ShowMenu),
                 _ => None,
             },
             id if state.taskbar_created != 0 && id == state.taskbar_created => {
@@ -308,6 +300,34 @@ impl NativeHost {
     fn take_actions(&self) -> Vec<Action> {
         self.state.actions.borrow_mut().drain(..).collect()
     }
+
+    fn choose_tray_action(&self, main: &MainWindow, capture_visible: bool) -> Option<Action> {
+        let mut cursor = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut cursor);
+        }
+        let items = [
+            Some(("Capture", capture_visible)),
+            Some(("OCR", main.window().is_visible())),
+            None,
+            Some(("Textbox", main.get_use_textbox())),
+            Some(("Overlay", main.get_overlay_visible())),
+            None,
+            Some(("Exit", false)),
+        ];
+        match crate::win_utils::choose_checkable_popup_item(self.hwnd, &items, cursor.x, cursor.y) {
+            Ok(Some(0)) => Some(Action::Capture),
+            Ok(Some(1)) => Some(Action::Ocr),
+            Ok(Some(3)) => Some(Action::ToggleTextbox),
+            Ok(Some(4)) => Some(Action::ToggleOverlay),
+            Ok(Some(6)) => Some(Action::Exit),
+            Err(error) => {
+                log::warn!("Unable to open the tray menu: {error}");
+                None
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Drop for NativeHost {
@@ -484,12 +504,55 @@ pub(crate) fn register_callbacks(
         Duration::from_millis(50),
         move || {
             for action in host.take_actions() {
-                if action == Action::Exit {
-                    crate::capture_workflow::shutdown_and_exit(&recorder, &border);
-                }
                 let Some(main) = main.upgrade() else {
                     continue;
                 };
+                // Open the menu after native message dispatch has returned, and read the
+                // current UI state so changes from the toolbar/checkbox are reflected too.
+                let action = if action == Action::ShowMenu {
+                    let capture_visible = toolbar
+                        .upgrade()
+                        .is_some_and(|toolbar| toolbar.window().is_visible());
+                    let Some(action) = host.choose_tray_action(&main, capture_visible) else {
+                        continue;
+                    };
+                    action
+                } else {
+                    action
+                };
+                match action {
+                    Action::Exit => {
+                        crate::capture_workflow::shutdown_and_exit(&recorder, &border);
+                    }
+                    Action::Capture => {
+                        if let Some(toolbar) = toolbar.upgrade() {
+                            if toolbar.window().is_visible() {
+                                let _ = toolbar.hide();
+                                if let Some(frame) = frame.upgrade() {
+                                    let _ = frame.hide();
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    Action::Ocr if main.window().is_visible() => {
+                        let _ = main.hide();
+                        continue;
+                    }
+                    Action::ToggleTextbox => {
+                        if let Some(toolbar) = toolbar.upgrade() {
+                            toolbar.invoke_textbox_toggle_clicked();
+                        }
+                        continue;
+                    }
+                    Action::ToggleOverlay => {
+                        let visible = !main.get_overlay_visible();
+                        main.set_overlay_visible(visible);
+                        main.invoke_overlay_toggle_clicked(visible);
+                        continue;
+                    }
+                    _ => {}
+                }
                 let mode = match action {
                     Action::Capture => "capture".to_string(),
                     Action::Ocr | Action::TrayUnavailable => "ocr".to_string(),

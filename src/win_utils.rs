@@ -19,10 +19,25 @@ pub fn choose_popup_item(
     screen_x: i32,
     screen_y: i32,
 ) -> windows::core::Result<Option<usize>> {
+    let items: Vec<_> = labels
+        .iter()
+        .enumerate()
+        .map(|(index, label)| Some((label.as_str(), index as i32 == selected)))
+        .collect();
+    choose_checkable_popup_item(hwnd, &items, screen_x, screen_y)
+}
+
+/// Native popup menu with independently checked items and `None` separators.
+pub fn choose_checkable_popup_item(
+    hwnd: HWND,
+    items: &[Option<(&str, bool)>],
+    screen_x: i32,
+    screen_y: i32,
+) -> windows::core::Result<Option<usize>> {
     use windows::core::PCWSTR;
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, DestroyMenu, PostMessageW, SetForegroundWindow,
-        TrackPopupMenu, HMENU, MF_CHECKED, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD, WM_NULL,
+        TrackPopupMenu, HMENU, MF_CHECKED, MF_SEPARATOR, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD, WM_NULL,
     };
 
     struct Menu(HMENU);
@@ -34,9 +49,13 @@ pub fn choose_popup_item(
 
     unsafe {
         let menu = Menu(CreatePopupMenu()?);
-        for (index, label) in labels.iter().enumerate() {
+        for (index, item) in items.iter().enumerate() {
+            let Some((label, checked)) = item else {
+                AppendMenuW(menu.0, MF_SEPARATOR, 0, PCWSTR::null())?;
+                continue;
+            };
             let label: Vec<u16> = label.replace('&', "&&").encode_utf16().chain(Some(0)).collect();
-            let flags = if index as i32 == selected { MF_STRING | MF_CHECKED } else { MF_STRING };
+            let flags = if *checked { MF_STRING | MF_CHECKED } else { MF_STRING };
             AppendMenuW(menu.0, flags, index + 1, PCWSTR(label.as_ptr()))?;
         }
         let _ = SetForegroundWindow(hwnd);
@@ -44,7 +63,8 @@ pub fn choose_popup_item(
             screen_x, screen_y, None, hwnd, None).0;
         // Ensure a subsequent opening also dismisses correctly on an outside click.
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
-        Ok((command > 0).then(|| command as usize - 1).filter(|index| *index < labels.len()))
+        Ok((command > 0).then(|| command as usize - 1)
+            .filter(|index| items.get(*index).is_some_and(Option::is_some)))
     }
 }
 
