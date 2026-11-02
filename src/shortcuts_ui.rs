@@ -200,7 +200,7 @@ fn read_config(window: &ShortcutSettingsWindow) -> Result<ShortcutConfig, String
         window.get_select_shift(),
         window.get_select_key_index(),
         "Select area",
-        true,
+        false,
     )?;
     let start = slot_binding(
         window.get_start_win(),
@@ -209,7 +209,7 @@ fn read_config(window: &ShortcutSettingsWindow) -> Result<ShortcutConfig, String
         window.get_start_shift(),
         window.get_start_key_index(),
         "Start",
-        true,
+        false,
     )?;
 
     let restore_last_mode = slot_binding(
@@ -348,7 +348,7 @@ mod tests {
     use std::rc::Rc;
 
     #[test]
-    fn shortcut_form_roundtrips_five_custom_slots_and_optional_restore() {
+    fn shortcut_form_roundtrips_active_and_cleared_shortcuts() {
         struct Headless;
         impl slint::platform::Platform for Headless {
             fn create_window_adapter(
@@ -378,6 +378,11 @@ mod tests {
                 ..ShortcutConfig::default()
             },
             ShortcutConfig::default(),
+            ShortcutConfig {
+                select_area: String::new(),
+                start: String::new(),
+                ..ShortcutConfig::default()
+            },
         ] {
             populate_window(&window, &config);
             assert_eq!(read_config(&window).unwrap(), config);

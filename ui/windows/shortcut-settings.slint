@@ -100,7 +100,7 @@ export component ShortcutSettingsWindow inherits Window {
         }
 
         Text {
-            text: "Pick Win / Alt / Ctrl / Shift plus a key, then press Save. Only Select area and Start have defaults.";
+            text: "Pick Win / Alt / Ctrl / Shift plus a key, then press Save. Clear any shortcut to disable it, then Save.";
             color: dark_theme ? #94a3b8 : #64748b;
             font-size: 11px;
             wrap: word-wrap;
@@ -134,6 +134,16 @@ export component ShortcutSettingsWindow inherits Window {
                             spacing: 6px;
                             Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                             ComboBox { model: key_options; current-index <=> select_key_index; }
+                            Button {
+                                text: "Clear";
+                                clicked => {
+                                    select_win = false;
+                                    select_alt = false;
+                                    select_ctrl = false;
+                                    select_shift = false;
+                                    select_key_index = -1;
+                                }
+                            }
                         }
                     }
                 }
@@ -159,6 +169,16 @@ export component ShortcutSettingsWindow inherits Window {
                             spacing: 6px;
                             Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                             ComboBox { model: key_options; current-index <=> start_key_index; }
+                            Button {
+                                text: "Clear";
+                                clicked => {
+                                    start_win = false;
+                                    start_alt = false;
+                                    start_ctrl = false;
+                                    start_shift = false;
+                                    start_key_index = -1;
+                                }
+                            }
                         }
                     }
                 }
@@ -225,6 +245,17 @@ export component ShortcutSettingsWindow inherits Window {
                             spacing: 6px;
                             Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                             ComboBox { model: key_options; current-index <=> tool1_key_index; }
+                            Button {
+                                text: "Clear";
+                                clicked => {
+                                    tool1_action_index = 0;
+                                    tool1_win = false;
+                                    tool1_alt = false;
+                                    tool1_ctrl = false;
+                                    tool1_shift = false;
+                                    tool1_key_index = -1;
+                                }
+                            }
                         }
                     }
                 }
@@ -255,6 +286,17 @@ export component ShortcutSettingsWindow inherits Window {
                             spacing: 6px;
                             Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                             ComboBox { model: key_options; current-index <=> tool2_key_index; }
+                            Button {
+                                text: "Clear";
+                                clicked => {
+                                    tool2_action_index = 0;
+                                    tool2_win = false;
+                                    tool2_alt = false;
+                                    tool2_ctrl = false;
+                                    tool2_shift = false;
+                                    tool2_key_index = -1;
+                                }
+                            }
                         }
                     }
                 }
@@ -285,6 +327,17 @@ export component ShortcutSettingsWindow inherits Window {
                             spacing: 6px;
                             Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                             ComboBox { model: key_options; current-index <=> tool3_key_index; }
+                            Button {
+                                text: "Clear";
+                                clicked => {
+                                    tool3_action_index = 0;
+                                    tool3_win = false;
+                                    tool3_alt = false;
+                                    tool3_ctrl = false;
+                                    tool3_shift = false;
+                                    tool3_key_index = -1;
+                                }
+                            }
                         }
                     }
                 }
@@ -315,6 +368,17 @@ export component ShortcutSettingsWindow inherits Window {
                             spacing: 6px;
                             Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                             ComboBox { model: key_options; current-index <=> tool4_key_index; }
+                            Button {
+                                text: "Clear";
+                                clicked => {
+                                    tool4_action_index = 0;
+                                    tool4_win = false;
+                                    tool4_alt = false;
+                                    tool4_ctrl = false;
+                                    tool4_shift = false;
+                                    tool4_key_index = -1;
+                                }
+                            }
                         }
                     }
                 }
@@ -345,6 +409,17 @@ export component ShortcutSettingsWindow inherits Window {
                             spacing: 6px;
                             Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
                             ComboBox { model: key_options; current-index <=> tool5_key_index; }
+                            Button {
+                                text: "Clear";
+                                clicked => {
+                                    tool5_action_index = 0;
+                                    tool5_win = false;
+                                    tool5_alt = false;
+                                    tool5_ctrl = false;
+                                    tool5_shift = false;
+                                    tool5_key_index = -1;
+                                }
+                            }
                         }
                     }
                 }
