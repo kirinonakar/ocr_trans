@@ -2,7 +2,7 @@
 
 import { Button, CheckBox, ComboBox, ScrollView, Palette } from "std-widgets.slint";
 
-// Select area, Start, Restore last mode, and five capture-toolbar shortcuts are editable.
+// Select area, Start, Restore/hide last mode, and five capture-toolbar shortcuts are editable.
 // The toolbar slots also pick the capture/record/OCR action they trigger.
 export component ShortcutSettingsWindow inherits Window {
     title: "Shortcut settings";
@@ -183,7 +183,7 @@ export component ShortcutSettingsWindow inherits Window {
                     }
                 }
 
-                // Restore the last mode, using the same path as a tray double-click.
+                // Restore or hide the last mode; restoration shares the tray activation path.
                 Rectangle {
                     background: dark_theme ? #37373f : #ffffff;
                     border-radius: 10px;
@@ -192,8 +192,8 @@ export component ShortcutSettingsWindow inherits Window {
                     VerticalLayout {
                         padding: 10px;
                         spacing: 6px;
-                        Text { text: "Restore last mode"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
-                        Text { text: "Same as double-clicking the tray icon. Clear to disable."; color: dark_theme ? #94a3b8 : #64748b; font-size: 11px; wrap: word-wrap; }
+                        Text { text: "Restore/hide last mode"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                        Text { text: "Press again to hide the last mode. Clear to disable."; color: dark_theme ? #94a3b8 : #64748b; font-size: 11px; wrap: word-wrap; }
                         HorizontalLayout {
                             spacing: 2px;
                             CheckBox { checked <=> restore_win; text: "Win"; }

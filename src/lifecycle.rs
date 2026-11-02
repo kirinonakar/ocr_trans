@@ -15,12 +15,14 @@ const OWNER_TITLE: PCWSTR = w!("OCRTrans.SingleInstance.v1");
 const MUTEX_NAME: PCWSTR = w!("Local\\OCRTrans.SingleInstance.v1");
 const ACTIVATE: u32 = WM_APP + 41;
 const TRAY_EVENT: u32 = WM_APP + 42;
+const TOGGLE_LAST_MODE: u32 = WM_APP + 43;
 // shellapi.h defines NIN_KEYSELECT as NIN_SELECT | NINF_KEY (1).
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
     Restore,
+    ToggleLastMode,
     ShowMenu,
     Capture,
     Ocr,
@@ -90,14 +92,14 @@ pub(crate) fn remove_tray_icon() {
     });
 }
 
-/// Called on the UI thread by the global shortcut. Queue the same restore action as a tray
-/// double-click, so mode selection, frame restoration and foreground focus share one path.
+/// Called on the UI thread by the global shortcut. Toggle the last mode's controls; the
+/// restore branch shares mode selection, frame restoration and focus with tray activation.
 pub(crate) fn request_restore_last_mode() {
     BROKER.with(|broker| {
         let hwnd = broker.get();
         if !hwnd.0.is_null() {
             unsafe {
-                SendMessageW(hwnd, ACTIVATE, Some(WPARAM(0)), Some(LPARAM(0)));
+                SendMessageW(hwnd, TOGGLE_LAST_MODE, Some(WPARAM(0)), Some(LPARAM(0)));
             }
         }
     });
@@ -112,6 +114,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
     if let Some(state) = state {
         let action = match message {
             ACTIVATE => Some(Action::Restore),
+            TOGGLE_LAST_MODE => Some(Action::ToggleLastMode),
             TRAY_EVENT => match (lp.0 as u32) & 0xffff {
                 WM_LBUTTONDBLCLK | NIN_KEYSELECT => Some(Action::Restore),
                 WM_CONTEXTMENU => Some(Action::ShowMenu),
@@ -131,7 +134,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
             state.actions.borrow_mut().push_back(action);
         }
     }
-    if message == ACTIVATE || message == TRAY_EVENT {
+    if message == ACTIVATE || message == TRAY_EVENT || message == TOGGLE_LAST_MODE {
         return LRESULT(0);
     }
     DefWindowProcW(hwnd, message, wp, lp)
@@ -378,6 +381,47 @@ fn focus_window(window: &slint::Window) {
     });
 }
 
+fn hide_control_windows(
+    main: &slint::Weak<MainWindow>,
+    toolbar: &slint::Weak<CaptureToolbarWindow>,
+    frame: &slint::Weak<CaptureFrameWindow>,
+    shortcuts: &slint::Weak<ShortcutSettingsWindow>,
+) {
+    if let Some(main) = main.upgrade() {
+        let _ = main.hide();
+    }
+    if let Some(toolbar) = toolbar.upgrade() {
+        let _ = toolbar.hide();
+    }
+    if let Some(frame) = frame.upgrade() {
+        let _ = frame.hide();
+    }
+    if let Some(shortcuts) = shortcuts.upgrade() {
+        let _ = shortcuts.hide();
+    }
+}
+
+/// Return false when the selected control window is hidden, so the caller restores it.
+fn hide_last_mode_if_visible(
+    mode: &str,
+    main: &MainWindow,
+    toolbar: &slint::Weak<CaptureToolbarWindow>,
+    frame: &slint::Weak<CaptureFrameWindow>,
+    shortcuts: &slint::Weak<ShortcutSettingsWindow>,
+) -> bool {
+    let visible = if mode == "capture" {
+        toolbar.upgrade().is_some_and(|toolbar| toolbar.window().is_visible())
+    } else {
+        main.window().is_visible()
+    };
+    if visible {
+        // This shortcut must also work with Minimize to tray disabled: do not use the
+        // close callback, which can exit the process. The registered hotkey restores it.
+        hide_control_windows(&main.as_weak(), toolbar, frame, shortcuts);
+    }
+    visible
+}
+
 pub(crate) fn register_callbacks(
     host: NativeHost,
     main: &MainWindow,
@@ -481,18 +525,7 @@ pub(crate) fn register_callbacks(
         );
         // Do not change native windows while Winit is dispatching the close/button event.
         slint::Timer::single_shot(Duration::from_millis(1), move || {
-            if let Some(main) = main.upgrade() {
-                let _ = main.hide();
-            }
-            if let Some(toolbar) = toolbar.upgrade() {
-                let _ = toolbar.hide();
-            }
-            if let Some(frame) = frame.upgrade() {
-                let _ = frame.hide();
-            }
-            if let Some(shortcuts) = shortcuts.upgrade() {
-                let _ = shortcuts.hide();
-            }
+            hide_control_windows(&main, &toolbar, &frame, &shortcuts);
         });
     });
     let main_close = close.clone();
@@ -510,6 +543,7 @@ pub(crate) fn register_callbacks(
     let main = main.as_weak();
     let toolbar = toolbar.as_weak();
     let frame = frame.as_weak();
+    let shortcuts = shortcuts.as_weak();
     let border = border.as_weak();
     let timer = slint::Timer::default();
     timer.start(
@@ -534,6 +568,12 @@ pub(crate) fn register_callbacks(
                     action
                 };
                 match action {
+                    Action::ToggleLastMode => {
+                        let mode = crate::settings::load_app_settings().app_mode;
+                        if hide_last_mode_if_visible(&mode, &main, &toolbar, &frame, &shortcuts) {
+                            continue;
+                        }
+                    }
                     Action::Exit => {
                         crate::capture_workflow::shutdown_and_exit(&recorder, &border);
                     }
@@ -612,6 +652,55 @@ pub(crate) fn register_callbacks(
 mod tests {
     use super::*;
 
+    #[test]
+    fn last_mode_toggle_hides_controls_and_keeps_capture_and_output_state() {
+        use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+
+        struct Headless;
+        impl slint::platform::Platform for Headless {
+            fn create_window_adapter(
+                &self,
+            ) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+                Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+            }
+        }
+        slint::platform::set_platform(Box::new(Headless)).unwrap();
+        let main = MainWindow::new().unwrap();
+        let toolbar = CaptureToolbarWindow::new().unwrap();
+        let frame = CaptureFrameWindow::new().unwrap();
+        let shortcuts = ShortcutSettingsWindow::new().unwrap();
+        main.set_use_textbox(true);
+        main.set_overlay_visible(true);
+        toolbar.set_frame_mode(true);
+        toolbar.set_recording(true);
+        for mode in ["ocr", "capture"] {
+            let toggle = || hide_last_mode_if_visible(
+                mode, &main, &toolbar.as_weak(), &frame.as_weak(), &shortcuts.as_weak(),
+            );
+            assert!(!toggle());
+            for _ in 0..2 {
+                if mode == "capture" {
+                    toolbar.show().unwrap();
+                    frame.show().unwrap();
+                } else {
+                    main.show().unwrap();
+                }
+                shortcuts.show().unwrap();
+                assert!(toggle());
+                assert!(!main.window().is_visible());
+                assert!(!toolbar.window().is_visible());
+                assert!(!frame.window().is_visible());
+                assert!(!shortcuts.window().is_visible());
+                // Hidden controls take the common restoration path on the next press.
+                assert!(!toggle());
+                assert!(main.get_use_textbox());
+                assert!(main.get_overlay_visible());
+                assert!(toolbar.get_frame_mode());
+                assert!(toolbar.get_recording());
+            }
+        }
+    }
+
     // Child-process entry point: exercise Windows' cross-process named object lifetime.
     #[test]
     fn named_instance_lock_probe() {
@@ -655,7 +744,7 @@ mod tests {
     }
 
     #[test]
-    fn native_activation_tray_double_click_and_shortcut_queue_the_same_restore() {
+    fn native_activation_and_tray_restore_while_shortcut_queues_toggle() {
         let host = NativeHost::create(None).unwrap();
         unsafe {
             SendMessageW(host.hwnd, ACTIVATE, Some(WPARAM(0)), Some(LPARAM(0)));
@@ -676,7 +765,7 @@ mod tests {
         request_restore_last_mode();
         assert_eq!(
             host.take_actions(),
-            [Action::Restore, Action::Restore, Action::Restore]
+            [Action::Restore, Action::Restore, Action::ToggleLastMode]
         );
         assert!(host.take_actions().is_empty());
         assert!(!host.state.tray_added.get());

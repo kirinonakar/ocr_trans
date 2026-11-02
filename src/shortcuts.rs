@@ -3,7 +3,7 @@
 //! The shortcut settings window exposes eight configurable shortcuts:
 //! * `select_area`  - opens the capture-area selector (default `win+alt+A`)
 //! * `start`        - starts/stops the continuous OCR loop (default `win+alt+P`)
-//! * `restore_last_mode` - restores the last mode like a tray double-click (unbound by default)
+//! * `restore_last_mode` - restores or hides the last mode (unbound by default)
 //! * `toolbar1`     - runs one capture-toolbar action
 //! * `toolbar2`     - runs a second capture-toolbar action
 //! * `toolbar3`     - runs a third capture-toolbar action
@@ -492,7 +492,7 @@ pub(crate) fn apply_config(
         registered.select_area = register_one(manager, &config.select_area, "Select area");
         registered.start = register_one(manager, &config.start, "Start");
         registered.restore_last_mode =
-            register_one(manager, &config.restore_last_mode, "Restore last mode");
+            register_one(manager, &config.restore_last_mode, "Restore/hide last mode");
         if ToolbarAction::from_token(&config.toolbar1_action).is_some() {
             registered.toolbar1 = register_one(manager, &config.toolbar1_key, "Toolbar shortcut 1");
         }

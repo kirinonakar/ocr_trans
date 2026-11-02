@@ -218,7 +218,7 @@ fn read_config(window: &ShortcutSettingsWindow) -> Result<ShortcutConfig, String
         window.get_restore_ctrl(),
         window.get_restore_shift(),
         window.get_restore_key_index(),
-        "Restore last mode",
+        "Restore/hide last mode",
         false,
     )?;
 
