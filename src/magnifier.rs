@@ -534,6 +534,10 @@ impl WindowMagnifier {
 
     fn update_or_close(&self) {
         if let Err(error) = self.update() {
+            // The source can disappear during native geometry/capture calls.
+            if self.close_if_source_closed() {
+                return;
+            }
             self.input.borrow_mut().take();
             self.stop_own_recording();
             self.thumbnail.borrow_mut().take();
@@ -627,6 +631,19 @@ impl WindowMagnifier {
         let _ = self.window.hide();
     }
 
+    fn close_if_source_closed(&self) -> bool {
+        let closed = self
+            .thumbnail
+            .borrow()
+            .as_ref()
+            .is_some_and(|thumbnail| unsafe { !IsWindow(Some(thumbnail.source)).as_bool() });
+        if closed {
+            // Release the thumbnail borrow before close() clears the session.
+            self.close();
+        }
+        closed
+    }
+
     fn resize_to_zoom(&self) -> Result<()> {
         let thumbnail = self.thumbnail.borrow();
         let Some(thumbnail) = thumbnail.as_ref() else {
@@ -705,6 +722,10 @@ impl WindowMagnifier {
     fn update(&self) -> Result<()> {
         if input::take_close_requested() {
             self.close();
+            return Ok(());
+        }
+        // End magnification before touching input or geometry for a closed source.
+        if self.close_if_source_closed() {
             return Ok(());
         }
         // A queued geometry notification can outlive close().

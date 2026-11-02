@@ -94,6 +94,7 @@ You can download the latest version from the [Releases Page](https://github.com/
 
 ### 🎨 Customization
 - Click the **▼ Style** button next to Font Size to reveal customization options.
+- **Auto (overlay only)**: Estimate the source image's background and text colors on each capture and apply them to the overlay. Opacity remains adjustable with the slider.
 - **Background Color**: Choose from various presets including Dark, Light, and Paper-like themes. The selected color is highlighted.
 - **Text Color**: Select a readable contrast for your chosen background.
 - **Opacity**: Use the slider to adjust how much of the original screen shows through the overlay. Changes are reflected in real-time.

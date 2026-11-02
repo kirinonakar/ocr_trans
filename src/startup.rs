@@ -149,6 +149,7 @@ pub(crate) fn initialize_ui(
         main_window.set_overlay_text_color(color);
     }
     main_window.set_overlay_bg_opacity(initial_settings.overlay_bg_opacity);
+    main_window.set_auto_style(initial_settings.auto_style);
     // Restore the fold states of the style panel and the API card, then re-apply the window size.
     main_window.set_show_style_settings(initial_settings.style_panel_open);
     main_window.set_api_settings_collapsed(initial_settings.api_settings_collapsed);

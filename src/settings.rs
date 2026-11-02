@@ -120,6 +120,7 @@ pub(crate) struct AppSettings {
     pub(crate) overlay_bg_color: String,
     pub(crate) overlay_text_color: String,
     pub(crate) overlay_bg_opacity: f32,
+    pub(crate) auto_style: bool,
     pub(crate) style_panel_open: bool,
     pub(crate) api_settings_collapsed: bool,
     pub(crate) api_settings_saved_height: f32,
@@ -426,6 +427,7 @@ fn read_app_settings() -> AppSettings {
         overlay_bg_color: "#ffffff".to_string(),
         overlay_text_color: "#1e293b".to_string(),
         overlay_bg_opacity: 0.9,
+        auto_style: false,
         style_panel_open: false,
         api_settings_collapsed: false,
         api_settings_saved_height: 0.0,
@@ -491,6 +493,7 @@ fn read_app_settings() -> AppSettings {
             settings.overlay_bg_opacity =
                 ini_float(&values, "style", "overlay_bg_opacity", settings.overlay_bg_opacity)
                     .clamp(0.1, 1.0);
+            settings.auto_style = ini_bool(&values, "style", "auto_style", settings.auto_style);
             settings.style_panel_open =
                 ini_bool(&values, "ui", "style_panel_open", settings.style_panel_open);
             settings.api_settings_collapsed = ini_bool(
@@ -549,7 +552,7 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         format!("{}={}\n", definition.model_key, ini_escape(&saved_model_for_provider(&settings.provider, definition.name)))
     }).collect::<String>();
     let mut contents = format!(
-        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\nsingle_instance={}\nminimize_to_tray={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nresult_font_family={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\nrestore_last_mode={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\ntoolbar4_action={}\ntoolbar4_key={}\ntoolbar5_action={}\ntoolbar5_key={}\n",
+        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\nsingle_instance={}\nminimize_to_tray={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nresult_font_family={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\nauto_style={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\nrestore_last_mode={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\ntoolbar4_action={}\ntoolbar4_key={}\ntoolbar5_action={}\ntoolbar5_key={}\n",
         ini_escape(&settings.provider.provider),
         models,
         ini_escape(&settings.provider.thinking_level),
@@ -566,6 +569,7 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         ini_escape(&settings.overlay_bg_color),
         ini_escape(&settings.overlay_text_color),
         settings.overlay_bg_opacity,
+        settings.auto_style,
         if settings.style_panel_open { "true" } else { "false" },
         if settings.api_settings_collapsed { "true" } else { "false" },
         settings.api_settings_saved_height,
@@ -692,12 +696,14 @@ pub(crate) fn save_style_settings(
     overlay_bg_color: &str,
     overlay_text_color: &str,
     overlay_bg_opacity: f32,
+    auto_style: bool,
 ) {
     update_settings(|settings| {
         settings.base_font_size = base_font_size.clamp(8.0, 72.0);
         settings.overlay_bg_color = overlay_bg_color.to_string();
         settings.overlay_text_color = overlay_text_color.to_string();
         settings.overlay_bg_opacity = overlay_bg_opacity.clamp(0.1, 1.0);
+        settings.auto_style = auto_style;
     });
 }
 
@@ -746,6 +752,26 @@ pub(crate) fn save_shortcut_config(config: &ShortcutConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_style_roundtrips_without_changing_manual_colors_and_defaults_off() {
+        for automatic in [false, true] {
+            let settings = AppSettings {
+                auto_style: automatic,
+                overlay_bg_color: "#fff0be".into(),
+                overlay_text_color: "#b41e32".into(),
+                overlay_bg_opacity: 0.65,
+                ..Default::default()
+            };
+            let values = parse_ini(&serialize_app_settings(&settings));
+            assert_eq!(ini_bool(&values, "style", "auto_style", false), automatic);
+            assert_eq!(ini_value(&values, "style", "overlay_bg_color", String::new()), "#fff0be");
+            assert_eq!(ini_value(&values, "style", "overlay_text_color", String::new()), "#b41e32");
+            assert_eq!(ini_float(&values, "style", "overlay_bg_opacity", 0.9), 0.65);
+        }
+        let legacy = parse_ini("[style]\noverlay_bg_color=#ffffff\n");
+        assert!(!ini_bool(&legacy, "style", "auto_style", false));
+    }
 
     #[test]
     fn restore_last_mode_shortcut_roundtrips_and_legacy_settings_leave_it_unbound() {

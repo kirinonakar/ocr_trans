@@ -15,6 +15,7 @@ mod markdown;
 mod magnifier;
 mod ocr;
 mod ocr_ui;
+mod overlay_style;
 mod provider_ui;
 mod providers;
 mod runtime_workers;

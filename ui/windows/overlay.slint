@@ -25,6 +25,9 @@ export component OverlayWindow inherits Window {
     in-out property <color> bg_color: #ffffff;
     in-out property <color> text_color: #1e293b;
     in-out property <float> bg_opacity: 0.9;
+    in-out property <bool> has_source_colors: false;
+    in-out property <color> source_bg_color: #ffffff;
+    in-out property <color> source_text_color: #1e293b;
     in-out property <bool> hide_text: false;
     in property <bool> is_textbox_mode: false;
     callback close_clicked();

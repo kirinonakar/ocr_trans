@@ -495,13 +495,8 @@ pub(crate) fn register_callbacks(
                 overlay.set_window_x(0.0); // Internal offset should be 0 since window itself is moved
                 overlay.set_window_y(0.0);
 
-                overlay.set_bg_color(main.get_overlay_bg_color());
-                overlay.set_text_color(main.get_overlay_text_color());
-                overlay.set_bg_opacity(if main.get_use_textbox() {
-                    0.1
-                } else {
-                    main.get_overlay_bg_opacity()
-                });
+                overlay.set_has_source_colors(false);
+                crate::overlay_style::apply(&main, &overlay);
                 overlay.set_hide_text(main.get_use_textbox());
                 overlay.set_is_textbox_mode(main.get_use_textbox());
 

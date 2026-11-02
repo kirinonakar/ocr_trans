@@ -41,6 +41,7 @@ pub(crate) fn register_callbacks(
                 &color_to_hex(main.get_overlay_bg_color()),
                 &color_to_hex(main.get_overlay_text_color()),
                 main.get_overlay_bg_opacity(),
+                main.get_auto_style(),
             );
             if let Some(overlay) = font_size_overlay.upgrade() {
                 overlay.set_font_size(if last_text.is_empty() {
@@ -161,6 +162,7 @@ pub(crate) fn register_callbacks(
                 &color_to_hex(main.get_overlay_bg_color()),
                 &color_to_hex(main.get_overlay_text_color()),
                 main.get_overlay_bg_opacity(),
+                main.get_auto_style(),
             );
         }
         if let (Some(main), Some(overlay), Some(textbox)) = (
@@ -168,15 +170,12 @@ pub(crate) fn register_callbacks(
             overlay_weak_style.upgrade(),
             textbox_weak_style.upgrade(),
         ) {
-            overlay.set_bg_color(main.get_overlay_bg_color());
-            overlay.set_text_color(main.get_overlay_text_color());
+            crate::overlay_style::apply(&main, &overlay);
 
             // Handle Textbox mode toggle and opacity sync
             let use_textbox = main.get_use_textbox();
-            let base_opacity = main.get_overlay_bg_opacity();
 
             if use_textbox {
-                overlay.set_bg_opacity(0.1);
                 overlay.set_hide_text(true);
                 overlay.set_is_textbox_mode(true);
                 textbox.set_dark_theme(main.get_dark_theme());
@@ -186,7 +185,6 @@ pub(crate) fn register_callbacks(
                 textbox.set_text_color(main.get_overlay_text_color());
                 textbox.set_font_size(main.get_base_font_size());
             } else {
-                overlay.set_bg_opacity(base_opacity);
                 overlay.set_hide_text(false);
                 overlay.set_is_textbox_mode(false);
                 let _ = textbox.hide();
@@ -258,9 +256,10 @@ pub(crate) fn register_callbacks(
                 &color_to_hex(main.get_overlay_bg_color()),
                 &color_to_hex(main.get_overlay_text_color()),
                 main.get_overlay_bg_opacity(),
+                main.get_auto_style(),
             );
             overlay.set_is_textbox_mode(false);
-            overlay.set_bg_opacity(main.get_overlay_bg_opacity());
+            crate::overlay_style::apply(&main, &overlay);
             overlay.set_hide_text(false);
             overlay.set_show_text(main.get_overlay_visible());
 
@@ -346,13 +345,7 @@ pub(crate) fn register_callbacks(
                         overlay.get_window_h(),
                         main.get_base_font_size(),
                     ));
-                    overlay.set_bg_color(main.get_overlay_bg_color());
-                    overlay.set_text_color(main.get_overlay_text_color());
-                    overlay.set_bg_opacity(if main.get_use_textbox() {
-                        0.1
-                    } else {
-                        main.get_overlay_bg_opacity()
-                    });
+                    crate::overlay_style::apply(&main, &overlay);
                     overlay.set_hide_text(main.get_use_textbox());
                     overlay.set_is_textbox_mode(main.get_use_textbox());
                     overlay.set_show_text(main.get_overlay_visible());

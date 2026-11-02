@@ -81,6 +81,15 @@ pub(crate) fn start(
             let mut delay = Duration::from_secs_f32(interval);
             match capture::capture_area(&rect.unwrap(), &None) {
                 Ok(image) => {
+                    if let Some(colors) = crate::overlay_style::source_colors(&image) {
+                        queue_source_colors(
+                            &state_for_worker,
+                            revision,
+                            &overlay_weak_worker,
+                            &main_weak_worker,
+                            colors,
+                        );
+                    }
                     let (language, skip_empty_ocr) = crate::settings::continuous_ocr_settings();
                     let text = if one_shot {
                         None
@@ -462,6 +471,28 @@ impl ChangeGate {
     }
 }
 
+fn queue_source_colors(
+    state: &Arc<Mutex<AppState>>,
+    revision: u64,
+    overlay: &slint::Weak<OverlayWindow>,
+    main: &slint::Weak<MainWindow>,
+    colors: crate::overlay_style::SourceColors,
+) {
+    let (state, overlay, main) = (state.clone(), overlay.clone(), main.clone());
+    let _ = slint::invoke_from_event_loop(move || {
+        {
+            let state = state.lock().unwrap();
+            if !state.is_running || state.worker_control.revision() != revision {
+                return;
+            }
+        }
+        if let (Some(main), Some(overlay)) = (main.upgrade(), overlay.upgrade()) {
+            crate::overlay_style::remember_source(&overlay, colors);
+            crate::overlay_style::apply(&main, &overlay);
+        }
+    });
+}
+
 fn queue_worker_result(
     state: &Arc<Mutex<AppState>>,
     revision: u64,
@@ -505,13 +536,7 @@ fn queue_worker_result(
                 overlay.get_window_h(),
                 main.get_base_font_size(),
             ));
-            overlay.set_bg_color(main.get_overlay_bg_color());
-            overlay.set_text_color(main.get_overlay_text_color());
-            overlay.set_bg_opacity(if main.get_use_textbox() {
-                0.1
-            } else {
-                main.get_overlay_bg_opacity()
-            });
+            crate::overlay_style::apply(&main, &overlay);
             overlay.set_hide_text(main.get_use_textbox());
             overlay.set_show_text(main.get_overlay_visible());
         }
