@@ -123,6 +123,13 @@ fn populate_window(window: &ShortcutSettingsWindow, config: &ShortcutConfig) {
     window.set_start_shift(shift);
     window.set_start_key_index(key_index(&key));
 
+    let (win, alt, ctrl, shift, key) = split_binding(&config.restore_last_mode);
+    window.set_restore_win(win);
+    window.set_restore_alt(alt);
+    window.set_restore_ctrl(ctrl);
+    window.set_restore_shift(shift);
+    window.set_restore_key_index(key_index(&key));
+
     let (win, alt, ctrl, shift, key) = split_binding(&config.toolbar1_key);
     window.set_tool1_win(win);
     window.set_tool1_alt(alt);
@@ -158,6 +165,30 @@ fn populate_window(window: &ShortcutSettingsWindow, config: &ShortcutConfig) {
             .map(ToolbarAction::option_index)
             .unwrap_or(0),
     );
+
+    let (win, alt, ctrl, shift, key) = split_binding(&config.toolbar4_key);
+    window.set_tool4_win(win);
+    window.set_tool4_alt(alt);
+    window.set_tool4_ctrl(ctrl);
+    window.set_tool4_shift(shift);
+    window.set_tool4_key_index(key_index(&key));
+    window.set_tool4_action_index(
+        ToolbarAction::from_token(&config.toolbar4_action)
+            .map(ToolbarAction::option_index)
+            .unwrap_or(0),
+    );
+
+    let (win, alt, ctrl, shift, key) = split_binding(&config.toolbar5_key);
+    window.set_tool5_win(win);
+    window.set_tool5_alt(alt);
+    window.set_tool5_ctrl(ctrl);
+    window.set_tool5_shift(shift);
+    window.set_tool5_key_index(key_index(&key));
+    window.set_tool5_action_index(
+        ToolbarAction::from_token(&config.toolbar5_action)
+            .map(ToolbarAction::option_index)
+            .unwrap_or(0),
+    );
 }
 
 /// Reads and validates the editing properties.
@@ -179,6 +210,16 @@ fn read_config(window: &ShortcutSettingsWindow) -> Result<ShortcutConfig, String
         window.get_start_key_index(),
         "Start",
         true,
+    )?;
+
+    let restore_last_mode = slot_binding(
+        window.get_restore_win(),
+        window.get_restore_alt(),
+        window.get_restore_ctrl(),
+        window.get_restore_shift(),
+        window.get_restore_key_index(),
+        "Restore last mode",
+        false,
     )?;
 
     let tool1_action = ToolbarAction::from_option_index(window.get_tool1_action_index());
@@ -214,15 +255,42 @@ fn read_config(window: &ShortcutSettingsWindow) -> Result<ShortcutConfig, String
         tool3_action.is_some(),
     )?;
 
+    let tool4_action = ToolbarAction::from_option_index(window.get_tool4_action_index());
+    let toolbar4_key = slot_binding(
+        window.get_tool4_win(),
+        window.get_tool4_alt(),
+        window.get_tool4_ctrl(),
+        window.get_tool4_shift(),
+        window.get_tool4_key_index(),
+        "Capture toolbar shortcut 4",
+        tool4_action.is_some(),
+    )?;
+
+    let tool5_action = ToolbarAction::from_option_index(window.get_tool5_action_index());
+    let toolbar5_key = slot_binding(
+        window.get_tool5_win(),
+        window.get_tool5_alt(),
+        window.get_tool5_ctrl(),
+        window.get_tool5_shift(),
+        window.get_tool5_key_index(),
+        "Capture toolbar shortcut 5",
+        tool5_action.is_some(),
+    )?;
+
     Ok(ShortcutConfig {
         select_area,
         start,
+        restore_last_mode,
         toolbar1_action: tool1_action.map(|action| action.token().to_string()).unwrap_or_default(),
         toolbar1_key,
         toolbar2_action: tool2_action.map(|action| action.token().to_string()).unwrap_or_default(),
         toolbar2_key,
         toolbar3_action: tool3_action.map(|action| action.token().to_string()).unwrap_or_default(),
         toolbar3_key,
+        toolbar4_action: tool4_action.map(|action| action.token().to_string()).unwrap_or_default(),
+        toolbar4_key,
+        toolbar5_action: tool5_action.map(|action| action.token().to_string()).unwrap_or_default(),
+        toolbar5_key,
     })
 }
 
@@ -271,4 +339,48 @@ fn configure_shortcut_window_native(window: &ShortcutSettingsWindow, dark_theme:
         let hwnd = windows::Win32::Foundation::HWND(handle.hwnd.get() as _);
         crate::win_utils::set_title_bar_theme(hwnd, dark_theme);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+    use std::rc::Rc;
+
+    #[test]
+    fn shortcut_form_roundtrips_five_custom_slots_and_optional_restore() {
+        struct Headless;
+        impl slint::platform::Platform for Headless {
+            fn create_window_adapter(
+                &self,
+            ) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+                Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+            }
+        }
+        slint::platform::set_platform(Box::new(Headless)).unwrap();
+        let main = MainWindow::new().unwrap();
+        let window = ShortcutSettingsWindow::new().unwrap();
+        register_callbacks(&main, &window, None, Arc::new(Mutex::new(HotkeyState::default())));
+        for config in [
+            ShortcutConfig::default(),
+            ShortcutConfig {
+                restore_last_mode: "alt+ctrl+R".into(),
+                toolbar1_action: "fullscreen".into(),
+                toolbar1_key: "ctrl+shift+F1".into(),
+                toolbar2_action: "ocr_translate".into(),
+                toolbar2_key: "ctrl+shift+F2".into(),
+                toolbar3_action: "toggle_textbox".into(),
+                toolbar3_key: "ctrl+shift+F3".into(),
+                toolbar4_action: "toggle_overlay".into(),
+                toolbar4_key: "ctrl+shift+F4".into(),
+                toolbar5_action: "change_mode".into(),
+                toolbar5_key: "ctrl+shift+F5".into(),
+                ..ShortcutConfig::default()
+            },
+            ShortcutConfig::default(),
+        ] {
+            populate_window(&window, &config);
+            assert_eq!(read_config(&window).unwrap(), config);
+        }
+    }
 }

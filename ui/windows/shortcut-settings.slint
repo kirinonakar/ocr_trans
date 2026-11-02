@@ -1,10 +1,9 @@
 // Editable OCR and capture-toolbar keyboard shortcuts.
 
-import { Button, CheckBox, ComboBox, Palette } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, ScrollView, Palette } from "std-widgets.slint";
 
-// Shortcut settings for the OCR window's capture settings card. Five slots are editable:
-// Select area, Start, and three capture-toolbar shortcuts; the toolbar slots also pick the
-// capture/record/OCR action they trigger.
+// Select area, Start, Restore last mode, and five capture-toolbar shortcuts are editable.
+// The toolbar slots also pick the capture/record/OCR action they trigger.
 export component ShortcutSettingsWindow inherits Window {
     title: "Shortcut settings";
     icon: @image-url("../../app.ico");
@@ -35,6 +34,12 @@ export component ShortcutSettingsWindow inherits Window {
     in-out property <bool> start_shift: false;
     in-out property <int> start_key_index: 15;
 
+    in-out property <bool> restore_win: false;
+    in-out property <bool> restore_alt: false;
+    in-out property <bool> restore_ctrl: false;
+    in-out property <bool> restore_shift: false;
+    in-out property <int> restore_key_index: -1;
+
     in-out property <int> tool1_action_index: 0;
     in-out property <bool> tool1_win: false;
     in-out property <bool> tool1_alt: true;
@@ -55,6 +60,20 @@ export component ShortcutSettingsWindow inherits Window {
     in-out property <bool> tool3_ctrl: false;
     in-out property <bool> tool3_shift: false;
     in-out property <int> tool3_key_index: -1;
+
+    in-out property <int> tool4_action_index: 0;
+    in-out property <bool> tool4_win: false;
+    in-out property <bool> tool4_alt: true;
+    in-out property <bool> tool4_ctrl: false;
+    in-out property <bool> tool4_shift: false;
+    in-out property <int> tool4_key_index: -1;
+
+    in-out property <int> tool5_action_index: 0;
+    in-out property <bool> tool5_win: false;
+    in-out property <bool> tool5_alt: true;
+    in-out property <bool> tool5_ctrl: false;
+    in-out property <bool> tool5_shift: false;
+    in-out property <int> tool5_key_index: -1;
 
     in-out property <string> status_text: "";
     in-out property <bool> status_error: false;
@@ -87,142 +106,247 @@ export component ShortcutSettingsWindow inherits Window {
             wrap: word-wrap;
         }
 
-        // Select area
-        Rectangle {
-            background: dark_theme ? #37373f : #ffffff;
-            border-radius: 10px;
-            border-width: 1px;
-            border-color: dark_theme ? transparent : #e2e8f0;
-            VerticalLayout {
-                padding: 10px;
-                spacing: 6px;
-                Text { text: "Select area"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
-                HorizontalLayout {
-                    spacing: 2px;
-                    CheckBox { checked <=> select_win; text: "Win"; }
-                    CheckBox { checked <=> select_alt; text: "Alt"; }
-                    CheckBox { checked <=> select_ctrl; text: "Ctrl"; }
-                    CheckBox { checked <=> select_shift; text: "Shift"; }
+        ScrollView {
+            vertical-stretch: 1;
+            viewport-height: max(self.visible-height, shortcut-content.preferred-height);
+            shortcut-content := VerticalLayout {
+                width: parent.width;
+                spacing: 8px;
+                alignment: start;
+                // Select area
+                Rectangle {
+                    background: dark_theme ? #37373f : #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: dark_theme ? transparent : #e2e8f0;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        Text { text: "Select area"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                        HorizontalLayout {
+                            spacing: 2px;
+                            CheckBox { checked <=> select_win; text: "Win"; }
+                            CheckBox { checked <=> select_alt; text: "Alt"; }
+                            CheckBox { checked <=> select_ctrl; text: "Ctrl"; }
+                            CheckBox { checked <=> select_shift; text: "Shift"; }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: key_options; current-index <=> select_key_index; }
+                        }
+                    }
                 }
-                HorizontalLayout {
-                    spacing: 6px;
-                    Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                    ComboBox { model: key_options; current-index <=> select_key_index; }
-                }
-            }
-        }
 
-        // Start / stop continuous OCR
-        Rectangle {
-            background: dark_theme ? #37373f : #ffffff;
-            border-radius: 10px;
-            border-width: 1px;
-            border-color: dark_theme ? transparent : #e2e8f0;
-            VerticalLayout {
-                padding: 10px;
-                spacing: 6px;
-                Text { text: "Start"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
-                HorizontalLayout {
-                    spacing: 2px;
-                    CheckBox { checked <=> start_win; text: "Win"; }
-                    CheckBox { checked <=> start_alt; text: "Alt"; }
-                    CheckBox { checked <=> start_ctrl; text: "Ctrl"; }
-                    CheckBox { checked <=> start_shift; text: "Shift"; }
+                // Start / stop continuous OCR
+                Rectangle {
+                    background: dark_theme ? #37373f : #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: dark_theme ? transparent : #e2e8f0;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        Text { text: "Start"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                        HorizontalLayout {
+                            spacing: 2px;
+                            CheckBox { checked <=> start_win; text: "Win"; }
+                            CheckBox { checked <=> start_alt; text: "Alt"; }
+                            CheckBox { checked <=> start_ctrl; text: "Ctrl"; }
+                            CheckBox { checked <=> start_shift; text: "Shift"; }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: key_options; current-index <=> start_key_index; }
+                        }
+                    }
                 }
-                HorizontalLayout {
-                    spacing: 6px;
-                    Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                    ComboBox { model: key_options; current-index <=> start_key_index; }
-                }
-            }
-        }
 
-        // Capture toolbar shortcut 1
-        Rectangle {
-            background: dark_theme ? #37373f : #ffffff;
-            border-radius: 10px;
-            border-width: 1px;
-            border-color: dark_theme ? transparent : #e2e8f0;
-            VerticalLayout {
-                padding: 10px;
-                spacing: 6px;
-                Text { text: "Capture toolbar shortcut 1"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
-                HorizontalLayout {
-                    spacing: 6px;
-                    Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                    ComboBox { model: action_options; current-index <=> tool1_action_index; }
+                // Restore the last mode, using the same path as a tray double-click.
+                Rectangle {
+                    background: dark_theme ? #37373f : #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: dark_theme ? transparent : #e2e8f0;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        Text { text: "Restore last mode"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                        Text { text: "Same as double-clicking the tray icon. Clear to disable."; color: dark_theme ? #94a3b8 : #64748b; font-size: 11px; wrap: word-wrap; }
+                        HorizontalLayout {
+                            spacing: 2px;
+                            CheckBox { checked <=> restore_win; text: "Win"; }
+                            CheckBox { checked <=> restore_alt; text: "Alt"; }
+                            CheckBox { checked <=> restore_ctrl; text: "Ctrl"; }
+                            CheckBox { checked <=> restore_shift; text: "Shift"; }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: key_options; current-index <=> restore_key_index; }
+                            Button {
+                                text: "Clear";
+                                clicked => {
+                                    restore_win = false;
+                                    restore_alt = false;
+                                    restore_ctrl = false;
+                                    restore_shift = false;
+                                    restore_key_index = -1;
+                                }
+                            }
+                        }
+                    }
                 }
-                HorizontalLayout {
-                    spacing: 2px;
-                    CheckBox { checked <=> tool1_win; text: "Win"; }
-                    CheckBox { checked <=> tool1_alt; text: "Alt"; }
-                    CheckBox { checked <=> tool1_ctrl; text: "Ctrl"; }
-                    CheckBox { checked <=> tool1_shift; text: "Shift"; }
-                }
-                HorizontalLayout {
-                    spacing: 6px;
-                    Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                    ComboBox { model: key_options; current-index <=> tool1_key_index; }
-                }
-            }
-        }
 
-        // Capture toolbar shortcut 2
-        Rectangle {
-            background: dark_theme ? #37373f : #ffffff;
-            border-radius: 10px;
-            border-width: 1px;
-            border-color: dark_theme ? transparent : #e2e8f0;
-            VerticalLayout {
-                padding: 10px;
-                spacing: 6px;
-                Text { text: "Capture toolbar shortcut 2"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
-                HorizontalLayout {
-                    spacing: 6px;
-                    Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                    ComboBox { model: action_options; current-index <=> tool2_action_index; }
+                // Capture toolbar shortcut 1
+                Rectangle {
+                    background: dark_theme ? #37373f : #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: dark_theme ? transparent : #e2e8f0;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        Text { text: "Capture toolbar shortcut 1"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: action_options; current-index <=> tool1_action_index; }
+                        }
+                        HorizontalLayout {
+                            spacing: 2px;
+                            CheckBox { checked <=> tool1_win; text: "Win"; }
+                            CheckBox { checked <=> tool1_alt; text: "Alt"; }
+                            CheckBox { checked <=> tool1_ctrl; text: "Ctrl"; }
+                            CheckBox { checked <=> tool1_shift; text: "Shift"; }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: key_options; current-index <=> tool1_key_index; }
+                        }
+                    }
                 }
-                HorizontalLayout {
-                    spacing: 2px;
-                    CheckBox { checked <=> tool2_win; text: "Win"; }
-                    CheckBox { checked <=> tool2_alt; text: "Alt"; }
-                    CheckBox { checked <=> tool2_ctrl; text: "Ctrl"; }
-                    CheckBox { checked <=> tool2_shift; text: "Shift"; }
-                }
-                HorizontalLayout {
-                    spacing: 6px;
-                    Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                    ComboBox { model: key_options; current-index <=> tool2_key_index; }
-                }
-            }
-        }
 
-        // Capture toolbar shortcut 3
-        Rectangle {
-            background: dark_theme ? #37373f : #ffffff;
-            border-radius: 10px;
-            border-width: 1px;
-            border-color: dark_theme ? transparent : #e2e8f0;
-            VerticalLayout {
-                padding: 10px;
-                spacing: 6px;
-                Text { text: "Capture toolbar shortcut 3"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
-                HorizontalLayout {
-                    spacing: 6px;
-                    Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                    ComboBox { model: action_options; current-index <=> tool3_action_index; }
+                // Capture toolbar shortcut 2
+                Rectangle {
+                    background: dark_theme ? #37373f : #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: dark_theme ? transparent : #e2e8f0;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        Text { text: "Capture toolbar shortcut 2"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: action_options; current-index <=> tool2_action_index; }
+                        }
+                        HorizontalLayout {
+                            spacing: 2px;
+                            CheckBox { checked <=> tool2_win; text: "Win"; }
+                            CheckBox { checked <=> tool2_alt; text: "Alt"; }
+                            CheckBox { checked <=> tool2_ctrl; text: "Ctrl"; }
+                            CheckBox { checked <=> tool2_shift; text: "Shift"; }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: key_options; current-index <=> tool2_key_index; }
+                        }
+                    }
                 }
-                HorizontalLayout {
-                    spacing: 2px;
-                    CheckBox { checked <=> tool3_win; text: "Win"; }
-                    CheckBox { checked <=> tool3_alt; text: "Alt"; }
-                    CheckBox { checked <=> tool3_ctrl; text: "Ctrl"; }
-                    CheckBox { checked <=> tool3_shift; text: "Shift"; }
+
+                // Capture toolbar shortcut 3
+                Rectangle {
+                    background: dark_theme ? #37373f : #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: dark_theme ? transparent : #e2e8f0;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        Text { text: "Capture toolbar shortcut 3"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: action_options; current-index <=> tool3_action_index; }
+                        }
+                        HorizontalLayout {
+                            spacing: 2px;
+                            CheckBox { checked <=> tool3_win; text: "Win"; }
+                            CheckBox { checked <=> tool3_alt; text: "Alt"; }
+                            CheckBox { checked <=> tool3_ctrl; text: "Ctrl"; }
+                            CheckBox { checked <=> tool3_shift; text: "Shift"; }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: key_options; current-index <=> tool3_key_index; }
+                        }
+                    }
                 }
-                HorizontalLayout {
-                    spacing: 6px;
-                    Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                    ComboBox { model: key_options; current-index <=> tool3_key_index; }
+
+                // Capture toolbar shortcut 4
+                Rectangle {
+                    background: dark_theme ? #37373f : #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: dark_theme ? transparent : #e2e8f0;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        Text { text: "Capture toolbar shortcut 4"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: action_options; current-index <=> tool4_action_index; }
+                        }
+                        HorizontalLayout {
+                            spacing: 2px;
+                            CheckBox { checked <=> tool4_win; text: "Win"; }
+                            CheckBox { checked <=> tool4_alt; text: "Alt"; }
+                            CheckBox { checked <=> tool4_ctrl; text: "Ctrl"; }
+                            CheckBox { checked <=> tool4_shift; text: "Shift"; }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: key_options; current-index <=> tool4_key_index; }
+                        }
+                    }
+                }
+
+                // Capture toolbar shortcut 5
+                Rectangle {
+                    background: dark_theme ? #37373f : #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: dark_theme ? transparent : #e2e8f0;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        Text { text: "Capture toolbar shortcut 5"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: action_options; current-index <=> tool5_action_index; }
+                        }
+                        HorizontalLayout {
+                            spacing: 2px;
+                            CheckBox { checked <=> tool5_win; text: "Win"; }
+                            CheckBox { checked <=> tool5_alt; text: "Alt"; }
+                            CheckBox { checked <=> tool5_ctrl; text: "Ctrl"; }
+                            CheckBox { checked <=> tool5_shift; text: "Shift"; }
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+                            ComboBox { model: key_options; current-index <=> tool5_key_index; }
+                        }
+                    }
                 }
             }
         }

@@ -258,17 +258,22 @@ pub(crate) fn start(
 
         // Resolve the current bindings on every event so shortcuts stay in sync after the
         // settings window re-registers them.
-        let (select_id, start_id, tool1, tool1_action, tool2, tool2_action, tool3, tool3_action) = {
+        let (select_id, start_id, restore_id, toolbar_bindings) = {
             let state = state_hk.lock().unwrap();
             (
                 state.registered.select_area.map(|hotkey| hotkey.id()),
                 state.registered.start.map(|hotkey| hotkey.id()),
-                state.registered.toolbar1.map(|hotkey| hotkey.id()),
-                ToolbarAction::from_token(&state.config.toolbar1_action),
-                state.registered.toolbar2.map(|hotkey| hotkey.id()),
-                ToolbarAction::from_token(&state.config.toolbar2_action),
-                state.registered.toolbar3.map(|hotkey| hotkey.id()),
-                ToolbarAction::from_token(&state.config.toolbar3_action),
+                state.registered.restore_last_mode.map(|hotkey| hotkey.id()),
+                [
+                    (state.registered.toolbar1, &state.config.toolbar1_action),
+                    (state.registered.toolbar2, &state.config.toolbar2_action),
+                    (state.registered.toolbar3, &state.config.toolbar3_action),
+                    (state.registered.toolbar4, &state.config.toolbar4_action),
+                    (state.registered.toolbar5, &state.config.toolbar5_action),
+                ]
+                .map(|(hotkey, action)| {
+                    (hotkey.map(|hotkey| hotkey.id()), ToolbarAction::from_token(action))
+                }),
             )
         };
 
@@ -286,17 +291,14 @@ pub(crate) fn start(
                     main.invoke_start_stop_clicked();
                 }
             });
-        } else if Some(event.id) == tool1 {
-            if let Some(action) = tool1_action {
-                dispatch_toolbar_action(&toolbar_weak_hk, action);
-            }
-        } else if Some(event.id) == tool2 {
-            if let Some(action) = tool2_action {
-                dispatch_toolbar_action(&toolbar_weak_hk, action);
-            }
-        } else if Some(event.id) == tool3 {
-            if let Some(action) = tool3_action {
-                dispatch_toolbar_action(&toolbar_weak_hk, action);
+        } else if Some(event.id) == restore_id {
+            let _ = slint::invoke_from_event_loop(crate::lifecycle::request_restore_last_mode);
+        } else if let Some((_, action)) = toolbar_bindings
+            .into_iter()
+            .find(|(id, _)| *id == Some(event.id))
+        {
+            if let Some(action) = action {
+                dispatch_toolbar_action(&main_weak_hk, &toolbar_weak_hk, action);
             }
         } else if event.id == esc_id {
             if let Some(cancel) = scroll_state_hk.lock().unwrap().scroll_cancel.as_ref() {
@@ -313,26 +315,48 @@ pub(crate) fn start(
     });
 }
 
-/// Runs a capture-toolbar action from a global shortcut by invoking the same callback that the
-/// toolbar button uses, so the behavior stays identical.
-fn dispatch_toolbar_action(toolbar: &slint::Weak<CaptureToolbarWindow>, action: ToolbarAction) {
+/// Runs a custom shortcut through the same callbacks as its toolbar button or tray toggle.
+fn dispatch_toolbar_action(
+    main: &slint::Weak<MainWindow>,
+    toolbar: &slint::Weak<CaptureToolbarWindow>,
+    action: ToolbarAction,
+) {
+    let main = main.clone();
     let toolbar = toolbar.clone();
     let _ = slint::invoke_from_event_loop(move || {
-        let Some(toolbar) = toolbar.upgrade() else {
+        let (Some(main), Some(toolbar)) = (main.upgrade(), toolbar.upgrade()) else {
             return;
         };
-        match action {
-            ToolbarAction::Fullscreen => toolbar.invoke_fullscreen_clicked(),
-            ToolbarAction::Window => toolbar.invoke_window_clicked(),
-            ToolbarAction::Region => toolbar.invoke_region_clicked(),
-            ToolbarAction::Ocr => toolbar.invoke_ocr_clicked(),
-            ToolbarAction::OcrTranslate => toolbar.invoke_translate_clicked(),
-            ToolbarAction::Vlm => toolbar.invoke_vlm_clicked(),
-            ToolbarAction::ColorPicker => toolbar.invoke_color_picker_clicked(),
-            ToolbarAction::Ruler => toolbar.invoke_ruler_clicked(),
-            ToolbarAction::WindowMagnifier => toolbar.invoke_magnify_window_clicked(),
-        }
+        run_shortcut_action(&main, &toolbar, action);
     });
+}
+
+fn run_shortcut_action(main: &MainWindow, toolbar: &CaptureToolbarWindow, action: ToolbarAction) {
+    match action {
+        ToolbarAction::Fullscreen => toolbar.invoke_fullscreen_clicked(),
+        ToolbarAction::Window => toolbar.invoke_window_clicked(),
+        ToolbarAction::Region => toolbar.invoke_region_clicked(),
+        ToolbarAction::Ocr => toolbar.invoke_ocr_clicked(),
+        ToolbarAction::OcrTranslate => toolbar.invoke_translate_clicked(),
+        ToolbarAction::Vlm => toolbar.invoke_vlm_clicked(),
+        ToolbarAction::ColorPicker => toolbar.invoke_color_picker_clicked(),
+        ToolbarAction::Ruler => toolbar.invoke_ruler_clicked(),
+        ToolbarAction::WindowMagnifier => toolbar.invoke_magnify_window_clicked(),
+        ToolbarAction::ToggleTextbox => toolbar.invoke_textbox_toggle_clicked(),
+        ToolbarAction::ToggleOverlay => {
+            let visible = !main.get_overlay_visible();
+            main.set_overlay_visible(visible);
+            main.invoke_overlay_toggle_clicked(visible);
+        }
+        ToolbarAction::ChangeMode => {
+            if main.get_app_mode() == "capture" {
+                // Keep the toolbar's recording guard and frame cleanup when leaving capture.
+                toolbar.invoke_ui_toggle_clicked();
+            } else {
+                main.invoke_mode_toggle_clicked("capture".into());
+            }
+        }
+    }
 }
 
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
@@ -513,6 +537,49 @@ fn queue_worker_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_toggle_shortcuts_use_existing_callbacks_in_both_directions() {
+        use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct Headless;
+        impl slint::platform::Platform for Headless {
+            fn create_window_adapter(
+                &self,
+            ) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+                Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+            }
+        }
+        slint::platform::set_platform(Box::new(Headless)).unwrap();
+        let main = MainWindow::new().unwrap();
+        let toolbar = CaptureToolbarWindow::new().unwrap();
+        let textbox = Rc::new(Cell::new(false));
+        let toggled_textbox = textbox.clone();
+        toolbar.on_textbox_toggle_clicked(move || toggled_textbox.set(!toggled_textbox.get()));
+        let overlay = Rc::new(Cell::new(false));
+        let toggled_overlay = overlay.clone();
+        main.on_overlay_toggle_clicked(move |visible| toggled_overlay.set(visible));
+        main.set_overlay_visible(false);
+        for expected in [true, false] {
+            run_shortcut_action(&main, &toolbar, ToolbarAction::ToggleTextbox);
+            assert_eq!(textbox.get(), expected);
+            run_shortcut_action(&main, &toolbar, ToolbarAction::ToggleOverlay);
+            assert_eq!(main.get_overlay_visible(), expected);
+            assert_eq!(overlay.get(), expected);
+        }
+
+        let main_weak = main.as_weak();
+        main.on_mode_toggle_clicked(move |mode| main_weak.upgrade().unwrap().set_app_mode(mode));
+        let main_weak = main.as_weak();
+        toolbar.on_ui_toggle_clicked(move || main_weak.upgrade().unwrap().set_app_mode("ocr".into()));
+        main.set_app_mode("ocr".into());
+        run_shortcut_action(&main, &toolbar, ToolbarAction::ChangeMode);
+        assert_eq!(main.get_app_mode(), "capture");
+        run_shortcut_action(&main, &toolbar, ToolbarAction::ChangeMode);
+        assert_eq!(main.get_app_mode(), "ocr");
+    }
     use image::{Rgba, RgbaImage};
 
     #[test]

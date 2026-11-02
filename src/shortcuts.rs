@@ -1,11 +1,14 @@
 //! Global shortcut configuration and (re)registration.
 //!
-//! The OCR window exposes five configurable shortcuts:
+//! The shortcut settings window exposes eight configurable shortcuts:
 //! * `select_area`  - opens the capture-area selector (default `win+alt+A`)
 //! * `start`        - starts/stops the continuous OCR loop (default `win+alt+P`)
+//! * `restore_last_mode` - restores the last mode like a tray double-click (unbound by default)
 //! * `toolbar1`     - runs one capture-toolbar action
 //! * `toolbar2`     - runs a second capture-toolbar action
 //! * `toolbar3`     - runs a third capture-toolbar action
+//! * `toolbar4`     - runs a fourth capture-toolbar action
+//! * `toolbar5`     - runs a fifth capture-toolbar action
 //!
 //! Bindings are stored as `modifier+modifier+KEY` strings (for example `win+alt+A`) so they can
 //! live in the plain-text settings file. The toolbar slots additionally carry an action token.
@@ -81,17 +84,22 @@ pub(crate) const KEY_TOKENS: [&str; 61] = [
 ];
 
 /// Persisted shortcut configuration. `Default` intentionally enables only the two original
-/// shortcuts; the capture-toolbar slots start empty.
-#[derive(Clone, Debug)]
+/// shortcuts; restore-last-mode and the capture-toolbar slots start empty.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ShortcutConfig {
     pub(crate) select_area: String,
     pub(crate) start: String,
+    pub(crate) restore_last_mode: String,
     pub(crate) toolbar1_action: String,
     pub(crate) toolbar1_key: String,
     pub(crate) toolbar2_action: String,
     pub(crate) toolbar2_key: String,
     pub(crate) toolbar3_action: String,
     pub(crate) toolbar3_key: String,
+    pub(crate) toolbar4_action: String,
+    pub(crate) toolbar4_key: String,
+    pub(crate) toolbar5_action: String,
+    pub(crate) toolbar5_key: String,
 }
 
 impl Default for ShortcutConfig {
@@ -99,12 +107,17 @@ impl Default for ShortcutConfig {
         Self {
             select_area: "win+alt+A".to_string(),
             start: "win+alt+P".to_string(),
+            restore_last_mode: String::new(),
             toolbar1_action: String::new(),
             toolbar1_key: String::new(),
             toolbar2_action: String::new(),
             toolbar2_key: String::new(),
             toolbar3_action: String::new(),
             toolbar3_key: String::new(),
+            toolbar4_action: String::new(),
+            toolbar4_key: String::new(),
+            toolbar5_action: String::new(),
+            toolbar5_key: String::new(),
         }
     }
 }
@@ -121,9 +134,12 @@ pub(crate) enum ToolbarAction {
     ColorPicker,
     Ruler,
     WindowMagnifier,
+    ToggleTextbox,
+    ToggleOverlay,
+    ChangeMode,
 }
 
-pub(crate) const TOOLBAR_ACTIONS: [ToolbarAction; 9] = [
+pub(crate) const TOOLBAR_ACTIONS: [ToolbarAction; 12] = [
     ToolbarAction::Fullscreen,
     ToolbarAction::Window,
     ToolbarAction::Region,
@@ -133,6 +149,9 @@ pub(crate) const TOOLBAR_ACTIONS: [ToolbarAction; 9] = [
     ToolbarAction::ColorPicker,
     ToolbarAction::Ruler,
     ToolbarAction::WindowMagnifier,
+    ToolbarAction::ToggleTextbox,
+    ToolbarAction::ToggleOverlay,
+    ToolbarAction::ChangeMode,
 ];
 
 impl ToolbarAction {
@@ -147,6 +166,9 @@ impl ToolbarAction {
             ToolbarAction::ColorPicker => "color_picker",
             ToolbarAction::Ruler => "ruler",
             ToolbarAction::WindowMagnifier => "window_magnifier",
+            ToolbarAction::ToggleTextbox => "toggle_textbox",
+            ToolbarAction::ToggleOverlay => "toggle_overlay",
+            ToolbarAction::ChangeMode => "change_mode",
         }
     }
 
@@ -161,6 +183,9 @@ impl ToolbarAction {
             ToolbarAction::ColorPicker => "Color picker",
             ToolbarAction::Ruler => "Ruler",
             ToolbarAction::WindowMagnifier => "Window magnifier",
+            ToolbarAction::ToggleTextbox => "Toggle textbox",
+            ToolbarAction::ToggleOverlay => "Toggle overlay",
+            ToolbarAction::ChangeMode => "Change mode (Capture / OCR)",
         }
     }
 
@@ -202,9 +227,12 @@ pub(crate) fn action_options() -> Vec<&'static str> {
 pub(crate) struct RegisteredHotkeys {
     pub(crate) select_area: Option<HotKey>,
     pub(crate) start: Option<HotKey>,
+    pub(crate) restore_last_mode: Option<HotKey>,
     pub(crate) toolbar1: Option<HotKey>,
     pub(crate) toolbar2: Option<HotKey>,
     pub(crate) toolbar3: Option<HotKey>,
+    pub(crate) toolbar4: Option<HotKey>,
+    pub(crate) toolbar5: Option<HotKey>,
 }
 
 /// Shared, `Send` state describing the currently registered shortcuts. The OS manager itself is
@@ -447,9 +475,12 @@ pub(crate) fn apply_config(
         for hotkey in [
             state.registered.select_area,
             state.registered.start,
+            state.registered.restore_last_mode,
             state.registered.toolbar1,
             state.registered.toolbar2,
             state.registered.toolbar3,
+            state.registered.toolbar4,
+            state.registered.toolbar5,
         ]
         .into_iter()
         .flatten()
@@ -460,6 +491,8 @@ pub(crate) fn apply_config(
         let mut registered = RegisteredHotkeys::default();
         registered.select_area = register_one(manager, &config.select_area, "Select area");
         registered.start = register_one(manager, &config.start, "Start");
+        registered.restore_last_mode =
+            register_one(manager, &config.restore_last_mode, "Restore last mode");
         if ToolbarAction::from_token(&config.toolbar1_action).is_some() {
             registered.toolbar1 = register_one(manager, &config.toolbar1_key, "Toolbar shortcut 1");
         }
@@ -468,6 +501,12 @@ pub(crate) fn apply_config(
         }
         if ToolbarAction::from_token(&config.toolbar3_action).is_some() {
             registered.toolbar3 = register_one(manager, &config.toolbar3_key, "Toolbar shortcut 3");
+        }
+        if ToolbarAction::from_token(&config.toolbar4_action).is_some() {
+            registered.toolbar4 = register_one(manager, &config.toolbar4_key, "Toolbar shortcut 4");
+        }
+        if ToolbarAction::from_token(&config.toolbar5_action).is_some() {
+            registered.toolbar5 = register_one(manager, &config.toolbar5_key, "Toolbar shortcut 5");
         }
         state.registered = registered;
     }

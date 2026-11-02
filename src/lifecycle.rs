@@ -90,6 +90,19 @@ pub(crate) fn remove_tray_icon() {
     });
 }
 
+/// Called on the UI thread by the global shortcut. Queue the same restore action as a tray
+/// double-click, so mode selection, frame restoration and foreground focus share one path.
+pub(crate) fn request_restore_last_mode() {
+    BROKER.with(|broker| {
+        let hwnd = broker.get();
+        if !hwnd.0.is_null() {
+            unsafe {
+                SendMessageW(hwnd, ACTIVATE, Some(WPARAM(0)), Some(LPARAM(0)));
+            }
+        }
+    });
+}
+
 unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if message == WM_NCCREATE {
         let create = &*(lp.0 as *const CREATESTRUCTW);
@@ -642,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn native_activation_and_tray_double_click_queue_restore_until_ui_is_ready() {
+    fn native_activation_tray_double_click_and_shortcut_queue_the_same_restore() {
         let host = NativeHost::create(None).unwrap();
         unsafe {
             SendMessageW(host.hwnd, ACTIVATE, Some(WPARAM(0)), Some(LPARAM(0)));
@@ -660,7 +673,11 @@ mod tests {
                 Some(LPARAM(((1 << 16) | WM_LBUTTONUP) as isize)),
             );
         }
-        assert_eq!(host.take_actions(), [Action::Restore, Action::Restore]);
+        request_restore_last_mode();
+        assert_eq!(
+            host.take_actions(),
+            [Action::Restore, Action::Restore, Action::Restore]
+        );
         assert!(host.take_actions().is_empty());
         assert!(!host.state.tray_added.get());
     }

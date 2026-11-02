@@ -508,12 +508,19 @@ fn read_app_settings() -> AppSettings {
             .clamp(0.0, 1000.0);
             settings.shortcuts.select_area = ini_value(&values, "shortcuts", "select_area", settings.shortcuts.select_area);
             settings.shortcuts.start = ini_value(&values, "shortcuts", "start", settings.shortcuts.start);
+            settings.shortcuts.restore_last_mode = ini_value(
+                &values, "shortcuts", "restore_last_mode", settings.shortcuts.restore_last_mode,
+            );
             settings.shortcuts.toolbar1_action = ini_value(&values, "shortcuts", "toolbar1_action", settings.shortcuts.toolbar1_action);
             settings.shortcuts.toolbar1_key = ini_value(&values, "shortcuts", "toolbar1_key", settings.shortcuts.toolbar1_key);
             settings.shortcuts.toolbar2_action = ini_value(&values, "shortcuts", "toolbar2_action", settings.shortcuts.toolbar2_action);
             settings.shortcuts.toolbar2_key = ini_value(&values, "shortcuts", "toolbar2_key", settings.shortcuts.toolbar2_key);
             settings.shortcuts.toolbar3_action = ini_value(&values, "shortcuts", "toolbar3_action", settings.shortcuts.toolbar3_action);
             settings.shortcuts.toolbar3_key = ini_value(&values, "shortcuts", "toolbar3_key", settings.shortcuts.toolbar3_key);
+            settings.shortcuts.toolbar4_action = ini_value(&values, "shortcuts", "toolbar4_action", settings.shortcuts.toolbar4_action);
+            settings.shortcuts.toolbar4_key = ini_value(&values, "shortcuts", "toolbar4_key", settings.shortcuts.toolbar4_key);
+            settings.shortcuts.toolbar5_action = ini_value(&values, "shortcuts", "toolbar5_action", settings.shortcuts.toolbar5_action);
+            settings.shortcuts.toolbar5_key = ini_value(&values, "shortcuts", "toolbar5_key", settings.shortcuts.toolbar5_key);
             settings.ocr_window_position = ini_window_position(&values, "ocr");
             settings.textbox_window_position = ini_window_position(&values, "textbox");
         }
@@ -542,7 +549,7 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         format!("{}={}\n", definition.model_key, ini_escape(&saved_model_for_provider(&settings.provider, definition.name)))
     }).collect::<String>();
     let mut contents = format!(
-        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\nsingle_instance={}\nminimize_to_tray={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nresult_font_family={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\n",
+        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\nsingle_instance={}\nminimize_to_tray={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nresult_font_family={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\nrestore_last_mode={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\ntoolbar4_action={}\ntoolbar4_key={}\ntoolbar5_action={}\ntoolbar5_key={}\n",
         ini_escape(&settings.provider.provider),
         models,
         ini_escape(&settings.provider.thinking_level),
@@ -564,12 +571,17 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         settings.api_settings_saved_height,
         ini_escape(&settings.shortcuts.select_area),
         ini_escape(&settings.shortcuts.start),
+        ini_escape(&settings.shortcuts.restore_last_mode),
         ini_escape(&settings.shortcuts.toolbar1_action),
         ini_escape(&settings.shortcuts.toolbar1_key),
         ini_escape(&settings.shortcuts.toolbar2_action),
         ini_escape(&settings.shortcuts.toolbar2_key),
         ini_escape(&settings.shortcuts.toolbar3_action),
         ini_escape(&settings.shortcuts.toolbar3_key),
+        ini_escape(&settings.shortcuts.toolbar4_action),
+        ini_escape(&settings.shortcuts.toolbar4_key),
+        ini_escape(&settings.shortcuts.toolbar5_action),
+        ini_escape(&settings.shortcuts.toolbar5_key),
     );
     contents.push_str("\n[windows]\n");
     for (window, position) in [
@@ -734,6 +746,31 @@ pub(crate) fn save_shortcut_config(config: &ShortcutConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restore_last_mode_shortcut_roundtrips_and_legacy_settings_leave_it_unbound() {
+        let mut settings = AppSettings::default();
+        for binding in ["", "ctrl+alt+R", "win+shift+F12"] {
+            settings.shortcuts.restore_last_mode = binding.to_string();
+            let values = parse_ini(&serialize_app_settings(&settings));
+            assert_eq!(
+                ini_value(&values, "shortcuts", "restore_last_mode", "missing".into()),
+                binding
+            );
+            assert_eq!(
+                ini_value(&values, "shortcuts", "select_area", String::new()),
+                settings.shortcuts.select_area
+            );
+            assert_eq!(
+                ini_value(&values, "shortcuts", "start", String::new()),
+                settings.shortcuts.start
+            );
+        }
+        let legacy = parse_ini("[shortcuts]\nselect_area=win+alt+A\nstart=win+alt+P\n");
+        let fallback = ShortcutConfig::default().restore_last_mode;
+        assert!(fallback.is_empty());
+        assert!(ini_value(&legacy, "shortcuts", "restore_last_mode", fallback).is_empty());
+    }
 
     #[test]
     fn lifecycle_options_roundtrip_with_last_mode_and_cannot_enable_tray_alone() {

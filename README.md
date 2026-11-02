@@ -37,7 +37,7 @@ Capture toolbar (dark theme)
 - **Configurable Global Hotkeys**: 
   - **Win + Alt + A**: Trigger area selection (default).
   - **Win + Alt + P**: Start or Stop the translation process (default).
-  - Up to **three capture-toolbar shortcuts** can run Fullscreen / Window / Region capture, OCR, OCR + Translate, VLM, color picker, ruler, or window magnifier. Every binding is remappable from the keyboard button next to the **CAPTURE SETTINGS** title.
+  - Up to **five capture-toolbar shortcuts** can run Fullscreen / Window / Region capture, OCR, OCR + Translate, VLM, color picker, ruler, window magnifier, Toggle textbox, Toggle overlay, or Change mode (Capture / OCR). Every binding is remappable from the keyboard button next to the **CAPTURE SETTINGS** title.
 - **Capture Mode**: Compact always-on-top toolbar (`Capture` ↔ `OCR` toggle).
   - Frame mode opens a movable, resizable transparent capture frame with its own Capture and Record controls.
   - Fullscreen / Window / Scrolling (Windows only) / Region (`Esc` to cancel).
@@ -58,13 +58,17 @@ All global shortcuts are configurable. Click the keyboard icon on the right side
 | --- | --- | --- |
 | Select area | `Win + Alt + A` | Open the region selector |
 | Start | `Win + Alt + P` | Start / stop the translation process |
+| Restore last mode | *(not set)* | Restore and focus the last mode, like double-clicking the tray icon |
 | Capture toolbar 1 | *(not set)* | Run a chosen capture-toolbar action |
 | Capture toolbar 2 | *(not set)* | Run a chosen capture-toolbar action |
 | Capture toolbar 3 | *(not set)* | Run a chosen capture-toolbar action |
+| Capture toolbar 4 | *(not set)* | Run a chosen capture-toolbar action |
+| Capture toolbar 5 | *(not set)* | Run a chosen capture-toolbar action |
 
 - Each slot combines **Win / Alt / Ctrl / Shift** with a single key: **A-Z**, **0-9**, **F1-F12**, **PrintScreen**, **ScrollLock (ScrLk)**, and the punctuation keys **` , . / ; ' [ ] \ - =**.
-- Only **Select area** and **Start** come with defaults; the three capture-toolbar slots start empty.
-- A capture-toolbar slot also selects the action to run: **Fullscreen**, **Window**, or **Region** capture, **OCR**, **OCR + Translate**, **VLM**, **Color picker**, **Ruler**, or **Window magnifier**.
+- Only **Select area** and **Start** come with defaults; **Restore last mode** and the five capture-toolbar slots start empty. The settings window keeps its height and scrolls through the slots.
+- Use **Clear**, then **Save**, in the **Restore last mode** row to disable its shortcut.
+- A capture-toolbar slot also selects the action to run: **Fullscreen**, **Window**, or **Region** capture, **OCR**, **OCR + Translate**, **VLM**, **Color picker**, **Ruler**, **Window magnifier**, **Toggle textbox**, **Toggle overlay**, or **Change mode (Capture / OCR)**.
 - At least one modifier and one key are required. A slot that has an action but no key is rejected instead of saved.
 - Shortcuts are registered globally, so they keep working while the application is in the background.
 
