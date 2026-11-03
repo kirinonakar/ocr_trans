@@ -193,6 +193,7 @@ pub(crate) async fn run(instance: crate::lifecycle::NativeHost) -> Result<()> {
     crate::shortcuts_ui::register_callbacks(
         &main_window,
         &shortcut_window,
+        &capture_toolbar,
         hotkey_manager.clone(),
         hotkey_state,
     );

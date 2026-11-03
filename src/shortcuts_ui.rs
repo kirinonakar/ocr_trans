@@ -5,7 +5,7 @@ use crate::shortcuts::{
     action_options, apply_config, binding_label, build_binding, key_index, split_binding,
     HotkeyState, ShortcutConfig, ToolbarAction, KEY_TOKENS,
 };
-use crate::{MainWindow, ShortcutSettingsWindow};
+use crate::{CaptureToolbarWindow, MainWindow, ShortcutSettingsWindow, ToolbarShortcutLabels};
 use global_hotkey::GlobalHotKeyManager;
 use slint::{ComponentHandle, SharedString};
 use std::sync::{Arc, Mutex};
@@ -14,6 +14,7 @@ use std::time::Duration;
 pub(crate) fn register_callbacks(
     main_window: &MainWindow,
     shortcut_window: &ShortcutSettingsWindow,
+    capture_toolbar: &CaptureToolbarWindow,
     manager: Option<Arc<GlobalHotKeyManager>>,
     state: Arc<Mutex<HotkeyState>>,
 ) {
@@ -67,6 +68,7 @@ pub(crate) fn register_callbacks(
 
     let shortcut_weak_save = shortcut_window.as_weak();
     let main_weak_save = main_window.as_weak();
+    let toolbar_weak_save = capture_toolbar.as_weak();
     let manager_save = manager;
     let state_save = state;
     shortcut_window.on_save_clicked(move || {
@@ -88,6 +90,9 @@ pub(crate) fn register_callbacks(
             main.set_select_area_shortcut_label(binding_label(&config.select_area).into());
             main.set_start_shortcut_label(binding_label(&config.start).into());
         }
+        if let Some(toolbar) = toolbar_weak_save.upgrade() {
+            update_toolbar_shortcut_labels(&toolbar, &config);
+        }
         window.set_status_error(false);
         window.set_status_text(SharedString::from("Saved"));
     });
@@ -105,6 +110,44 @@ pub(crate) fn register_callbacks(
     shortcut_window
         .window()
         .on_close_requested(|| slint::CloseRequestResponse::HideWindow);
+}
+
+/// Refresh the labels independently of the tooltip descriptions (including color/ruler results).
+pub(crate) fn update_toolbar_shortcut_labels(
+    toolbar: &CaptureToolbarWindow,
+    config: &ShortcutConfig,
+) {
+    let label = |action: ToolbarAction| {
+        let mut labels = Vec::new();
+        for (token, binding) in [
+            (&config.toolbar1_action, &config.toolbar1_key),
+            (&config.toolbar2_action, &config.toolbar2_key),
+            (&config.toolbar3_action, &config.toolbar3_key),
+            (&config.toolbar4_action, &config.toolbar4_key),
+            (&config.toolbar5_action, &config.toolbar5_key),
+        ] {
+            if ToolbarAction::from_token(token) == Some(action) && !binding.trim().is_empty() {
+                let label = binding_label(binding);
+                if !labels.contains(&label) {
+                    labels.push(label);
+                }
+            }
+        }
+        SharedString::from(labels.join(", "))
+    };
+    toolbar.set_shortcut_labels(ToolbarShortcutLabels {
+        fullscreen: label(ToolbarAction::Fullscreen),
+        window: label(ToolbarAction::Window),
+        region: label(ToolbarAction::Region),
+        ocr: label(ToolbarAction::Ocr),
+        ocr_translate: label(ToolbarAction::OcrTranslate),
+        vlm: label(ToolbarAction::Vlm),
+        color_picker: label(ToolbarAction::ColorPicker),
+        ruler: label(ToolbarAction::Ruler),
+        window_magnifier: label(ToolbarAction::WindowMagnifier),
+        toggle_textbox: label(ToolbarAction::ToggleTextbox),
+        change_mode: label(ToolbarAction::ChangeMode),
+    });
 }
 
 /// Copies the persisted configuration into the window's editing properties.
@@ -360,7 +403,14 @@ mod tests {
         slint::platform::set_platform(Box::new(Headless)).unwrap();
         let main = MainWindow::new().unwrap();
         let window = ShortcutSettingsWindow::new().unwrap();
-        register_callbacks(&main, &window, None, Arc::new(Mutex::new(HotkeyState::default())));
+        let toolbar = CaptureToolbarWindow::new().unwrap();
+        register_callbacks(
+            &main,
+            &window,
+            &toolbar,
+            None,
+            Arc::new(Mutex::new(HotkeyState::default())),
+        );
         for config in [
             ShortcutConfig::default(),
             ShortcutConfig {

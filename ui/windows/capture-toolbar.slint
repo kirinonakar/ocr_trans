@@ -2,6 +2,20 @@
 
 import { ToolbarButton } from "../components/toolbar-button.slint";
 
+export struct ToolbarShortcutLabels {
+    fullscreen: string,
+    window: string,
+    region: string,
+    ocr: string,
+    ocr_translate: string,
+    vlm: string,
+    color_picker: string,
+    ruler: string,
+    window_magnifier: string,
+    toggle_textbox: string,
+    change_mode: string,
+}
+
 export component CaptureToolbarWindow inherits Window {
     title: "Capture & record";
     always-on-top: true;
@@ -24,6 +38,7 @@ export component CaptureToolbarWindow inherits Window {
     in-out property <string> active_tooltip: "";
     in-out property <string> color_picker_tooltip: "Color Picker";
     in-out property <string> ruler_tooltip: "Ruler";
+    in property <ToolbarShortcutLabels> shortcut_labels;
     in property <[string]> ocr_language_options;
     in property <[string]> ocr_language_tags;
     in-out property <int> ocr_language_index: -1;
@@ -119,6 +134,7 @@ export component CaptureToolbarWindow inherits Window {
                 icon_size: 14px;
                 label: "OCR";
                 tooltip: "Return to OCR settings";
+                shortcut_label: shortcut_labels.change_mode;
                 hovered_tooltip_changed(value) => {
                     active_tooltip = value;
                     tooltip_visibility_changed(value);
@@ -179,6 +195,7 @@ export component CaptureToolbarWindow inherits Window {
                         icon: @image-url("../icons/fullscreen.svg");
                         dark_theme: dark_theme;
                         tooltip: "Capture full screen";
+                        shortcut_label: shortcut_labels.fullscreen;
                         hovered_tooltip_changed(value) => {
                             active_tooltip = value;
                             tooltip_visibility_changed(value);
@@ -189,6 +206,7 @@ export component CaptureToolbarWindow inherits Window {
                         icon: @image-url("../icons/window.svg");
                         dark_theme: dark_theme;
                         tooltip: "Capture window";
+                        shortcut_label: shortcut_labels.window;
                         hovered_tooltip_changed(value) => {
                             active_tooltip = value;
                             tooltip_visibility_changed(value);
@@ -221,6 +239,7 @@ export component CaptureToolbarWindow inherits Window {
                         icon: @image-url("../icons/region.svg");
                         dark_theme: dark_theme;
                         tooltip: "Capture region";
+                        shortcut_label: shortcut_labels.region;
                         hovered_tooltip_changed(value) => {
                             active_tooltip = value;
                             tooltip_visibility_changed(value);
@@ -238,6 +257,7 @@ export component CaptureToolbarWindow inherits Window {
                 height: 34px;
                 icon_size: 17px;
                 tooltip: textbox_visible ? "Hide result text box" : "Show result text box";
+                shortcut_label: shortcut_labels.toggle_textbox;
                 hovered_tooltip_changed(value) => {
                     active_tooltip = value;
                     tooltip_visibility_changed(value);
@@ -262,6 +282,7 @@ export component CaptureToolbarWindow inherits Window {
                         dark_theme: dark_theme;
                         width: 30px;
                         tooltip: "OCR selected area";
+                        shortcut_label: shortcut_labels.ocr;
                         hovered_tooltip_changed(value) => {
                             active_tooltip = value;
                             tooltip_visibility_changed(value);
@@ -273,6 +294,7 @@ export component CaptureToolbarWindow inherits Window {
                         dark_theme: dark_theme;
                         width: 34px;
                         tooltip: "OCR and translate";
+                        shortcut_label: shortcut_labels.ocr_translate;
                         hovered_tooltip_changed(value) => {
                             active_tooltip = value;
                             tooltip_visibility_changed(value);
@@ -284,6 +306,7 @@ export component CaptureToolbarWindow inherits Window {
                         dark_theme: dark_theme;
                         width: 30px;
                         tooltip: "VLM";
+                        shortcut_label: shortcut_labels.vlm;
                         hovered_tooltip_changed(value) => {
                             active_tooltip = value;
                             tooltip_visibility_changed(value);
@@ -365,6 +388,7 @@ export component CaptureToolbarWindow inherits Window {
                         icon: @image-url("../icons/color.svg");
                         dark_theme: dark_theme;
                         tooltip: color_picker_tooltip;
+                        shortcut_label: shortcut_labels.color_picker;
                         hovered_tooltip_changed(value) => {
                             active_tooltip = value;
                             tooltip_visibility_changed(value);
@@ -375,6 +399,7 @@ export component CaptureToolbarWindow inherits Window {
                         icon: @image-url("../icons/ruler.svg");
                         dark_theme: dark_theme;
                         tooltip: ruler_tooltip;
+                        shortcut_label: shortcut_labels.ruler;
                         hovered_tooltip_changed(value) => {
                             active_tooltip = value;
                             tooltip_visibility_changed(value);
@@ -385,6 +410,7 @@ export component CaptureToolbarWindow inherits Window {
                         icon: @image-url("../icons/magnify-window.svg");
                         dark_theme: dark_theme;
                         tooltip: "Magnify window";
+                        shortcut_label: shortcut_labels.window_magnifier;
                         hovered_tooltip_changed(value) => {
                             active_tooltip = value;
                             tooltip_visibility_changed(value);

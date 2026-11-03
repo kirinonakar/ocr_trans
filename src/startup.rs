@@ -92,6 +92,7 @@ pub(crate) fn initialize_ui(
     main_window.set_start_shortcut_label(
         crate::shortcuts::binding_label(&initial_settings.shortcuts.start).into(),
     );
+    crate::shortcuts_ui::update_toolbar_shortcut_labels(capture_toolbar, &initial_settings.shortcuts);
     main_window.set_dark_theme(initial_dark_theme);
     textbox_window.set_dark_theme(initial_dark_theme);
     capture_toolbar.set_dark_theme(initial_dark_theme);

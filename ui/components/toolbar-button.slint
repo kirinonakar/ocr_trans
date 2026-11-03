@@ -8,6 +8,8 @@ export component ToolbarButton inherits Rectangle {
     in property <bool> press_on_down: false;
     in property <string> label: "";
     in property <string> tooltip: "";
+    in property <string> shortcut_label: "";
+    private property <string> tooltip_text: tooltip + (shortcut_label != "" ? " (" + shortcut_label + ")" : "");
     in property <length> icon_size: 17px;
     callback pressed();
     callback hovered_tooltip_changed(string);
@@ -62,7 +64,7 @@ export component ToolbarButton inherits Rectangle {
         }
         changed has-hover => {
             if (tooltip != "") {
-                hovered_tooltip_changed(self.has-hover ? tooltip : "");
+                hovered_tooltip_changed(self.has-hover ? tooltip_text : "");
             }
         }
         clicked => {
