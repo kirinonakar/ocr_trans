@@ -2,6 +2,7 @@
 
 slint::include_modules!();
 
+mod about_ui;
 mod api;
 mod app;
 mod autostart;

@@ -1,0 +1,100 @@
+import { AboutSlint, Button, Palette } from "std-widgets.slint";
+
+export component AboutWindow inherits Window {
+    title: "About OCR Translator";
+    icon: @image-url("../../app.ico");
+    preferred-width: 420px;
+    min-width: 420px;
+    max-width: 420px;
+    preferred-height: 390px;
+    min-height: 390px;
+    max-height: 390px;
+    background: dark-theme ? #2b2b31 : #f8fafc;
+    default-font-family: "Yu Gothic UI";
+
+    in property <bool> dark-theme: false;
+    // Standard controls and the Slint badge use this window's own widget palette.
+    init => {
+        Palette.color-scheme = dark-theme ? ColorScheme.dark : ColorScheme.light;
+    }
+    changed dark-theme => {
+        Palette.color-scheme = dark-theme ? ColorScheme.dark : ColorScheme.light;
+    }
+    callback close-clicked();
+    forward-focus: keys;
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.close-clicked();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            alignment: center;
+
+            HorizontalLayout {
+                alignment: center;
+                Image {
+                    source: @image-url("../../app.ico");
+                    width: 64px;
+                    height: 64px;
+                    image-fit: contain;
+                }
+            }
+
+            Text {
+                text: "OCR Translator";
+                font-size: 24px;
+                font-weight: 800;
+                color: dark-theme ? #f8fafc : #1e293b;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "https://github.com/kirinonakar/ocr_trans";
+                font-size: 14px;
+                color: dark-theme ? #45b8ed : #2563eb;
+                horizontal-alignment: center;
+                accessible-role: button;
+                accessible-label: "Open OCR Translator on GitHub";
+                accessible-action-default => { Platform.open-url(self.text); }
+                forward-focus: link-focus;
+                link-focus := FocusScope {
+                    key-pressed(event) => {
+                        if (event.text == Key.Return || event.text == " ") {
+                            Platform.open-url("https://github.com/kirinonakar/ocr_trans");
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { Platform.open-url("https://github.com/kirinonakar/ocr_trans"); }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                AboutSlint {
+                    width: 280px;
+                    height: 108px;
+                }
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                Button {
+                    text: "Close";
+                    width: 96px;
+                    clicked => { root.close-clicked(); }
+                }
+            }
+        }
+    }
+}

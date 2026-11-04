@@ -23,6 +23,8 @@ pub(crate) async fn run(instance: crate::lifecycle::NativeHost) -> Result<()> {
     let start_in_tray = instance.start_in_tray();
 
     let main_window = MainWindow::new()?;
+    let about_window = crate::AboutWindow::new()?;
+    crate::about_ui::register_callbacks(&main_window, &about_window);
     let overlay_window = OverlayWindow::new()?;
     let selection_window = SelectionWindow::new()?;
     let textbox_window = TextboxWindow::new()?;

@@ -105,6 +105,7 @@ export component MainWindow inherits Window {
     callback theme_toggle_clicked();
     callback mode_toggle_clicked(string);
     callback shortcut_settings_clicked();
+    callback about_clicked();
     VerticalLayout {
         alignment: start;
         padding: 14px;
@@ -127,6 +128,23 @@ export component MainWindow inherits Window {
                 color: dark_theme ? #45b8ed : #2563eb;
                 vertical-alignment: center;
                 font-weight: 800;
+                accessible-role: button;
+                accessible-label: "About OCR Translator";
+                accessible-action-default => { root.about_clicked(); }
+                forward-focus: about-focus;
+                about-focus := FocusScope {
+                    key-pressed(event) => {
+                        if (event.text == Key.Return || event.text == " ") {
+                            root.about_clicked();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.about_clicked(); }
+                }
             }
 
             Rectangle { }
