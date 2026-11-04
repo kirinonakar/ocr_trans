@@ -22,6 +22,90 @@ mod tests {
     use std::rc::Rc;
 
     #[test]
+    fn selection_completion_and_cancel_preserve_control_window_visibility() {
+        struct Headless;
+        impl slint::platform::Platform for Headless {
+            fn create_window_adapter(
+                &self,
+            ) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+                Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+            }
+        }
+        slint::platform::set_platform(Box::new(Headless)).unwrap();
+        let main = MainWindow::new().unwrap();
+        let toolbar = CaptureToolbarWindow::new().unwrap();
+        let selection = SelectionWindow::new().unwrap();
+        let overlay = OverlayWindow::new().unwrap();
+        let textbox = TextboxWindow::new().unwrap();
+        let border = RecordingBorderWindow::new().unwrap();
+        let state = Arc::new(Mutex::new(AppState::default()));
+        register_callbacks(
+            &main,
+            &overlay,
+            &selection,
+            &textbox,
+            &toolbar,
+            &border,
+            state.clone(),
+            Arc::new(Mutex::new(None)),
+            reqwest::Client::new(),
+            None,
+            HotKey::new(None, global_hotkey::hotkey::Code::Escape),
+            None,
+            crate::magnifier::WindowMagnifier::new(&toolbar, state.clone()).unwrap(),
+        );
+
+        for mode in ["capture", "ocr"] {
+            main.set_app_mode(mode.into());
+            for controls_visible in [false, true] {
+                if mode == "ocr" && controls_visible {
+                    main.show().unwrap();
+                } else {
+                    main.hide().unwrap();
+                }
+                let restore_toolbar = mode == "capture" && controls_visible;
+                for purpose in [SelectionPurpose::Capture, SelectionPurpose::ContinuousOcr] {
+                    if mode == "capture" && purpose == SelectionPurpose::ContinuousOcr {
+                        continue;
+                    }
+                    for outcome in ["cancel", "too-small", "complete"] {
+                        // Continuous OCR completion starts live capture; its cancellation and
+                        // invalid-region paths can be checked without touching the desktop.
+                        if purpose == SelectionPurpose::ContinuousOcr && outcome == "complete" {
+                            continue;
+                        }
+                        {
+                            let mut state = state.lock().unwrap();
+                            state.pending_selection = Some(purpose);
+                            state.selection_restore_toolbar = restore_toolbar;
+                        }
+                        // begin_toolbar_selection hides the toolbar while selecting.
+                        toolbar.hide().unwrap();
+                        selection.show().unwrap();
+                        match outcome {
+                            "cancel" => selection.invoke_closed(),
+                            "too-small" => selection.invoke_area_selected(0.0, 0.0, 1.0, 1.0),
+                            _ => selection.invoke_area_selected(0.0, 0.0, 20.0, 20.0),
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                        slint::platform::update_timers_and_animations();
+                        let context =
+                            format!("{mode}, visible={controls_visible}, {purpose:?}, {outcome}");
+                        assert!(!selection.window().is_visible(), "{context}");
+                        assert_eq!(toolbar.window().is_visible(), restore_toolbar, "{context}");
+                        assert_eq!(
+                            main.window().is_visible(),
+                            mode == "ocr" && controls_visible,
+                            "{context}"
+                        );
+                        assert_eq!(state.lock().unwrap().pending_selection, None, "{context}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn arrow_adjusted_endpoint_is_used_on_mouse_release_without_a_move_event() {
         struct Headless;
         impl slint::platform::Platform for Headless {
@@ -141,33 +225,20 @@ pub(crate) fn register_callbacks(
     let hotkey_manager_for_close = hotkey_manager.clone();
     let esc_hotkey_for_close = esc_hotkey.clone();
     let state_for_selection_close = state.clone();
-    let main_weak_for_selection_close = main_weak_for_selection.clone();
     let toolbar_weak_for_selection_close = capture_toolbar.as_weak();
     selection_window.on_closed(move || {
-        // Keep native show/hide calls out of the key event that requested Escape. In capture mode
-        // the toolbar is hidden while selecting, so the deferred callback also restores it before
-        // hiding the selector; otherwise the last visible window would disappear and stop Slint's
-        // event loop.
+        // Keep native show/hide calls out of the key event that requested Escape.
+        // Restore only controls that were visible when this selection began.
         let selection_weak = selection_weak_for_close.clone();
-        let main_weak = main_weak_for_selection_close.clone();
         let toolbar_weak = toolbar_weak_for_selection_close.clone();
         let state = state_for_selection_close.clone();
         let hotkey_manager = hotkey_manager_for_close.clone();
         slint::Timer::single_shot(Duration::from_millis(1), move || {
-            let capture_mode = main_weak
-                .upgrade()
-                .map(|main| main.get_app_mode() == "capture")
-                .unwrap_or(false);
-            let toolbar_ready = if capture_mode {
+            let restore_toolbar = state.lock().unwrap().selection_restore_toolbar;
+            let toolbar_ready = if restore_toolbar {
                 toolbar_weak
                     .upgrade()
-                    .map(|toolbar| {
-                        if toolbar.get_recording() {
-                            true
-                        } else {
-                            toolbar.show().is_ok()
-                        }
-                    })
+                    .map(|toolbar| restore_selection_toolbar(&toolbar, restore_toolbar))
                     .unwrap_or(false)
             } else {
                 true
@@ -263,9 +334,10 @@ pub(crate) fn register_callbacks(
     let recording_border_for_selection_actions = recording_border_window.as_weak();
     selection_window.on_area_selected(move |x, y, w, h| {
         let textbox_weak = textbox_weak_for_area.clone();
+        let restore_toolbar = state_for_selection.lock().unwrap().selection_restore_toolbar;
         let Some(selection) = selection_weak.upgrade() else {
             if let Some(toolbar) = toolbar_weak_for_selection_actions.upgrade() {
-                let _ = toolbar.show();
+                restore_selection_toolbar(&toolbar, restore_toolbar);
             }
             return;
         };
@@ -284,10 +356,9 @@ pub(crate) fn register_callbacks(
                 let state = state_for_selection.clone();
                 let hotkey_manager = hotkey_manager_area.clone();
                 slint::Timer::single_shot(Duration::from_millis(1), move || {
-                    // Restore the toolbar before hiding the selector so capture mode keeps one
-                    // visible window and its event loop alive.
+                    // Tray-only selection must not reveal the capture controls.
                     if let Some(toolbar) = toolbar_weak.upgrade() {
-                        let _ = toolbar.show();
+                        restore_selection_toolbar(&toolbar, restore_toolbar);
                     }
                     if let Some(selection) = selection_weak.upgrade() {
                         let _ = selection.hide();
@@ -316,11 +387,10 @@ pub(crate) fn register_callbacks(
             let recording_border = recording_border_for_selection_actions.clone();
             let hotkey_manager = hotkey_manager_area.clone();
             slint::Timer::single_shot(Duration::from_millis(1), move || {
-                // Showing the toolbar first prevents hiding the selector from shutting down the
-                // app when capture mode has no other visible window.
+                // Return to the visibility state from before selection.
                 let toolbar = toolbar_weak.upgrade();
                 if let Some(toolbar) = &toolbar {
-                    let _ = toolbar.show();
+                    restore_selection_toolbar(toolbar, restore_toolbar);
                 }
                 if let Some(selection) = selection_weak.upgrade() {
                     let _ = selection.hide();
@@ -647,7 +717,7 @@ pub(crate) fn register_callbacks(
         let Some(selection) = selection_weak_window_selected.upgrade() else {
             return;
         };
-        let (purpose, origin_x, origin_y, scale) = {
+        let (purpose, origin_x, origin_y, scale, restore_toolbar) = {
             let mut state = state_window_selected.lock().unwrap();
             let Some(purpose) = state.pending_selection.take() else {
                 return;
@@ -657,6 +727,7 @@ pub(crate) fn register_callbacks(
                 state.selection_origin_x,
                 state.selection_origin_y,
                 state.selection_scale.max(1.0),
+                state.selection_restore_toolbar,
             )
         };
 
@@ -671,7 +742,7 @@ pub(crate) fn register_callbacks(
             slint::Timer::single_shot(Duration::from_millis(1), move || {
                 if let Some(toolbar) = toolbar_weak.upgrade() {
                     set_capture_toolbar_status(&toolbar, "No window was selected".to_string());
-                    let _ = toolbar.show();
+                    restore_selection_toolbar(&toolbar, restore_toolbar);
                 }
                 if let Some(selection) = selection_weak.upgrade() {
                     let _ = selection.hide();
@@ -701,11 +772,10 @@ pub(crate) fn register_callbacks(
         let textbox = textbox_weak_window_selected.clone();
         let magnifier = magnifier.clone();
         slint::Timer::single_shot(Duration::from_millis(1), move || {
-            // Keep a visible window while closing the selector; otherwise capture mode's
-            // selection window would be the last registered window and stop the event loop.
+            // Return to the visibility state from before selection.
             let toolbar = toolbar_weak.upgrade();
             if let Some(toolbar) = &toolbar {
-                let _ = toolbar.show();
+                restore_selection_toolbar(toolbar, restore_toolbar);
             }
             if let Some(selection) = selection_weak.upgrade() {
                 let _ = selection.hide();
@@ -779,7 +849,7 @@ pub(crate) fn register_callbacks(
         let Some(selection) = selection_weak_color_picked.upgrade() else {
             return;
         };
-        let (purpose, origin_x, origin_y, scale) = {
+        let (purpose, origin_x, origin_y, scale, restore_toolbar) = {
             let mut state = state_color_picked.lock().unwrap();
             let Some(purpose) = state.pending_selection.take() else {
                 return;
@@ -789,6 +859,7 @@ pub(crate) fn register_callbacks(
                 state.selection_origin_x,
                 state.selection_origin_y,
                 state.selection_scale.max(1.0),
+                state.selection_restore_toolbar,
             )
         };
         let screen_x = origin_x + (x * scale).round() as i32;
@@ -798,11 +869,10 @@ pub(crate) fn register_callbacks(
         let textbox_weak = textbox_weak_color_picked.clone();
         let hotkey_manager = hotkey_manager_color_picked.clone();
         slint::Timer::single_shot(Duration::from_millis(1), move || {
-            // Show the toolbar before hiding the selector so the capture-mode event loop keeps
-            // running while the selected pixel is sampled.
+            // Return to the visibility state from before selection.
             let toolbar = toolbar_weak.upgrade();
             if let Some(toolbar) = &toolbar {
-                let _ = toolbar.show();
+                restore_selection_toolbar(toolbar, restore_toolbar);
             }
             if let Some(selection) = selection_weak.upgrade() {
                 let _ = selection.hide();

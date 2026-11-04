@@ -721,8 +721,7 @@ pub(crate) fn register_callbacks(
             }
             Err(error) => set_capture_toolbar_status(&toolbar, format!("Error: {error}")),
         }
-        let _ = toolbar.show();
-        if toolbar.get_frame_mode() {
+        if toolbar.window().is_visible() && toolbar.get_frame_mode() {
             let frame_weak = capture_frame_stop_recording.clone();
             slint::Timer::single_shot(Duration::from_millis(1), move || {
                 if let Some(frame) = frame_weak.upgrade() {

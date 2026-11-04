@@ -28,6 +28,7 @@ pub(crate) struct AppState {
     pub(crate) selection_scale: f32,
     pub(crate) selection_screenshot: Option<Arc<image::RgbaImage>>,
     pub(crate) pending_selection: Option<SelectionPurpose>,
+    pub(crate) selection_restore_toolbar: bool,
     pub(crate) scroll_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub(crate) recording: bool,
     pub(crate) recording_paused: bool,

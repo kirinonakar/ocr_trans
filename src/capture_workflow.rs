@@ -606,6 +606,11 @@ pub(crate) fn show_capture_toolbar_at_top_center(toolbar: &CaptureToolbarWindow)
     true
 }
 
+/// Selection temporarily hides the toolbar; tray-only actions must leave it hidden.
+pub(crate) fn restore_selection_toolbar(toolbar: &CaptureToolbarWindow, restore: bool) -> bool {
+    !restore || toolbar.window().is_visible() || toolbar.show().is_ok()
+}
+
 pub(crate) fn prepare_selection_window(
     selection: &SelectionWindow,
     state: &Arc<Mutex<AppState>>,
@@ -616,6 +621,7 @@ pub(crate) fn prepare_selection_window(
     hotkey_manager: &Option<Arc<GlobalHotKeyManager>>,
     esc_hotkey: HotKey,
     owner: Option<isize>,
+    restore_toolbar: bool,
 ) -> bool {
     if state.lock().unwrap().scroll_cancel.is_some() {
         log::debug!("Scrolling capture is in progress; press Esc to cancel it first");
@@ -670,6 +676,7 @@ pub(crate) fn prepare_selection_window(
     {
         let mut state = state.lock().unwrap();
         state.pending_selection = Some(purpose);
+        state.selection_restore_toolbar = restore_toolbar;
         state.selection_origin_x = desktop_rect.x;
         state.selection_origin_y = desktop_rect.y;
         state.selection_scale = scale;
@@ -819,11 +826,8 @@ pub(crate) fn begin_toolbar_selection_now(
     toolbar.set_active_tooltip(String::new().into());
     sync_capture_toolbar_size(toolbar);
 
-    // Keep the toolbar alive until the selection window has been shown. Slint ends the event
-    // loop when the last visible window is hidden; in capture mode the toolbar is that last
-    // window, so hiding it first makes the app terminate before selection can start. The toolbar
-    // is excluded from desktop capture and can therefore remain visible while the screenshot is
-    // prepared.
+    // Keep a visible toolbar out of the screenshot only after the selector is ready.
+    // The event loop supports tray-only operation, so a hidden toolbar can stay hidden.
     let toolbar_weak = toolbar.as_weak();
     let selection_weak = selection.as_weak();
     let state = state.clone();
@@ -847,11 +851,11 @@ pub(crate) fn begin_toolbar_selection_now(
             &hotkey_manager,
             esc_hotkey,
             None,
+            toolbar.window().is_visible(),
         ) {
             return;
         }
-        // Now that the selection window owns the visible-window slot, it is safe to hide the
-        // toolbar without causing Slint to quit its event loop.
+        // Restore this toolbar only if it was visible before selection.
         if let Err(error) = toolbar.hide() {
             log::warn!("Failed to hide capture toolbar for selection: {error:?}");
         }
@@ -930,7 +934,6 @@ pub(crate) fn begin_fullscreen_toolbar_action_now(
             Ok(rect) => rect,
             Err(error) => {
                 set_capture_toolbar_status(&toolbar, format!("Error: {error}"));
-                let _ = toolbar.show();
                 return;
             }
         };
@@ -971,7 +974,6 @@ pub(crate) fn begin_fullscreen_toolbar_action_now(
         if let Err(error) = spawn_result {
             log::error!("Failed to start capture action: {error:?}");
             set_capture_toolbar_status(&toolbar, format!("Error: {error:?}"));
-            let _ = toolbar.show();
         }
     });
 }
@@ -1163,7 +1165,6 @@ pub(crate) async fn run_toolbar_action(
                 toolbar.set_recording_paused(false);
                 toolbar.set_recording_elapsed("00:00".into());
                 set_capture_toolbar_status(&toolbar, String::new());
-                let _ = toolbar.show();
                 spawn_recording_clock(toolbar.as_weak(), state);
                 Ok("Recording started".to_string())
             }
@@ -1290,7 +1291,6 @@ pub(crate) async fn run_toolbar_action(
             }
             toolbar.set_recording(false);
             set_capture_toolbar_status(&toolbar, format!("Error: {error}"));
-            let _ = toolbar.show();
         }
         return;
     }
@@ -1313,7 +1313,6 @@ pub(crate) async fn run_toolbar_action(
         sync_capture_toolbar_size(&toolbar);
     }
     toolbar.set_recording(false);
-    let _ = toolbar.show();
 }
 
 #[cfg(test)]

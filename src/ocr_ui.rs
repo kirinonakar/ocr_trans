@@ -447,6 +447,7 @@ pub(crate) fn register_callbacks(
                 &hotkey_manager,
                 esc_hotkey_trigger,
                 owner,
+                false,
             ) {
                 log::warn!("Unable to start area selection from the OCR window");
             }
