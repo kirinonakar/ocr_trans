@@ -69,20 +69,9 @@ pub(crate) fn calculate_font_size(text: &str, width: f32, height: f32, max_size:
         return max_size;
     }
 
-    // 1. Dynamic padding based on window size to maximize space in small overlays
-    let padding_v = if height < 120.0 {
-        (height * 0.2).max(20.0)
-    } else {
-        48.0
-    };
-    let padding_h = if width < 120.0 {
-        (width * 0.1).max(12.0)
-    } else {
-        32.0
-    };
-
-    let available_w = (width - padding_h).max(20.0);
-    let available_h = (height - padding_v).max(20.0);
+    // Match the text bounds in overlay.slint, including the close button at the right.
+    let available_w = (width - 32.0).max(1.0);
+    let available_h = (height - 8.0).max(1.0);
 
     // Responsive font size for Searching...
     if text.starts_with("Searching...") {
@@ -125,7 +114,7 @@ pub(crate) fn calculate_font_size(text: &str, width: f32, height: f32, max_size:
         total_height <= available_h
     };
 
-    // 2. Binary search for the best font size (8.0 to max_size)
+    // Binary search for the best font size (8.0 to max_size)
     // This provides much better precision and performance than linear search.
     let mut low = 8.0;
     let mut high = max_size;

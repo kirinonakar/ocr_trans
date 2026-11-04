@@ -38,9 +38,24 @@ export component OverlayWindow inherits Window {
         border-radius: 12px;
         border-width: 1px;
         border-color: bg_color.darker(0.2);
+
+        Text {
+            visible: !hide_text;
+            x: 4px;
+            y: 4px;
+            width: max(0px, close_button.x - self.x);
+            height: max(0px, parent.height - 8px);
+            text: translated_text;
+            color: text_color;
+            font-size: font_size;
+            wrap: word-wrap;
+            horizontal-alignment: left;
+            vertical-alignment: top;
+            font-weight: 500;
+        }
         
         // Close Button (X)
-        Rectangle {
+        close_button := Rectangle {
             visible: !is_textbox_mode;
             x: parent.width - 28px;
             y: 4px;
@@ -59,21 +74,6 @@ export component OverlayWindow inherits Window {
             
             close_touch := TouchArea {
                 clicked => { close_clicked(); }
-            }
-        }
-        
-        VerticalLayout {
-            visible: !hide_text;
-            padding: 16px;
-            padding-top: 24px; // Spacing for the close button
-            Text {
-                text: translated_text;
-                color: text_color;
-                font-size: font_size;
-                wrap: word-wrap;
-                horizontal-alignment: left;
-                vertical-alignment: center; // Auto font-size handles fitting, center looks better
-                font-weight: 500;
             }
         }
     }
