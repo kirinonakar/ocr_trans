@@ -1,7 +1,7 @@
 # Rust OCR Translator powered by VLM
 
-[![Slint](https://img.shields.io/badge/Slint-1.17-2379F4?logo=slint&logoColor=white)](https://slint.dev)
-[![Rust](https://img.shields.io/badge/Rust-1.92+-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Slint](https://img.shields.io/badge/Slint-1.19-2379F4?logo=slint&logoColor=white)](https://slint.dev)
+[![Rust](https://img.shields.io/badge/Rust-1.95+-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 <a href="https://slint.dev"><img src="https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-light-whitebg.svg" alt="Made with Slint" height="28"></a>
 
@@ -73,7 +73,7 @@ All global shortcuts are configurable. Click the keyboard icon on the right side
 - Shortcuts are registered globally, so they keep working while the application is in the background.
 
 ## Prerequisites
-- **Rust**: 1.92 or newer. [Install Rust](https://www.rust-lang.org/tools/install)
+- **Rust**: 1.95 or newer. [Install Rust](https://www.rust-lang.org/tools/install)
 - **C++ Build Tools**: Required for `windows-rs` and `slint`.
 
 ## Getting Started
@@ -124,7 +124,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ### Slint license notice
 
-This application uses **Slint** (version 1.17) as its UI toolkit. Slint is copyright © SixtyFPS GmbH and is **not** covered by this project's MIT license. It is available separately under:
+This application uses **Slint** (version 1.19) as its UI toolkit. Slint is copyright © SixtyFPS GmbH and is **not** covered by this project's MIT license. It is available separately under:
 
 - **GPLv3** — for open source applications, provided the complete work is made available under the GPLv3.
 - **Slint Royalty-free Desktop, Mobile, and Web Applications License** — for proprietary desktop, mobile, and web applications, with attribution to Slint.

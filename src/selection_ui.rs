@@ -562,8 +562,6 @@ pub(crate) fn register_callbacks(
                 let pre_show_scale = overlay.window().scale_factor().max(1.0);
                 overlay.set_window_w(physical_rect.width as f32 / pre_show_scale);
                 overlay.set_window_h(physical_rect.height as f32 / pre_show_scale);
-                overlay.set_window_x(0.0); // Internal offset should be 0 since window itself is moved
-                overlay.set_window_y(0.0);
 
                 overlay.set_has_source_colors(false);
                 crate::overlay_style::apply(&main, &overlay);

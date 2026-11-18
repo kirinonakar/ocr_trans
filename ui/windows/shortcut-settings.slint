@@ -108,7 +108,7 @@ export component ShortcutSettingsWindow inherits Window {
 
         ScrollView {
             vertical-stretch: 1;
-            viewport-height: max(self.visible-height, shortcut-content.preferred-height);
+            content-height: max(self.visible-height, shortcut-content.preferred-height);
             shortcut-content := VerticalLayout {
                 width: parent.width;
                 spacing: 8px;

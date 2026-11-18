@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Keep the Slint runtime, backend, and compiler on the same 1.17 release.
-slint = { version = "=1.17.1", features = ["renderer-skia"] }
+# Keep the Slint runtime, backend, and build dependency on the same release.
+slint = { version = "=1.19.0", features = ["renderer-skia"] }
 pulldown-cmark = "0.13.5"
 unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 tokio = { version = "1.54.1", features = ["full"] }
@@ -61,11 +61,11 @@ windows = { version = "0.62.2", features = [
 # WinRT async types moved out of windows; match windows 0.62's ABI dependency.
 windows-future = "0.3.2"
 windows-registry = "0.6.1"
-i-slint-backend-winit = "=1.17.1"
+i-slint-backend-winit = "=1.19.0"
 winit = "0.30.13"
 
 [build-dependencies]
-slint-build = "=1.17.1"
+slint-build = "=1.19.0"
 winres = "0.1.12"
 
 [profile.release]

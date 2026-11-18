@@ -730,7 +730,7 @@ mod tests {
         }
         // Long results must scroll: the block rows clamp their minimum height to 0px, which
         // defeats the flickable's automatic viewport sizing, so the ScrollView binds its
-        // viewport-height to the wrapped content height.
+        // content-height to the wrapped content height.
         {
             let (width, height) = (600u32, 260u32);
             surface.set_size(slint::PhysicalSize::new(width, height));

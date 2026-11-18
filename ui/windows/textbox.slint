@@ -76,7 +76,7 @@ export component TextboxWindow inherits Window {
                     // height, and the block rows clamp that to 0px, so bind the viewport
                     // to the height the content actually needs; otherwise long results
                     // can't scroll and get clipped.
-                    viewport-height: max(self.visible-height, content-layout.preferred-height);
+                    content-height: max(self.visible-height, content-layout.preferred-height);
                     content-layout := VerticalLayout {
                         width: parent.width;
                         padding: 8px;

@@ -654,7 +654,7 @@ export component MainWindow inherits Window {
                 padding: 14px; spacing: 8px;
                 options-title := Text { text: "Options"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; }
                 ScrollView {
-                    viewport-height: max(self.visible-height, options-content.preferred-height);
+                    content-height: max(self.visible-height, options-content.preferred-height);
                     options-content := VerticalLayout {
                         width: parent.width;
                         spacing: 8px;
