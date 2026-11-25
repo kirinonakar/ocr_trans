@@ -9,6 +9,29 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HTCAPTION, LWA_ALPHA, WM_NCLBUTTONDOWN, WS_EX_LAYERED, WS_EX_TRANSPARENT,
 };
 
+/// Release the native window and renderer while retaining the Slint component.
+/// Slint 1.19 reads this flag synchronously in its Winit hide path. Scope it to windows
+/// that can restore their native state after recreation.
+pub(crate) fn hide_window_and_release_surface(
+    window: &slint::Window,
+) -> Result<(), slint::PlatformError> {
+    use i_slint_backend_winit::WinitWindowAccessor;
+
+    const FLAG: &str = "SLINT_DESTROY_WINDOW_ON_HIDE";
+    if !window.has_winit_window() || std::env::var_os(FLAG).is_some() {
+        return window.hide();
+    }
+    struct RestoreFlag;
+    impl Drop for RestoreFlag {
+        fn drop(&mut self) {
+            std::env::remove_var(FLAG);
+        }
+    }
+    std::env::set_var(FLAG, "1");
+    let _restore = RestoreFlag;
+    window.hide()
+}
+
 /// Shows an OS-owned menu, which is not clipped to the Slint toolbar's client area.
 /// `screen_x`/`screen_y` locate the menu's top-left corner in screen coordinates.
 #[cfg(target_os = "windows")]
@@ -113,14 +136,6 @@ pub fn set_tool_window(hwnd: HWND, can_focus: bool) {
         }
 
         let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, new_style);
-    }
-}
-
-/// Set the owner window to hide the child window from taskbar.
-pub fn set_window_owner(child: HWND, owner: HWND) {
-    unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_HWNDPARENT};
-        let _ = SetWindowLongPtrW(child, GWLP_HWNDPARENT, owner.0 as isize);
     }
 }
 

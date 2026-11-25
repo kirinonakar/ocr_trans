@@ -125,6 +125,8 @@ pub(crate) fn update_toolbar_shortcut_labels(
             (&config.toolbar3_action, &config.toolbar3_key),
             (&config.toolbar4_action, &config.toolbar4_key),
             (&config.toolbar5_action, &config.toolbar5_key),
+            (&config.toolbar6_action, &config.toolbar6_key),
+            (&config.toolbar7_action, &config.toolbar7_key),
         ] {
             if ToolbarAction::from_token(token) == Some(action) && !binding.trim().is_empty() {
                 let label = binding_label(binding);
@@ -232,6 +234,30 @@ fn populate_window(window: &ShortcutSettingsWindow, config: &ShortcutConfig) {
             .map(ToolbarAction::option_index)
             .unwrap_or(0),
     );
+
+    let (win, alt, ctrl, shift, key) = split_binding(&config.toolbar6_key);
+    window.set_tool6_win(win);
+    window.set_tool6_alt(alt);
+    window.set_tool6_ctrl(ctrl);
+    window.set_tool6_shift(shift);
+    window.set_tool6_key_index(key_index(&key));
+    window.set_tool6_action_index(
+        ToolbarAction::from_token(&config.toolbar6_action)
+            .map(ToolbarAction::option_index)
+            .unwrap_or(0),
+    );
+
+    let (win, alt, ctrl, shift, key) = split_binding(&config.toolbar7_key);
+    window.set_tool7_win(win);
+    window.set_tool7_alt(alt);
+    window.set_tool7_ctrl(ctrl);
+    window.set_tool7_shift(shift);
+    window.set_tool7_key_index(key_index(&key));
+    window.set_tool7_action_index(
+        ToolbarAction::from_token(&config.toolbar7_action)
+            .map(ToolbarAction::option_index)
+            .unwrap_or(0),
+    );
 }
 
 /// Reads and validates the editing properties.
@@ -320,6 +346,28 @@ fn read_config(window: &ShortcutSettingsWindow) -> Result<ShortcutConfig, String
         tool5_action.is_some(),
     )?;
 
+    let tool6_action = ToolbarAction::from_option_index(window.get_tool6_action_index());
+    let toolbar6_key = slot_binding(
+        window.get_tool6_win(),
+        window.get_tool6_alt(),
+        window.get_tool6_ctrl(),
+        window.get_tool6_shift(),
+        window.get_tool6_key_index(),
+        "Capture toolbar shortcut 6",
+        tool6_action.is_some(),
+    )?;
+
+    let tool7_action = ToolbarAction::from_option_index(window.get_tool7_action_index());
+    let toolbar7_key = slot_binding(
+        window.get_tool7_win(),
+        window.get_tool7_alt(),
+        window.get_tool7_ctrl(),
+        window.get_tool7_shift(),
+        window.get_tool7_key_index(),
+        "Capture toolbar shortcut 7",
+        tool7_action.is_some(),
+    )?;
+
     Ok(ShortcutConfig {
         select_area,
         start,
@@ -334,6 +382,14 @@ fn read_config(window: &ShortcutSettingsWindow) -> Result<ShortcutConfig, String
         toolbar4_key,
         toolbar5_action: tool5_action.map(|action| action.token().to_string()).unwrap_or_default(),
         toolbar5_key,
+        toolbar6_action: tool6_action
+            .map(|action| action.token().to_string())
+            .unwrap_or_default(),
+        toolbar6_key,
+        toolbar7_action: tool7_action
+            .map(|action| action.token().to_string())
+            .unwrap_or_default(),
+        toolbar7_key,
     })
 }
 
@@ -425,6 +481,10 @@ mod tests {
                 toolbar4_key: "ctrl+shift+F4".into(),
                 toolbar5_action: "change_mode".into(),
                 toolbar5_key: "ctrl+shift+F5".into(),
+                toolbar6_action: "color_picker".into(),
+                toolbar6_key: "ctrl+shift+F6".into(),
+                toolbar7_action: "window_magnifier".into(),
+                toolbar7_key: "ctrl+shift+F7".into(),
                 ..ShortcutConfig::default()
             },
             ShortcutConfig::default(),
@@ -436,6 +496,16 @@ mod tests {
         ] {
             populate_window(&window, &config);
             assert_eq!(read_config(&window).unwrap(), config);
+            update_toolbar_shortcut_labels(&toolbar, &config);
+            let labels = toolbar.get_shortcut_labels();
+            assert_eq!(
+                labels.color_picker.as_str(),
+                if config.toolbar6_key.is_empty() { "" } else { "Ctrl + Shift + F6" }
+            );
+            assert_eq!(
+                labels.window_magnifier.as_str(),
+                if config.toolbar7_key.is_empty() { "" } else { "Ctrl + Shift + F7" }
+            );
         }
     }
 }

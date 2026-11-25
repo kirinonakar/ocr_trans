@@ -141,13 +141,12 @@ pub(crate) fn calculate_font_size(text: &str, width: f32, height: f32, max_size:
 }
 
 pub(crate) fn rgba_to_slint_image(rgba: image::RgbaImage) -> slint::Image {
+    slint::Image::from_rgba8(rgba_pixel_buffer(&rgba))
+}
+
+pub(crate) fn rgba_pixel_buffer(rgba: &image::RgbaImage) -> slint::SharedPixelBuffer<slint::Rgba8Pixel> {
     let (width, height) = rgba.dimensions();
-    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-        rgba.as_raw(),
-        width,
-        height,
-    );
-    slint::Image::from_rgba8(buffer)
+    slint::SharedPixelBuffer::clone_from_slice(rgba.as_raw(), width, height)
 }
 
 pub(crate) fn format_color_values(color: &image::Rgba<u8>) -> (String, String) {

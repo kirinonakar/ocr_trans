@@ -2,7 +2,58 @@
 
 import { Button, CheckBox, ComboBox, ScrollView, Palette } from "std-widgets.slint";
 
-// Select area, Start, Restore/hide last mode, and five capture-toolbar shortcuts are editable.
+component ToolbarShortcutRow inherits Rectangle {
+    in property <bool> dark_theme;
+    in property <[string]> action_options;
+    in property <[string]> key_options;
+    in property <string> row_title;
+    in-out property <int> action_index;
+    in-out property <bool> win;
+    in-out property <bool> alt;
+    in-out property <bool> ctrl;
+    in-out property <bool> shift;
+    in-out property <int> key_index;
+
+    background: dark_theme ? #37373f : #ffffff;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: dark_theme ? transparent : #e2e8f0;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 6px;
+        Text { text: row_title; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
+        HorizontalLayout {
+            spacing: 6px;
+            Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+            ComboBox { model: action_options; current-index <=> action_index; }
+        }
+        HorizontalLayout {
+            spacing: 2px;
+            CheckBox { checked <=> win; text: "Win"; }
+            CheckBox { checked <=> alt; text: "Alt"; }
+            CheckBox { checked <=> ctrl; text: "Ctrl"; }
+            CheckBox { checked <=> shift; text: "Shift"; }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
+            ComboBox { model: key_options; current-index <=> key_index; }
+            Button {
+                text: "Clear";
+                clicked => {
+                    action_index = 0;
+                    win = false;
+                    alt = false;
+                    ctrl = false;
+                    shift = false;
+                    key_index = -1;
+                }
+            }
+        }
+    }
+}
+
+// Select area, Start, Restore/hide last mode, and seven capture-toolbar shortcuts are editable.
 // The toolbar slots also pick the capture/record/OCR action they trigger.
 export component ShortcutSettingsWindow inherits Window {
     title: "Shortcut settings";
@@ -74,6 +125,20 @@ export component ShortcutSettingsWindow inherits Window {
     in-out property <bool> tool5_ctrl: false;
     in-out property <bool> tool5_shift: false;
     in-out property <int> tool5_key_index: -1;
+
+    in-out property <int> tool6_action_index: 0;
+    in-out property <bool> tool6_win: false;
+    in-out property <bool> tool6_alt: true;
+    in-out property <bool> tool6_ctrl: false;
+    in-out property <bool> tool6_shift: false;
+    in-out property <int> tool6_key_index: -1;
+
+    in-out property <int> tool7_action_index: 0;
+    in-out property <bool> tool7_win: false;
+    in-out property <bool> tool7_alt: true;
+    in-out property <bool> tool7_ctrl: false;
+    in-out property <bool> tool7_shift: false;
+    in-out property <int> tool7_key_index: -1;
 
     in-out property <string> status_text: "";
     in-out property <bool> status_error: false;
@@ -219,209 +284,95 @@ export component ShortcutSettingsWindow inherits Window {
                     }
                 }
 
-                // Capture toolbar shortcut 1
-                Rectangle {
-                    background: dark_theme ? #37373f : #ffffff;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: dark_theme ? transparent : #e2e8f0;
-                    VerticalLayout {
-                        padding: 10px;
-                        spacing: 6px;
-                        Text { text: "Capture toolbar shortcut 1"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                            ComboBox { model: action_options; current-index <=> tool1_action_index; }
-                        }
-                        HorizontalLayout {
-                            spacing: 2px;
-                            CheckBox { checked <=> tool1_win; text: "Win"; }
-                            CheckBox { checked <=> tool1_alt; text: "Alt"; }
-                            CheckBox { checked <=> tool1_ctrl; text: "Ctrl"; }
-                            CheckBox { checked <=> tool1_shift; text: "Shift"; }
-                        }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                            ComboBox { model: key_options; current-index <=> tool1_key_index; }
-                            Button {
-                                text: "Clear";
-                                clicked => {
-                                    tool1_action_index = 0;
-                                    tool1_win = false;
-                                    tool1_alt = false;
-                                    tool1_ctrl = false;
-                                    tool1_shift = false;
-                                    tool1_key_index = -1;
-                                }
-                            }
-                        }
-                    }
+                ToolbarShortcutRow {
+                    dark_theme: root.dark_theme;
+                    action_options: root.action_options;
+                    key_options: root.key_options;
+                    row_title: "Capture toolbar shortcut 1";
+                    action_index <=> tool1_action_index;
+                    win <=> tool1_win;
+                    alt <=> tool1_alt;
+                    ctrl <=> tool1_ctrl;
+                    shift <=> tool1_shift;
+                    key_index <=> tool1_key_index;
                 }
 
-                // Capture toolbar shortcut 2
-                Rectangle {
-                    background: dark_theme ? #37373f : #ffffff;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: dark_theme ? transparent : #e2e8f0;
-                    VerticalLayout {
-                        padding: 10px;
-                        spacing: 6px;
-                        Text { text: "Capture toolbar shortcut 2"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                            ComboBox { model: action_options; current-index <=> tool2_action_index; }
-                        }
-                        HorizontalLayout {
-                            spacing: 2px;
-                            CheckBox { checked <=> tool2_win; text: "Win"; }
-                            CheckBox { checked <=> tool2_alt; text: "Alt"; }
-                            CheckBox { checked <=> tool2_ctrl; text: "Ctrl"; }
-                            CheckBox { checked <=> tool2_shift; text: "Shift"; }
-                        }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                            ComboBox { model: key_options; current-index <=> tool2_key_index; }
-                            Button {
-                                text: "Clear";
-                                clicked => {
-                                    tool2_action_index = 0;
-                                    tool2_win = false;
-                                    tool2_alt = false;
-                                    tool2_ctrl = false;
-                                    tool2_shift = false;
-                                    tool2_key_index = -1;
-                                }
-                            }
-                        }
-                    }
+                ToolbarShortcutRow {
+                    dark_theme: root.dark_theme;
+                    action_options: root.action_options;
+                    key_options: root.key_options;
+                    row_title: "Capture toolbar shortcut 2";
+                    action_index <=> tool2_action_index;
+                    win <=> tool2_win;
+                    alt <=> tool2_alt;
+                    ctrl <=> tool2_ctrl;
+                    shift <=> tool2_shift;
+                    key_index <=> tool2_key_index;
                 }
 
-                // Capture toolbar shortcut 3
-                Rectangle {
-                    background: dark_theme ? #37373f : #ffffff;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: dark_theme ? transparent : #e2e8f0;
-                    VerticalLayout {
-                        padding: 10px;
-                        spacing: 6px;
-                        Text { text: "Capture toolbar shortcut 3"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                            ComboBox { model: action_options; current-index <=> tool3_action_index; }
-                        }
-                        HorizontalLayout {
-                            spacing: 2px;
-                            CheckBox { checked <=> tool3_win; text: "Win"; }
-                            CheckBox { checked <=> tool3_alt; text: "Alt"; }
-                            CheckBox { checked <=> tool3_ctrl; text: "Ctrl"; }
-                            CheckBox { checked <=> tool3_shift; text: "Shift"; }
-                        }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                            ComboBox { model: key_options; current-index <=> tool3_key_index; }
-                            Button {
-                                text: "Clear";
-                                clicked => {
-                                    tool3_action_index = 0;
-                                    tool3_win = false;
-                                    tool3_alt = false;
-                                    tool3_ctrl = false;
-                                    tool3_shift = false;
-                                    tool3_key_index = -1;
-                                }
-                            }
-                        }
-                    }
+                ToolbarShortcutRow {
+                    dark_theme: root.dark_theme;
+                    action_options: root.action_options;
+                    key_options: root.key_options;
+                    row_title: "Capture toolbar shortcut 3";
+                    action_index <=> tool3_action_index;
+                    win <=> tool3_win;
+                    alt <=> tool3_alt;
+                    ctrl <=> tool3_ctrl;
+                    shift <=> tool3_shift;
+                    key_index <=> tool3_key_index;
                 }
 
-                // Capture toolbar shortcut 4
-                Rectangle {
-                    background: dark_theme ? #37373f : #ffffff;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: dark_theme ? transparent : #e2e8f0;
-                    VerticalLayout {
-                        padding: 10px;
-                        spacing: 6px;
-                        Text { text: "Capture toolbar shortcut 4"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                            ComboBox { model: action_options; current-index <=> tool4_action_index; }
-                        }
-                        HorizontalLayout {
-                            spacing: 2px;
-                            CheckBox { checked <=> tool4_win; text: "Win"; }
-                            CheckBox { checked <=> tool4_alt; text: "Alt"; }
-                            CheckBox { checked <=> tool4_ctrl; text: "Ctrl"; }
-                            CheckBox { checked <=> tool4_shift; text: "Shift"; }
-                        }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                            ComboBox { model: key_options; current-index <=> tool4_key_index; }
-                            Button {
-                                text: "Clear";
-                                clicked => {
-                                    tool4_action_index = 0;
-                                    tool4_win = false;
-                                    tool4_alt = false;
-                                    tool4_ctrl = false;
-                                    tool4_shift = false;
-                                    tool4_key_index = -1;
-                                }
-                            }
-                        }
-                    }
+                ToolbarShortcutRow {
+                    dark_theme: root.dark_theme;
+                    action_options: root.action_options;
+                    key_options: root.key_options;
+                    row_title: "Capture toolbar shortcut 4";
+                    action_index <=> tool4_action_index;
+                    win <=> tool4_win;
+                    alt <=> tool4_alt;
+                    ctrl <=> tool4_ctrl;
+                    shift <=> tool4_shift;
+                    key_index <=> tool4_key_index;
                 }
 
-                // Capture toolbar shortcut 5
-                Rectangle {
-                    background: dark_theme ? #37373f : #ffffff;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: dark_theme ? transparent : #e2e8f0;
-                    VerticalLayout {
-                        padding: 10px;
-                        spacing: 6px;
-                        Text { text: "Capture toolbar shortcut 5"; font-weight: 700; color: dark_theme ? #e2e8f0 : #1e293b; font-size: 12px; }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text { text: "Action:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                            ComboBox { model: action_options; current-index <=> tool5_action_index; }
-                        }
-                        HorizontalLayout {
-                            spacing: 2px;
-                            CheckBox { checked <=> tool5_win; text: "Win"; }
-                            CheckBox { checked <=> tool5_alt; text: "Alt"; }
-                            CheckBox { checked <=> tool5_ctrl; text: "Ctrl"; }
-                            CheckBox { checked <=> tool5_shift; text: "Shift"; }
-                        }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text { text: "Key:"; vertical-alignment: center; color: dark_theme ? #cbd5e1 : #64748b; font-size: 12px; }
-                            ComboBox { model: key_options; current-index <=> tool5_key_index; }
-                            Button {
-                                text: "Clear";
-                                clicked => {
-                                    tool5_action_index = 0;
-                                    tool5_win = false;
-                                    tool5_alt = false;
-                                    tool5_ctrl = false;
-                                    tool5_shift = false;
-                                    tool5_key_index = -1;
-                                }
-                            }
-                        }
-                    }
+                ToolbarShortcutRow {
+                    dark_theme: root.dark_theme;
+                    action_options: root.action_options;
+                    key_options: root.key_options;
+                    row_title: "Capture toolbar shortcut 5";
+                    action_index <=> tool5_action_index;
+                    win <=> tool5_win;
+                    alt <=> tool5_alt;
+                    ctrl <=> tool5_ctrl;
+                    shift <=> tool5_shift;
+                    key_index <=> tool5_key_index;
+                }
+
+                ToolbarShortcutRow {
+                    dark_theme: root.dark_theme;
+                    action_options: root.action_options;
+                    key_options: root.key_options;
+                    row_title: "Capture toolbar shortcut 6";
+                    action_index <=> tool6_action_index;
+                    win <=> tool6_win;
+                    alt <=> tool6_alt;
+                    ctrl <=> tool6_ctrl;
+                    shift <=> tool6_shift;
+                    key_index <=> tool6_key_index;
+                }
+
+                ToolbarShortcutRow {
+                    dark_theme: root.dark_theme;
+                    action_options: root.action_options;
+                    key_options: root.key_options;
+                    row_title: "Capture toolbar shortcut 7";
+                    action_index <=> tool7_action_index;
+                    win <=> tool7_win;
+                    alt <=> tool7_alt;
+                    ctrl <=> tool7_ctrl;
+                    shift <=> tool7_shift;
+                    key_index <=> tool7_key_index;
                 }
             }
         }

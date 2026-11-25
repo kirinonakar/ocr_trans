@@ -1,5 +1,5 @@
-//! Single-instance activation and notification-area integration. The hidden native window
-//! lives on the Slint thread, whose Winit message loop also dispatches its Win32 messages.
+//! Single-instance activation and notification-area integration. The native broker dispatches
+//! messages before the UI starts and then shares the Slint thread's Winit event loop.
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use windows::core::{w, PCWSTR};
@@ -30,6 +30,14 @@ enum Action {
     ToggleOverlay,
     Exit,
     TrayUnavailable,
+}
+
+#[derive(Default)]
+struct TrayMenuState {
+    capture_visible: bool,
+    ocr_visible: bool,
+    textbox_visible: bool,
+    overlay_enabled: bool,
 }
 
 struct NativeState {
@@ -132,6 +140,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
         };
         if let Some(action) = action {
             state.actions.borrow_mut().push_back(action);
+            // GetMessage can dispatch a sent message and then keep waiting. A posted message
+            // lets the cold tray loop process the queued action outside this window procedure.
+            let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
         }
     }
     if message == ACTIVATE || message == TRAY_EVENT || message == TOGGLE_LAST_MODE {
@@ -266,6 +277,49 @@ impl NativeHost {
         crate::autostart::requested() && self.state.tray_added.get()
     }
 
+    /// Dispatch the tray and registered Win32 hotkeys without starting the Slint or Tokio UI.
+    /// Keep the first feature action queued so the regular UI callbacks can handle it.
+    pub(crate) fn wait_in_tray(&self) -> anyhow::Result<bool> {
+        loop {
+            let action = self.state.actions.borrow_mut().pop_front();
+            match action {
+                Some(Action::ShowMenu) => {
+                    // Match the overlay checkbox's initial state in the OCR window.
+                    if let Some(action) = self.choose_tray_action(TrayMenuState {
+                        overlay_enabled: true,
+                        ..Default::default()
+                    }) {
+                        self.state.actions.borrow_mut().push_front(action);
+                    }
+                    continue;
+                }
+                Some(Action::Exit) => return Ok(false),
+                Some(action) => {
+                    self.state.actions.borrow_mut().push_front(action);
+                    return Ok(true);
+                }
+                None => {}
+            }
+            // global-hotkey's native window delivers events onto this queue during dispatch.
+            // The normal hotkey worker drains the queue after initialization.
+            if !global_hotkey::GlobalHotKeyEvent::receiver().is_empty() {
+                return Ok(true);
+            }
+
+            let mut message = MSG::default();
+            unsafe {
+                match GetMessageW(&mut message, None, 0, 0).0 {
+                    -1 => return Err(windows::core::Error::from_thread().into()),
+                    0 => return Ok(false),
+                    _ => {
+                        let _ = TranslateMessage(&message);
+                        DispatchMessageW(&message);
+                    }
+                }
+            }
+        }
+    }
+
     fn activate_existing(restore: bool) -> bool {
         unsafe {
             let Ok(hwnd) = FindWindowW(CLASS_NAME, OWNER_TITLE) else {
@@ -317,17 +371,17 @@ impl NativeHost {
         self.state.actions.borrow_mut().drain(..).collect()
     }
 
-    fn choose_tray_action(&self, main: &MainWindow, capture_visible: bool) -> Option<Action> {
+    fn choose_tray_action(&self, state: TrayMenuState) -> Option<Action> {
         let mut cursor = POINT::default();
         unsafe {
             let _ = GetCursorPos(&mut cursor);
         }
         let items = [
-            Some(("Capture", capture_visible)),
-            Some(("OCR", main.window().is_visible())),
+            Some(("Capture", state.capture_visible)),
+            Some(("OCR", state.ocr_visible)),
             None,
-            Some(("Textbox", main.get_use_textbox())),
-            Some(("Overlay", main.get_overlay_visible())),
+            Some(("Textbox", state.textbox_visible)),
+            Some(("Overlay", state.overlay_enabled)),
             None,
             Some(("Exit", false)),
         ];
@@ -356,6 +410,7 @@ impl Drop for NativeHost {
     }
 }
 
+use crate::win_utils::hide_window_and_release_surface;
 use crate::{
     CaptureFrameWindow, CaptureToolbarWindow, MainWindow, RecordingBorderWindow,
     ShortcutSettingsWindow,
@@ -388,13 +443,13 @@ fn hide_control_windows(
     shortcuts: &slint::Weak<ShortcutSettingsWindow>,
 ) {
     if let Some(main) = main.upgrade() {
-        let _ = main.hide();
+        let _ = hide_window_and_release_surface(main.window());
     }
     if let Some(toolbar) = toolbar.upgrade() {
-        let _ = toolbar.hide();
+        let _ = hide_window_and_release_surface(toolbar.window());
     }
     if let Some(frame) = frame.upgrade() {
-        let _ = frame.hide();
+        let _ = hide_window_and_release_surface(frame.window());
     }
     if let Some(shortcuts) = shortcuts.upgrade() {
         let _ = shortcuts.hide();
@@ -560,7 +615,12 @@ pub(crate) fn register_callbacks(
                     let capture_visible = toolbar
                         .upgrade()
                         .is_some_and(|toolbar| toolbar.window().is_visible());
-                    let Some(action) = host.choose_tray_action(&main, capture_visible) else {
+                    let Some(action) = host.choose_tray_action(TrayMenuState {
+                        capture_visible,
+                        ocr_visible: main.window().is_visible(),
+                        textbox_visible: main.get_use_textbox(),
+                        overlay_enabled: main.get_overlay_visible(),
+                    }) else {
                         continue;
                     };
                     action
@@ -580,16 +640,16 @@ pub(crate) fn register_callbacks(
                     Action::Capture => {
                         if let Some(toolbar) = toolbar.upgrade() {
                             if toolbar.window().is_visible() {
-                                let _ = toolbar.hide();
+                                let _ = hide_window_and_release_surface(toolbar.window());
                                 if let Some(frame) = frame.upgrade() {
-                                    let _ = frame.hide();
+                                    let _ = hide_window_and_release_surface(frame.window());
                                 }
                                 continue;
                             }
                         }
                     }
                     Action::Ocr if main.window().is_visible() => {
-                        let _ = main.hide();
+                        let _ = hide_window_and_release_surface(main.window());
                         continue;
                     }
                     Action::ToggleTextbox => {
@@ -618,7 +678,7 @@ pub(crate) fn register_callbacks(
                 }
                 if mode != "capture" {
                     if let Some(frame) = frame.upgrade() {
-                        let _ = frame.hide();
+                        let _ = hide_window_and_release_surface(frame.window());
                     }
                 }
                 main.invoke_mode_toggle_clicked(mode.clone().into());
@@ -630,10 +690,7 @@ pub(crate) fn register_callbacks(
                         if let Some(toolbar) = toolbar.upgrade() {
                             if toolbar.get_frame_mode() && !toolbar.get_recording() {
                                 if let Some(frame) = frame.upgrade() {
-                                    let _ = frame.show();
-                                    crate::capture_workflow::configure_capture_frame_native_window(
-                                        &frame,
-                                    );
+                                    crate::capture_workflow::show_capture_frame(&frame, false);
                                 }
                             }
                             focus_window(toolbar.window());
@@ -769,5 +826,19 @@ mod tests {
         );
         assert!(host.take_actions().is_empty());
         assert!(!host.state.tray_added.get());
+    }
+
+    #[test]
+    fn cold_tray_dispatches_native_activation_and_hands_it_to_ui() {
+        let host = NativeHost::create(None).unwrap();
+        unsafe {
+            PostMessageW(Some(host.hwnd), ACTIVATE, WPARAM(0), LPARAM(0)).unwrap();
+        }
+        assert!(host.wait_in_tray().unwrap());
+        assert_eq!(host.take_actions(), [Action::Restore]);
+
+        host.state.actions.borrow_mut().push_back(Action::Exit);
+        assert!(!host.wait_in_tray().unwrap());
+        assert!(host.take_actions().is_empty());
     }
 }

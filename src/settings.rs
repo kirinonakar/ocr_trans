@@ -524,6 +524,18 @@ fn read_app_settings() -> AppSettings {
             settings.shortcuts.toolbar4_key = ini_value(&values, "shortcuts", "toolbar4_key", settings.shortcuts.toolbar4_key);
             settings.shortcuts.toolbar5_action = ini_value(&values, "shortcuts", "toolbar5_action", settings.shortcuts.toolbar5_action);
             settings.shortcuts.toolbar5_key = ini_value(&values, "shortcuts", "toolbar5_key", settings.shortcuts.toolbar5_key);
+            settings.shortcuts.toolbar6_action = ini_value(
+                &values, "shortcuts", "toolbar6_action", settings.shortcuts.toolbar6_action,
+            );
+            settings.shortcuts.toolbar6_key = ini_value(
+                &values, "shortcuts", "toolbar6_key", settings.shortcuts.toolbar6_key,
+            );
+            settings.shortcuts.toolbar7_action = ini_value(
+                &values, "shortcuts", "toolbar7_action", settings.shortcuts.toolbar7_action,
+            );
+            settings.shortcuts.toolbar7_key = ini_value(
+                &values, "shortcuts", "toolbar7_key", settings.shortcuts.toolbar7_key,
+            );
             settings.ocr_window_position = ini_window_position(&values, "ocr");
             settings.textbox_window_position = ini_window_position(&values, "textbox");
         }
@@ -552,7 +564,7 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         format!("{}={}\n", definition.model_key, ini_escape(&saved_model_for_provider(&settings.provider, definition.name)))
     }).collect::<String>();
     let mut contents = format!(
-        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\nsingle_instance={}\nminimize_to_tray={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nresult_font_family={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\nauto_style={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\nrestore_last_mode={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\ntoolbar4_action={}\ntoolbar4_key={}\ntoolbar5_action={}\ntoolbar5_key={}\n",
+        "[provider]\nprovider={}\n{}thinking_level={}\n\n[app]\ncapture_folder={}\nsystem_prompt={}\nsystem_prompt_presets={}\napp_mode={}\nsingle_instance={}\nminimize_to_tray={}\ndark_theme={}\nocr_language={}\n\n[style]\nbase_font_size={}\nresult_font_family={}\noverlay_bg_color={}\noverlay_text_color={}\noverlay_bg_opacity={}\nauto_style={}\n\n[ui]\nstyle_panel_open={}\napi_settings_collapsed={}\napi_settings_saved_height={}\n\n[shortcuts]\nselect_area={}\nstart={}\nrestore_last_mode={}\ntoolbar1_action={}\ntoolbar1_key={}\ntoolbar2_action={}\ntoolbar2_key={}\ntoolbar3_action={}\ntoolbar3_key={}\ntoolbar4_action={}\ntoolbar4_key={}\ntoolbar5_action={}\ntoolbar5_key={}\ntoolbar6_action={}\ntoolbar6_key={}\ntoolbar7_action={}\ntoolbar7_key={}\n",
         ini_escape(&settings.provider.provider),
         models,
         ini_escape(&settings.provider.thinking_level),
@@ -586,6 +598,10 @@ fn serialize_app_settings(settings: &AppSettings) -> String {
         ini_escape(&settings.shortcuts.toolbar4_key),
         ini_escape(&settings.shortcuts.toolbar5_action),
         ini_escape(&settings.shortcuts.toolbar5_key),
+        ini_escape(&settings.shortcuts.toolbar6_action),
+        ini_escape(&settings.shortcuts.toolbar6_key),
+        ini_escape(&settings.shortcuts.toolbar7_action),
+        ini_escape(&settings.shortcuts.toolbar7_key),
     );
     contents.push_str("\n[windows]\n");
     for (window, position) in [
@@ -796,6 +812,25 @@ mod tests {
         let fallback = ShortcutConfig::default().restore_last_mode;
         assert!(fallback.is_empty());
         assert!(ini_value(&legacy, "shortcuts", "restore_last_mode", fallback).is_empty());
+    }
+
+    #[test]
+    fn additional_toolbar_shortcuts_have_independent_ini_keys() {
+        let mut settings = AppSettings::default();
+        settings.shortcuts.toolbar6_action = "color_picker".into();
+        settings.shortcuts.toolbar6_key = "ctrl+shift+F6".into();
+        settings.shortcuts.toolbar7_action = "window_magnifier".into();
+        settings.shortcuts.toolbar7_key = "ctrl+shift+F7".into();
+
+        let values = parse_ini(&serialize_app_settings(&settings));
+        for (key, expected) in [
+            ("toolbar6_action", "color_picker"),
+            ("toolbar6_key", "ctrl+shift+F6"),
+            ("toolbar7_action", "window_magnifier"),
+            ("toolbar7_key", "ctrl+shift+F7"),
+        ] {
+            assert_eq!(ini_value(&values, "shortcuts", key, String::new()), expected);
+        }
     }
 
     #[test]

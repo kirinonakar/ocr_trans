@@ -21,8 +21,6 @@ pub(crate) fn register_callbacks(
     hotkey_manager: Option<Arc<GlobalHotKeyManager>>,
     esc_hotkey: HotKey,
     selection_initialized: Arc<Mutex<bool>>,
-    #[cfg(target_os = "windows")] main_hwnd: Option<windows::Win32::Foundation::HWND>,
-    #[cfg(not(target_os = "windows"))] main_hwnd: Option<()>,
 ) {
     let font_size_main = main_window.as_weak();
     let font_size_overlay = overlay_window.as_weak();
@@ -96,8 +94,6 @@ pub(crate) fn register_callbacks(
     // Overlay Toggle Callback
     let overlay_weak_toggle = overlay_window.as_weak();
     let state_for_toggle = state.clone();
-    #[cfg(target_os = "windows")]
-    let main_hwnd_overlay = main_hwnd;
     main_window.on_overlay_toggle_clicked(move |visible| {
         if let Some(overlay) = overlay_weak_toggle.upgrade() {
             overlay.set_show_text(
@@ -128,9 +124,6 @@ pub(crate) fn register_callbacks(
                             win_utils::set_exclude_from_capture(hwnd);
                             win_utils::disable_window_transitions(hwnd);
                             win_utils::set_click_through(hwnd, is_textbox);
-                            if let Some(owner) = main_hwnd_overlay {
-                                win_utils::set_window_owner(hwnd, owner);
-                            }
                         }
                     }
                 });
@@ -302,8 +295,6 @@ pub(crate) fn register_callbacks(
 
     // Start/Stop Callback
     let overlay_weak_for_stop = overlay_window.as_weak();
-    #[cfg(target_os = "windows")]
-    let main_hwnd_stop = main_hwnd;
     let textbox_weak_for_stop = textbox_weak.clone();
     main_window.on_start_stop_clicked(move || {
         let main = main_weak.unwrap();
@@ -373,9 +364,6 @@ pub(crate) fn register_callbacks(
                                 win_utils::set_exclude_from_capture(hwnd);
                                 win_utils::disable_window_transitions(hwnd);
                                 win_utils::set_click_through(hwnd, main.get_use_textbox());
-                                if let Some(owner) = main_hwnd_stop {
-                                    win_utils::set_window_owner(hwnd, owner);
-                                }
                             }
                         }
                     });
@@ -400,10 +388,6 @@ pub(crate) fn register_callbacks(
     let main_weak_for_selection_trigger = main_window.as_weak();
     let overlay_weak_for_select = overlay_window.as_weak();
     let selection_initialized_clone = selection_initialized.clone();
-    #[cfg(target_os = "windows")]
-    let selection_owner = main_hwnd.map(|hwnd| hwnd.0 as isize);
-    #[cfg(not(target_os = "windows"))]
-    let selection_owner: Option<isize> = None;
     let hotkey_manager_trigger = hotkey_manager.clone();
     let esc_hotkey_trigger = esc_hotkey.clone();
     main_window.on_select_area_clicked(move || {
@@ -416,7 +400,6 @@ pub(crate) fn register_callbacks(
         let overlay_weak = overlay_weak_for_select.clone();
         let selection_initialized = selection_initialized_clone.clone();
         let hotkey_manager = hotkey_manager_trigger.clone();
-        let owner = selection_owner;
         slint::Timer::single_shot(Duration::from_millis(1), move || {
             let Some(selection) = selection_weak.upgrade() else {
                 return;
@@ -446,7 +429,6 @@ pub(crate) fn register_callbacks(
                 &selection_initialized,
                 &hotkey_manager,
                 esc_hotkey_trigger,
-                owner,
                 false,
             ) {
                 log::warn!("Unable to start area selection from the OCR window");

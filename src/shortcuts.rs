@@ -1,14 +1,10 @@
 //! Global shortcut configuration and (re)registration.
 //!
-//! The shortcut settings window exposes eight configurable shortcuts:
+//! The shortcut settings window exposes ten configurable shortcuts:
 //! * `select_area`  - opens the capture-area selector (default `win+alt+A`)
 //! * `start`        - starts/stops the continuous OCR loop (default `win+alt+P`)
 //! * `restore_last_mode` - restores or hides the last mode (unbound by default)
-//! * `toolbar1`     - runs one capture-toolbar action
-//! * `toolbar2`     - runs a second capture-toolbar action
-//! * `toolbar3`     - runs a third capture-toolbar action
-//! * `toolbar4`     - runs a fourth capture-toolbar action
-//! * `toolbar5`     - runs a fifth capture-toolbar action
+//! * `toolbar1` through `toolbar7` - each runs a chosen capture-toolbar action
 //!
 //! Bindings are stored as `modifier+modifier+KEY` strings (for example `win+alt+A`) so they can
 //! live in the plain-text settings file. The toolbar slots additionally carry an action token.
@@ -100,6 +96,10 @@ pub(crate) struct ShortcutConfig {
     pub(crate) toolbar4_key: String,
     pub(crate) toolbar5_action: String,
     pub(crate) toolbar5_key: String,
+    pub(crate) toolbar6_action: String,
+    pub(crate) toolbar6_key: String,
+    pub(crate) toolbar7_action: String,
+    pub(crate) toolbar7_key: String,
 }
 
 impl Default for ShortcutConfig {
@@ -118,6 +118,10 @@ impl Default for ShortcutConfig {
             toolbar4_key: String::new(),
             toolbar5_action: String::new(),
             toolbar5_key: String::new(),
+            toolbar6_action: String::new(),
+            toolbar6_key: String::new(),
+            toolbar7_action: String::new(),
+            toolbar7_key: String::new(),
         }
     }
 }
@@ -233,6 +237,8 @@ pub(crate) struct RegisteredHotkeys {
     pub(crate) toolbar3: Option<HotKey>,
     pub(crate) toolbar4: Option<HotKey>,
     pub(crate) toolbar5: Option<HotKey>,
+    pub(crate) toolbar6: Option<HotKey>,
+    pub(crate) toolbar7: Option<HotKey>,
 }
 
 /// Shared, `Send` state describing the currently registered shortcuts. The OS manager itself is
@@ -481,6 +487,8 @@ pub(crate) fn apply_config(
             state.registered.toolbar3,
             state.registered.toolbar4,
             state.registered.toolbar5,
+            state.registered.toolbar6,
+            state.registered.toolbar7,
         ]
         .into_iter()
         .flatten()
@@ -507,6 +515,12 @@ pub(crate) fn apply_config(
         }
         if ToolbarAction::from_token(&config.toolbar5_action).is_some() {
             registered.toolbar5 = register_one(manager, &config.toolbar5_key, "Toolbar shortcut 5");
+        }
+        if ToolbarAction::from_token(&config.toolbar6_action).is_some() {
+            registered.toolbar6 = register_one(manager, &config.toolbar6_key, "Toolbar shortcut 6");
+        }
+        if ToolbarAction::from_token(&config.toolbar7_action).is_some() {
+            registered.toolbar7 = register_one(manager, &config.toolbar7_key, "Toolbar shortcut 7");
         }
         state.registered = registered;
     }

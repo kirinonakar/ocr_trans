@@ -40,7 +40,6 @@ pub(crate) fn register_callbacks(
     textbox_window: &TextboxWindow,
     shortcut_window: &ShortcutSettingsWindow,
     state: Arc<Mutex<AppState>>,
-    folder_owner: Option<isize>,
     initial_dark_theme: bool,
     initial_app_mode: &str,
     start_in_tray: bool,
@@ -255,6 +254,22 @@ pub(crate) fn register_callbacks(
     let main_weak_folder = main_window.as_weak();
     let state_folder = state.clone();
     main_window.on_folder_select_clicked(move || {
+        let Some(main) = main_weak_folder.upgrade() else {
+            return;
+        };
+        #[cfg(target_os = "windows")]
+        let folder_owner = {
+            use i_slint_backend_winit::WinitWindowAccessor;
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            main.window().with_winit_window(|native| {
+                match native.window_handle().ok()?.as_raw() {
+                    RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
+                    _ => None,
+                }
+            }).flatten()
+        };
+        #[cfg(not(target_os = "windows"))]
+        let folder_owner = None;
         let Some(folder) = win_utils::pick_folder(folder_owner) else {
             return;
         };
@@ -263,9 +278,7 @@ pub(crate) fn register_callbacks(
         if let Ok(mut state) = state_folder.lock() {
             state.capture_folder = folder.clone();
         }
-        if let Some(main) = main_weak_folder.upgrade() {
-            main.set_capture_folder(folder.into());
-        }
+        main.set_capture_folder(folder.into());
     });
 
     // Initial Selection Window Styles Setup
@@ -344,7 +357,7 @@ pub(crate) fn register_callbacks(
                 if show_capture_toolbar_at_top_center(&toolbar) {
                     // Keep at least one application window visible during the switch.
                     if let Some(main) = main_weak_switch.upgrade() {
-                        let _ = main.hide();
+                        let _ = win_utils::hide_window_and_release_surface(main.window());
                     }
                 }
             });
@@ -363,7 +376,7 @@ pub(crate) fn register_callbacks(
                     }
                 }
                 if let Some(toolbar) = toolbar_weak_switch.upgrade() {
-                    let _ = toolbar.hide();
+                    let _ = win_utils::hide_window_and_release_surface(toolbar.window());
                 }
             });
         }
@@ -438,11 +451,11 @@ pub(crate) fn register_callbacks(
             }
             save_app_mode("ocr");
             if let Some(toolbar) = toolbar_weak.upgrade() {
-                let _ = toolbar.hide();
+                let _ = win_utils::hide_window_and_release_surface(toolbar.window());
                 toolbar.set_frame_mode(false);
             }
             if let Some(frame) = frame_weak.upgrade() {
-                let _ = frame.hide();
+                let _ = win_utils::hide_window_and_release_surface(frame.window());
             }
         });
     });
@@ -458,7 +471,7 @@ pub(crate) fn register_callbacks(
                 (main_weak_restore.upgrade(), toolbar_weak_restore.upgrade())
             {
                 if show_capture_toolbar_at_top_center(&toolbar) {
-                    let _ = main.hide();
+                    let _ = win_utils::hide_window_and_release_surface(main.window());
                 }
             }
         });
@@ -501,7 +514,6 @@ mod tests {
                 &TextboxWindow::new().unwrap(),
                 &ShortcutSettingsWindow::new().unwrap(),
                 Arc::new(Mutex::new(AppState::default())),
-                None,
                 false,
                 mode,
                 true,

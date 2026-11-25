@@ -51,7 +51,6 @@ mod tests {
             reqwest::Client::new(),
             None,
             HotKey::new(None, global_hotkey::hotkey::Code::Escape),
-            None,
             crate::magnifier::WindowMagnifier::new(&toolbar, state.clone()).unwrap(),
         );
 
@@ -78,6 +77,10 @@ mod tests {
                             let mut state = state.lock().unwrap();
                             state.pending_selection = Some(purpose);
                             state.selection_restore_toolbar = restore_toolbar;
+                            let screenshot = rgba_pixel_buffer(&image::RgbaImage::new(40, 30));
+                            state.selection_screenshot = Some(screenshot.clone());
+                            selection.set_screenshot(slint::Image::from_rgba8(screenshot));
+                            selection.set_selection_magnifier(rgba_to_slint_image(image::RgbaImage::new(9, 9)));
                         }
                         // begin_toolbar_selection hides the toolbar while selecting.
                         toolbar.hide().unwrap();
@@ -98,7 +101,11 @@ mod tests {
                             mode == "ocr" && controls_visible,
                             "{context}"
                         );
-                        assert_eq!(state.lock().unwrap().pending_selection, None, "{context}");
+                        let state = state.lock().unwrap();
+                        assert_eq!(state.pending_selection, None, "{context}");
+                        assert!(state.selection_screenshot.is_none(), "{context}");
+                        assert_eq!(selection.get_screenshot().size().width, 0, "{context}");
+                        assert_eq!(selection.get_selection_magnifier().size().width, 0, "{context}");
                     }
                 }
             }
@@ -129,7 +136,7 @@ mod tests {
                 });
             let state = Rc::new(AppState {
                 selection_scale: scale,
-                selection_screenshot: Some(Arc::new(image::RgbaImage::new(400, 300))),
+                selection_screenshot: Some(rgba_pixel_buffer(&image::RgbaImage::new(400, 300))),
                 ..Default::default()
             });
             let weak = selection.as_weak();
@@ -213,8 +220,6 @@ pub(crate) fn register_callbacks(
     http_client: reqwest::Client,
     hotkey_manager: Option<Arc<GlobalHotKeyManager>>,
     esc_hotkey: HotKey,
-    #[cfg(target_os = "windows")] main_hwnd: Option<windows::Win32::Foundation::HWND>,
-    #[cfg(not(target_os = "windows"))] main_hwnd: Option<()>,
     magnifier: std::rc::Rc<crate::magnifier::WindowMagnifier>,
 ) {
     let selection_weak = selection_window.as_weak();
@@ -246,7 +251,7 @@ pub(crate) fn register_callbacks(
 
             if toolbar_ready {
                 if let Some(selection) = selection_weak.upgrade() {
-                    let _ = selection.hide();
+                    hide_selection_window(&selection, &state);
                 }
             } else {
                 log::warn!("Unable to restore capture toolbar after closing selection window");
@@ -361,7 +366,7 @@ pub(crate) fn register_callbacks(
                         restore_selection_toolbar(&toolbar, restore_toolbar);
                     }
                     if let Some(selection) = selection_weak.upgrade() {
-                        let _ = selection.hide();
+                        hide_selection_window(&selection, &state);
                     }
                     if let Some(ref manager) = hotkey_manager {
                         let _ = manager.unregister(esc_hotkey_area);
@@ -393,7 +398,7 @@ pub(crate) fn register_callbacks(
                     restore_selection_toolbar(toolbar, restore_toolbar);
                 }
                 if let Some(selection) = selection_weak.upgrade() {
-                    let _ = selection.hide();
+                    hide_selection_window(&selection, &state);
                 }
                 if let Some(ref manager) = hotkey_manager {
                     let _ = manager.unregister(esc_hotkey_area);
@@ -475,7 +480,7 @@ pub(crate) fn register_callbacks(
             let state = state_for_selection.clone();
             slint::Timer::single_shot(Duration::from_millis(1), move || {
                 if let Some(selection) = selection_weak.upgrade() {
-                    let _ = selection.hide();
+                    hide_selection_window(&selection, &state);
                 }
                 if let Some(ref manager) = hotkey_manager {
                     let _ = manager.unregister(esc_hotkey_area);
@@ -498,9 +503,10 @@ pub(crate) fn register_callbacks(
         // hide avoids a re-entrant Winit window change and lets the OCR flow continue with the
         // selector already out of the way.
         let selection_weak_for_hide = selection.as_weak();
+        let state_for_hide = state_for_selection.clone();
         slint::Timer::single_shot(Duration::from_millis(1), move || {
             if let Some(selection) = selection_weak_for_hide.upgrade() {
-                let _ = selection.hide();
+                hide_selection_window(&selection, &state_for_hide);
             }
         });
         let main_weak_for_sync = main_weak_for_selection.clone();
@@ -520,7 +526,6 @@ pub(crate) fn register_callbacks(
                 return;
             };
             let Some(main) = main_weak_for_sync.upgrade() else {
-                let _ = selection.hide();
                 if let Some(ref mgr) = hotkey_manager_async {
                     let _ = mgr.unregister(esc_hotkey_async);
                 }
@@ -610,7 +615,6 @@ pub(crate) fn register_callbacks(
                 // Set overlay to click-through and hide from taskbar
                 #[cfg(target_os = "windows")]
                 {
-                    let owner = main_hwnd;
                     overlay.window().with_winit_window(move |winit_window| {
                         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
                         if let Ok(handle) = winit_window.window_handle() {
@@ -621,9 +625,6 @@ pub(crate) fn register_callbacks(
                                 win_utils::set_exclude_from_capture(hwnd);
                                 win_utils::disable_window_transitions(hwnd);
                                 win_utils::set_click_through(hwnd, main.get_use_textbox());
-                                if let Some(owner) = owner {
-                                    win_utils::set_window_owner(hwnd, owner);
-                                }
                             }
                         }
                     });
@@ -636,12 +637,8 @@ pub(crate) fn register_callbacks(
         });
         if let Err(error) = spawn_result {
             log::error!("Failed to start OCR selection action: {error:?}");
-            let selection_weak = selection.as_weak();
             let hotkey_manager = hotkey_manager_area.clone();
             slint::Timer::single_shot(Duration::from_millis(1), move || {
-                if let Some(selection) = selection_weak.upgrade() {
-                    let _ = selection.hide();
-                }
                 if let Some(ref manager) = hotkey_manager {
                     let _ = manager.unregister(esc_hotkey_area);
                 }
@@ -735,6 +732,7 @@ pub(crate) fn register_callbacks(
 
         if purpose == SelectionPurpose::ColorPicker || target.is_none() {
             let selection_weak = selection.as_weak();
+            let state = state_window_selected.clone();
             let toolbar_weak = toolbar_weak_window_selected.clone();
             let hotkey_manager = hotkey_manager_window_selected.clone();
             slint::Timer::single_shot(Duration::from_millis(1), move || {
@@ -743,7 +741,7 @@ pub(crate) fn register_callbacks(
                     restore_selection_toolbar(&toolbar, restore_toolbar);
                 }
                 if let Some(selection) = selection_weak.upgrade() {
-                    let _ = selection.hide();
+                    hide_selection_window(&selection, &state);
                 }
                 if let Some(ref manager) = hotkey_manager {
                     let _ = manager.unregister(esc_hotkey_window_selected);
@@ -776,7 +774,7 @@ pub(crate) fn register_callbacks(
                 restore_selection_toolbar(toolbar, restore_toolbar);
             }
             if let Some(selection) = selection_weak.upgrade() {
-                let _ = selection.hide();
+                hide_selection_window(&selection, &state);
             }
             if purpose != SelectionPurpose::ScrollCapture {
                 if let Some(ref manager) = hotkey_manager {
@@ -866,6 +864,7 @@ pub(crate) fn register_callbacks(
         let toolbar_weak = toolbar_weak_color_picked.clone();
         let textbox_weak = textbox_weak_color_picked.clone();
         let hotkey_manager = hotkey_manager_color_picked.clone();
+        let state = state_color_picked.clone();
         slint::Timer::single_shot(Duration::from_millis(1), move || {
             // Return to the visibility state from before selection.
             let toolbar = toolbar_weak.upgrade();
@@ -873,7 +872,7 @@ pub(crate) fn register_callbacks(
                 restore_selection_toolbar(toolbar, restore_toolbar);
             }
             if let Some(selection) = selection_weak.upgrade() {
-                let _ = selection.hide();
+                hide_selection_window(&selection, &state);
             }
             if let Some(ref manager) = hotkey_manager {
                 let _ = manager.unregister(esc_hotkey_color_picked);

@@ -279,6 +279,8 @@ pub(crate) fn start(
                     (state.registered.toolbar3, &state.config.toolbar3_action),
                     (state.registered.toolbar4, &state.config.toolbar4_action),
                     (state.registered.toolbar5, &state.config.toolbar5_action),
+                    (state.registered.toolbar6, &state.config.toolbar6_action),
+                    (state.registered.toolbar7, &state.config.toolbar7_action),
                 ]
                 .map(|(hotkey, action)| {
                     (hotkey.map(|hotkey| hotkey.id()), ToolbarAction::from_token(action))

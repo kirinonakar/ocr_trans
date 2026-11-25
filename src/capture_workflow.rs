@@ -26,7 +26,16 @@ pub(crate) fn selection_pixel_at(state: &AppState, x: f32, y: f32) -> Option<ima
     {
         return None;
     }
-    Some(*screenshot.get_pixel(local_x as u32, local_y as u32))
+    Some(selection_pixel(screenshot, local_x as usize, local_y as usize))
+}
+
+fn selection_pixel(
+    screenshot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    x: usize,
+    y: usize,
+) -> image::Rgba<u8> {
+    let pixel = screenshot.as_slice()[y * screenshot.width() as usize + x];
+    image::Rgba([pixel.r, pixel.g, pixel.b, pixel.a])
 }
 
 fn selection_magnifier_pixels(state: &AppState, x: f32, y: f32) -> Option<image::RgbaImage> {
@@ -56,7 +65,7 @@ fn selection_magnifier_pixels(state: &AppState, x: f32, y: f32) -> Option<image:
                 pixels.put_pixel(
                     preview_x,
                     preview_y,
-                    *screenshot.get_pixel(source_x as u32, source_y as u32),
+                    selection_pixel(screenshot, source_x as usize, source_y as usize),
                 );
             }
         }
@@ -423,7 +432,15 @@ pub(crate) fn show_capture_frame(frame: &CaptureFrameWindow, use_default_geometr
         return false;
     }
     #[cfg(target_os = "windows")]
-    configure_capture_frame_native_window(frame);
+    {
+        configure_capture_frame_native_window(frame);
+        let frame = frame.as_weak();
+        slint::Timer::single_shot(Duration::from_millis(16), move || {
+            if let Some(frame) = frame.upgrade().filter(|f| f.window().is_visible()) {
+                configure_capture_frame_native_window(&frame);
+            }
+        });
+    }
     if use_default_geometry {
         // Secondary windows are created lazily; repeat the physical placement after show().
         position_capture_frame(frame);
@@ -599,7 +616,9 @@ pub(crate) fn show_capture_toolbar_at_top_center(toolbar: &CaptureToolbarWindow)
     // event-loop turn so the initial visible location is also top-center.
     let toolbar_weak = toolbar.as_weak();
     slint::Timer::single_shot(Duration::from_millis(32), move || {
-        if let Some(toolbar) = toolbar_weak.upgrade() {
+        if let Some(toolbar) = toolbar_weak.upgrade().filter(|t| t.window().is_visible()) {
+            #[cfg(target_os = "windows")]
+            configure_capture_toolbar_native_window(&toolbar);
             position_capture_toolbar(&toolbar);
         }
     });
@@ -608,7 +627,25 @@ pub(crate) fn show_capture_toolbar_at_top_center(toolbar: &CaptureToolbarWindow)
 
 /// Selection temporarily hides the toolbar; tray-only actions must leave it hidden.
 pub(crate) fn restore_selection_toolbar(toolbar: &CaptureToolbarWindow, restore: bool) -> bool {
-    !restore || toolbar.window().is_visible() || toolbar.show().is_ok()
+    if !restore || toolbar.window().is_visible() {
+        return true;
+    }
+    if toolbar.show().is_err() {
+        return false;
+    }
+    #[cfg(target_os = "windows")]
+    configure_capture_toolbar_native_window(toolbar);
+    true
+}
+
+pub(crate) fn hide_selection_window(selection: &SelectionWindow, state: &Mutex<AppState>) {
+    if let Err(error) = win_utils::hide_window_and_release_surface(selection.window()) {
+        log::warn!("Unable to hide selection window: {error:?}");
+        return;
+    }
+    state.lock().unwrap().selection_screenshot = None;
+    selection.set_screenshot(slint::Image::default());
+    selection.set_selection_magnifier(slint::Image::default());
 }
 
 pub(crate) fn prepare_selection_window(
@@ -620,7 +657,6 @@ pub(crate) fn prepare_selection_window(
     selection_initialized: &Arc<Mutex<bool>>,
     hotkey_manager: &Option<Arc<GlobalHotKeyManager>>,
     esc_hotkey: HotKey,
-    owner: Option<isize>,
     restore_toolbar: bool,
 ) -> bool {
     if state.lock().unwrap().scroll_cancel.is_some() {
@@ -628,7 +664,7 @@ pub(crate) fn prepare_selection_window(
         return false;
     }
 
-    let _ = selection.hide();
+    hide_selection_window(selection, state);
     selection.set_window_mode(window_mode);
     selection.set_color_picker_mode(color_picker_mode);
     selection.set_ruler_mode(purpose == SelectionPurpose::Ruler);
@@ -667,12 +703,13 @@ pub(crate) fn prepare_selection_window(
     };
 
     let (width, height) = screenshot.dimensions();
+    let pixel_buffer = rgba_pixel_buffer(&screenshot);
+    drop(screenshot);
     let scale = selection.window().scale_factor().max(1.0);
-    // Keep the pixels while the selector is open. Both the color picker and the region
-    // magnifier sample from this immutable frame, so the preview exactly matches the capture.
+    // Sampling and display share the same immutable pixels while the selector is open.
     let selection_screenshot = (color_picker_mode
         || (!window_mode && purpose != SelectionPurpose::Ruler))
-        .then(|| Arc::new(screenshot.clone()));
+        .then(|| pixel_buffer.clone());
     {
         let mut state = state.lock().unwrap();
         state.pending_selection = Some(purpose);
@@ -682,7 +719,7 @@ pub(crate) fn prepare_selection_window(
         state.selection_scale = scale;
         state.selection_screenshot = selection_screenshot;
     }
-    selection.set_screenshot(rgba_to_slint_image(screenshot));
+    selection.set_screenshot(slint::Image::from_rgba8(pixel_buffer));
     // Physical geometry keeps the selector aligned with the captured desktop pixels, including
     // monitors left of or above the primary display.
     selection
@@ -695,6 +732,7 @@ pub(crate) fn prepare_selection_window(
     let should_initialize = !*selection_initialized.lock().unwrap();
     if let Err(error) = selection.show() {
         log::error!("Failed to show selection window: {error:?}");
+        hide_selection_window(selection, state);
         if let Ok(mut state) = state.lock() {
             state.pending_selection = None;
         }
@@ -715,8 +753,9 @@ pub(crate) fn prepare_selection_window(
     // Windows can still adjust the window during the first frames; re-apply one more time after
     // the native surface has settled so the selector keeps covering every monitor.
     let selection_weak = selection.as_weak();
+    let state_after_show = state.clone();
     slint::Timer::single_shot(Duration::from_millis(32), move || {
-        let Some(selection) = selection_weak.upgrade() else {
+        let Some(selection) = selection_weak.upgrade().filter(|s| s.window().is_visible()) else {
             return;
         };
         selection
@@ -725,38 +764,14 @@ pub(crate) fn prepare_selection_window(
         selection
             .window()
             .set_size(physical_window_size(width, height));
+        if let Ok(mut state) = state_after_show.lock() {
+            state.selection_scale = selection.window().scale_factor().max(1.0);
+        }
+        #[cfg(target_os = "windows")]
+        configure_selection_native_window(&selection);
     });
-    // Configure the native selection window only after show(). Winit creates secondary windows
-    // lazily, so doing this before show() can leave the first capture action unconfigured.
     #[cfg(target_os = "windows")]
-    {
-        selection.window().with_winit_window(move |winit_window| {
-            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(handle) = winit_window.window_handle() {
-                if let RawWindowHandle::Win32(handle) = handle.as_raw() {
-                    let hwnd = windows::Win32::Foundation::HWND(handle.hwnd.get() as _);
-                    // These operations are idempotent and must also run when switching between
-                    // OCR and capture mode, because the selector's owner may have changed.
-                    win_utils::set_tool_window(hwnd, true);
-                    win_utils::set_exclude_from_capture(hwnd);
-                    win_utils::disable_window_transitions(hwnd);
-                    if let Some(owner) = owner {
-                        win_utils::set_window_owner(
-                            hwnd,
-                            windows::Win32::Foundation::HWND(owner as _),
-                        );
-                    } else {
-                        // The OCR window is hidden in capture mode. Clear a previous owner so
-                        // an already-initialized selector is not hidden along with that window.
-                        win_utils::set_window_owner(
-                            hwnd,
-                            windows::Win32::Foundation::HWND(std::ptr::null_mut()),
-                        );
-                    }
-                }
-            }
-        });
-    }
+    configure_selection_native_window(selection);
     if should_initialize {
         *selection_initialized.lock().unwrap() = true;
     }
@@ -764,6 +779,21 @@ pub(crate) fn prepare_selection_window(
         let _ = manager.register(esc_hotkey);
     }
     true
+}
+
+#[cfg(target_os = "windows")]
+fn configure_selection_native_window(selection: &SelectionWindow) {
+    selection.window().with_winit_window(|native| {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(handle) = native.window_handle() {
+            if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+                let hwnd = windows::Win32::Foundation::HWND(handle.hwnd.get() as _);
+                win_utils::set_tool_window(hwnd, true);
+                win_utils::set_exclude_from_capture(hwnd);
+                win_utils::disable_window_transitions(hwnd);
+            }
+        }
+    });
 }
 
 pub(crate) fn begin_toolbar_selection(
@@ -850,7 +880,6 @@ pub(crate) fn begin_toolbar_selection_now(
             &selection_initialized,
             &hotkey_manager,
             esc_hotkey,
-            None,
             toolbar.window().is_visible(),
         ) {
             return;
@@ -1203,13 +1232,13 @@ pub(crate) async fn run_toolbar_action(
                     ));
                 }
 
-                let width = image.width();
-                let height = image.height();
-                let pixels = rgba_to_bgra_bytes(&image);
                 let language = toolbar.get_ocr_language_tag().to_string();
                 if language.is_empty() {
                     anyhow::bail!("No Windows OCR language pack is installed");
                 }
+                let width = image.width();
+                let height = image.height();
+                let pixels = rgba_to_bgra_bytes(&image);
                 let recognized_text = tokio::task::spawn_blocking(move || {
                     ocr::recognize_text(&pixels, width, height, &language)
                 })
@@ -1322,8 +1351,8 @@ mod tests {
         selection_magnifier_pixels,
     };
     use crate::state::AppState;
+    use crate::text_layout::rgba_pixel_buffer;
     use image::{Rgba, RgbaImage};
-    use std::sync::Arc;
 
     #[test]
     fn arrow_nudges_move_capture_endpoint_one_physical_pixel_at_each_scale() {
@@ -1332,7 +1361,7 @@ mod tests {
                 selection_scale: scale,
                 selection_origin_x: -1920,
                 selection_origin_y: -200,
-                selection_screenshot: Some(Arc::new(RgbaImage::new(200, 200))),
+                selection_screenshot: Some(rgba_pixel_buffer(&RgbaImage::new(200, 200))),
                 ..Default::default()
             };
             let mut x = 90.0 / scale;
@@ -1361,7 +1390,7 @@ mod tests {
     fn arrow_nudges_stop_at_screenshot_edges() {
         let state = AppState {
             selection_scale: 1.5,
-            selection_screenshot: Some(Arc::new(RgbaImage::new(11, 9))),
+            selection_screenshot: Some(rgba_pixel_buffer(&RgbaImage::new(11, 9))),
             ..Default::default()
         };
         assert_eq!(
@@ -1383,7 +1412,7 @@ mod tests {
         let source = RgbaImage::from_fn(11, 11, |x, y| Rgba([x as u8, y as u8, 0, 255]));
         let state = AppState {
             selection_scale: 1.0,
-            selection_screenshot: Some(Arc::new(source)),
+            selection_screenshot: Some(rgba_pixel_buffer(&source)),
             ..Default::default()
         };
 
@@ -1400,7 +1429,7 @@ mod tests {
         let source = RgbaImage::from_fn(5, 5, |x, y| Rgba([x as u8, y as u8, 0, 255]));
         let state = AppState {
             selection_scale: 1.0,
-            selection_screenshot: Some(Arc::new(source)),
+            selection_screenshot: Some(rgba_pixel_buffer(&source)),
             ..Default::default()
         };
 

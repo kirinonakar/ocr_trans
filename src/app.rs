@@ -1,5 +1,5 @@
 use crate::{
-    capture, win_utils, CaptureFrameWindow, CaptureToolbarWindow, MainWindow, OverlayWindow,
+    capture, CaptureFrameWindow, CaptureToolbarWindow, MainWindow, OverlayWindow,
     RecordingBorderWindow, SelectionWindow, ShortcutSettingsWindow, TextboxWindow,
 };
 
@@ -12,16 +12,16 @@ use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use i_slint_backend_winit::WinitWindowAccessor;
-
 use crate::state::AppState;
 
 use crate::capture_workflow::*;
 
-pub(crate) async fn run(instance: crate::lifecycle::NativeHost) -> Result<()> {
-    env_logger::init();
-    let start_in_tray = instance.start_in_tray();
-
+pub(crate) async fn run(
+    instance: crate::lifecycle::NativeHost,
+    start_in_tray: bool,
+    hotkey_manager: Option<Arc<GlobalHotKeyManager>>,
+    hotkey_state: Arc<Mutex<crate::shortcuts::HotkeyState>>,
+) -> Result<()> {
     let main_window = MainWindow::new()?;
     let about_window = crate::AboutWindow::new()?;
     crate::about_ui::register_callbacks(&main_window, &about_window);
@@ -73,45 +73,7 @@ pub(crate) async fn run(instance: crate::lifecycle::NativeHost) -> Result<()> {
         ..Default::default()
     }));
 
-    // Global Hotkey Setup - Initialize safely without panicking on failure
-    let hotkey_manager = GlobalHotKeyManager::new().ok().map(Arc::new);
     let esc_hotkey = HotKey::new(None, Code::Escape);
-
-    // Shortcut bindings live in the settings file so the shortcut card can re-register them at
-    // runtime. The shared runtime lets the hotkey thread resolve event ids to live bindings.
-    let shortcut_config = crate::settings::load_shortcut_config();
-    // The OS manager is not `Send`, so only this `Send` state is shared with the hotkey thread.
-    let hotkey_state = Arc::new(Mutex::new(crate::shortcuts::HotkeyState::default()));
-    crate::shortcuts::apply_config(hotkey_manager.as_deref(), &hotkey_state, shortcut_config);
-
-    // Setup Transparency and Windows Specifics
-    // Setup Transparency and Windows Specifics
-    #[cfg(target_os = "windows")]
-    let main_hwnd = {
-        let mut hwnd_out = None;
-        main_window.window().with_winit_window(|winit_window| {
-            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(handle) = winit_window.window_handle() {
-                if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                    let hwnd = windows::Win32::Foundation::HWND(h.hwnd.get() as _);
-                    win_utils::set_mica_backdrop(hwnd);
-                    win_utils::set_title_bar_theme(hwnd, initial_dark_theme);
-                    hwnd_out = Some(hwnd);
-                }
-            }
-        });
-        hwnd_out
-    };
-    #[cfg(not(target_os = "windows"))]
-    let main_hwnd: Option<()> = None;
-
-    // The capture toolbar's native handle is configured after its first show. Winit creates
-    // native windows lazily, so an accessor call here (before the event loop starts) is a no-op.
-
-    #[cfg(target_os = "windows")]
-    let folder_owner = main_hwnd.map(|hwnd| hwnd.0 as isize);
-    #[cfg(not(target_os = "windows"))]
-    let folder_owner: Option<isize> = None;
 
     let selection_initialized = crate::window_mode::register_callbacks(
         &main_window,
@@ -120,7 +82,6 @@ pub(crate) async fn run(instance: crate::lifecycle::NativeHost) -> Result<()> {
         &textbox_window,
         &shortcut_window,
         state.clone(),
-        folder_owner,
         initial_dark_theme,
         &initial_app_mode,
         start_in_tray,
@@ -161,7 +122,6 @@ pub(crate) async fn run(instance: crate::lifecycle::NativeHost) -> Result<()> {
         hotkey_manager.clone(),
         esc_hotkey,
         selection_initialized.clone(),
-        main_hwnd,
     );
 
     crate::selection_ui::register_callbacks(
@@ -176,7 +136,6 @@ pub(crate) async fn run(instance: crate::lifecycle::NativeHost) -> Result<()> {
         http_client.clone(),
         hotkey_manager.clone(),
         esc_hotkey,
-        main_hwnd,
         magnifier,
     );
 

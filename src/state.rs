@@ -26,7 +26,7 @@ pub(crate) struct AppState {
     pub(crate) selection_origin_x: i32,
     pub(crate) selection_origin_y: i32,
     pub(crate) selection_scale: f32,
-    pub(crate) selection_screenshot: Option<Arc<image::RgbaImage>>,
+    pub(crate) selection_screenshot: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>,
     pub(crate) pending_selection: Option<SelectionPurpose>,
     pub(crate) selection_restore_toolbar: bool,
     pub(crate) scroll_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
