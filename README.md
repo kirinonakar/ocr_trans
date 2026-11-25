@@ -62,7 +62,7 @@ All global shortcuts are configurable. Click the keyboard icon on the right side
 | Capture toolbar 1-7 | *(not set)* | Run a chosen capture-toolbar action |
 
 - Each slot combines **Win / Alt / Ctrl / Shift** with a single key: **A-Z**, **0-9**, **F1-F12**, **PrintScreen**, **ScrollLock (ScrLk)**, and the punctuation keys **` , . / ; ' [ ] \ - =**.
-- Only **Select area** and **Start** come with defaults. **Restore/hide last mode** and the seven capture-toolbar slots start empty. The settings window keeps its height and scrolls through the slots.
+- Only **Select area** and **Start** come with defaults. **Restore/hide last mode** and the seven capture-toolbar slots start empty.
 - Every row has **Clear**. Press **Clear**, then **Save**, to disable any shortcut, including **Select area** and **Start**. Clearing a custom slot also resets its action selection.
 - A capture-toolbar slot also selects the action to run: **Fullscreen**, **Window**, or **Region** capture, **OCR**, **OCR + Translate**, **VLM**, **Color picker**, **Ruler**, **Window magnifier**, **Toggle textbox**, **Toggle overlay**, or **Change mode (Capture / OCR)**.
 - An enabled shortcut requires at least one modifier and one key. A slot that has an action but no key is rejected instead of saved.
@@ -93,7 +93,7 @@ You can download the latest version from the [Releases Page](https://github.com/
 - **Auto (overlay only)**: Estimate the source image's background and text colors on each capture and apply them to the overlay. Opacity remains adjustable with the slider.
 - **Background Color**: Choose from various presets including Dark, Light, and Paper-like themes. The selected color is highlighted.
 - **Text Color**: Select a readable contrast for your chosen background.
-- **Opacity**: Use the slider to adjust how much of the original screen shows through the overlay. Changes are reflected in real-time.
+- **Opacity**: Use the slider to adjust how much of the original screen shows through the overlay.
 - **Dynamic Scaling**: The application automatically adjusts font size to fit the content within your chosen area.
 - **Textbox Mode**: Optionally display translation results in a separate, resizable window while keeping the overlay active (at 10% opacity) for better focus. In this mode, the overlay's close button is hidden and **Click-Through Interaction** is enabled, allowing you to click on applications behind the capture area.
 
